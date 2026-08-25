@@ -1,0 +1,11 @@
+# 代码归属。当前单人期全部归 @ht-lin。
+#
+# 团队扩充后按 §12 目录切分，例如：
+#   /backend/            @ncards/backend
+#   /android/            @ncards/android
+#   /infra/              @ncards/ops
+#   /docs/api/           @ncards/backend @ncards/android   # 契约改动双端都要看
+#   /docs/adr/           @ncards/tech-lead
+#   /docs/TECHNICAL_SPEC.md @ncards/tech-lead
+
+* @ht-lin

@@ -1,0 +1,19 @@
+{
+  "name": "ncards-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "NCards 仓库级工具链：Conventional Commits 校验；后续承载 OpenAPI lint (T-007) 与代码生成 (T-010)",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "commitlint": "commitlint"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.6.0",
+    "@commitlint/config-conventional": "^19.6.0",
+    "husky": "^9.1.7"
+  }
+}

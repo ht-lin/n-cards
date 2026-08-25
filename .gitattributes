@@ -1,0 +1,25 @@
+# 统一换行：仓库内一律 LF，检出时不做平台转换
+* text=auto eol=lf
+
+# 必须是 LF，否则在容器/CI 中无法执行
+*.sh        text eol=lf
+gradlew     text eol=lf
+bin/console text eol=lf
+
+# Windows 侧脚本保持 CRLF
+*.bat       text eol=crlf
+gradlew.bat text eol=crlf
+
+# 二进制
+*.png  binary
+*.jpg  binary
+*.webp binary
+*.pdf  binary
+*.jar  binary
+*.aab  binary
+*.apk  binary
+*.keystore binary
+
+# 生成产物：diff 折叠但仍纳入 review（§13.1 第 4 条）
+android/core/network/api/** linguist-generated=true
+package-lock.json           linguist-generated=true -diff

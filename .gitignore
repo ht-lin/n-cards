@@ -1,0 +1,40 @@
+# --- 机密（§14：.env 绝不入库） ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!infra/vault/*.hcl
+secrets/
+*.decrypted
+
+# --- Node（仓库级工具链：commitlint / spectral / openapi-generator） ---
+node_modules/
+
+# --- PHP / Symfony（T-002 起） ---
+backend/vendor/
+backend/var/
+backend/.php-cs-fixer.cache
+backend/.phpunit.result.cache
+backend/public/bundles/
+
+# --- Android / Gradle（T-008 起） ---
+.gradle/
+build/
+android/local.properties
+android/captures/
+android/.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+.fleet/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
