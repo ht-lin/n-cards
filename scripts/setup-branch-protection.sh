@@ -70,7 +70,24 @@ payload="$(jq -n \
     ]
   }')"
 
-existing_id="$(gh api "repos/$REPO/rulesets" --jq ".[] | select(.name == \"$RULESET_NAME\") | .id" 2>/dev/null || true)"
+if ! rulesets_json="$(gh api "repos/$REPO/rulesets" 2>&1)"; then
+  echo "!! 无法读取 ruleset 列表：" >&2
+  echo "   $rulesets_json" >&2
+  echo >&2
+  if [[ "$rulesets_json" == *"Upgrade to GitHub Pro"* ]]; then
+    cat >&2 <<'EOF'
+   原因：Free 套餐的**私有**仓库不支持 ruleset / branch protection。
+   三条出路（由仓库所有者决定，本脚本不擅自选择）：
+     1. 升级到 GitHub Pro（$4/月）—— 规则原样生效，推荐
+     2. 把仓库改为 public —— 规格书与业务细节将对外可见
+     3. 暂不启用服务端保护 —— 规则仅靠 CONTRIBUTING.md 与本地钩子约束，
+        属于君子协定，团队扩充前风险可控但必须显式记录为已接受风险
+EOF
+  fi
+  exit 1
+fi
+
+existing_id="$(printf '%s' "$rulesets_json" | jq -r ".[] | select(.name == \"$RULESET_NAME\") | .id")"
 
 if [[ -n "$existing_id" ]]; then
   echo "==> 已存在 ruleset #$existing_id，更新中"
