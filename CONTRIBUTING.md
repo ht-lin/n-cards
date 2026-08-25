@@ -48,9 +48,19 @@ npm install
 - **Squash merge**（`main` 保持线性历史）。
 - 按 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md)逐项填写：变更说明 / 关联 issue / 契约是否变更 / 迁移是否向后兼容 / 测试说明 / UI 截图。
 
-`main` 分支保护（由 [`scripts/setup-branch-protection.sh`](scripts/setup-branch-protection.sh) 配置）：禁止直推、禁止 force push、禁止删除分支、要求线性历史、要求 PR + 1 approve + required checks。
+`main` 分支保护规则（§13.2）：禁止直推、禁止 force push、禁止删除分支、要求线性历史、要求 PR + 1 approve + required checks。规则定义在 [`scripts/setup-branch-protection.sh`](scripts/setup-branch-protection.sh)。
 
-> ⚠️ **单人期临时豁免**：当前 ruleset 为 `repository_admin` 配了 bypass，否则单人账号无法批准自己的 PR，`main` 会锁死。**团队到 2 人时立即删除该 bypass**（改 `scripts/setup-branch-protection.sh` 中的 `bypass_actors` 为 `[]` 并重跑）。
+> ⚠️ **当前服务端未生效**：`ht-lin/n-cards` 是 Free 套餐的私有仓库，GitHub 的 ruleset 与 branch protection 均返回 403（`Upgrade to GitHub Pro or make this repository public`）。
+>
+> 也就是说，**上述规则目前只是约定，服务端不会阻止直推 `main` 或 force push**。在做出下列选择之一前，这是一项**已知且已接受的风险**：
+>
+> 1. 升级 GitHub Pro → 直接 `bash scripts/setup-branch-protection.sh` 即生效
+> 2. 仓库转 public → 同上（但规格书与业务细节对外可见）
+> 3. 维持现状 → 靠自律 + 本地 commit-msg 钩子
+>
+> 在此期间请**仍然走 PR**：直推 `main` 会绕过 `commit-conventions` 检查，squash merge 的线性历史也会被打断。
+>
+> ⚠️ **单人期临时豁免**：脚本中 `bypass_actors` 给了 `repository_admin`，否则单人账号无法批准自己的 PR，`main` 会锁死。**团队到 2 人时立即删除该 bypass**（改为 `[]` 并重跑）。
 
 ## 4. 契约优先（MUST，§13.1）
 
