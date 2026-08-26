@@ -34,19 +34,22 @@ Postgres / Redis / Vault **不映射宿主机端口**，仅 Docker 内网可达�
 
 ## 如何跑测试
 
-> ⏳ 后端工具链由 **T-002** 交付，Android 工程由 **T-008** 交付。届时：
-
-**后端**（在 `backend/`）：
+**后端**（在 `backend/`，T-002 已交付）：
 
 ```bash
 composer install
-vendor/bin/php-cs-fixer fix --dry-run --diff   # 0 差异
+composer qa                                    # 一键跑下面四条 + deptrac 自检
+vendor/bin/php-cs-fixer check --diff           # 0 差异
 vendor/bin/phpstan analyse                     # level 8，0 error
 vendor/bin/deptrac analyse                     # 0 violation
 vendor/bin/phpunit                             # 单元 + 集成 + 契约
 ```
 
+细则见 [`backend/README.md`](backend/README.md)。
+
 **Android**（在 `android/`）：
+
+> ⏳ **尚未可用** —— Android 工程由 **T-008** 交付。届时：
 
 ```bash
 ./gradlew ktlintCheck detekt lint

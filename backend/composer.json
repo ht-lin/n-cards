@@ -1,0 +1,113 @@
+{
+    "name": "ncards/backend",
+    "description": "NCards 后端：Symfony 模块化单体（§4.2 / §12.2）",
+    "type": "project",
+    "license": "proprietary",
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "require": {
+        "php": ">=8.3",
+        "ext-ctype": "*",
+        "ext-iconv": "*",
+        "symfony/console": "7.4.*",
+        "symfony/dotenv": "7.4.*",
+        "symfony/flex": "^2.11",
+        "symfony/framework-bundle": "7.4.*",
+        "symfony/runtime": "7.4.*",
+        "symfony/yaml": "7.4.*"
+    },
+    "require-dev": {
+        "deptrac/deptrac": "^4.7.1",
+        "friendsofphp/php-cs-fixer": "^3.95.22",
+        "phpstan/extension-installer": "^1.4.3",
+        "phpstan/phpstan": "^2.2.9",
+        "phpstan/phpstan-phpunit": "^2.0.18",
+        "phpstan/phpstan-symfony": "^2.0.20",
+        "phpunit/phpunit": "^12.5.33",
+        "symfony/phpunit-bridge": "7.4.*"
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true,
+            "phpstan/extension-installer": true,
+            "symfony/flex": true,
+            "symfony/runtime": true
+        },
+        "bump-after-update": true,
+        "sort-packages": true,
+        "platform": {
+            "php": "8.3.99"
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "App\\Tests\\": "tests/"
+        }
+    },
+    "replace": {
+        "symfony/polyfill-ctype": "*",
+        "symfony/polyfill-iconv": "*",
+        "symfony/polyfill-php72": "*",
+        "symfony/polyfill-php73": "*",
+        "symfony/polyfill-php74": "*",
+        "symfony/polyfill-php80": "*",
+        "symfony/polyfill-php81": "*",
+        "symfony/polyfill-php82": "*",
+        "symfony/polyfill-php83": "*"
+    },
+    "scripts": {
+        "auto-scripts": {
+            "cache:clear": "symfony-cmd"
+        },
+        "post-install-cmd": [
+            "@auto-scripts"
+        ],
+        "post-update-cmd": [
+            "@auto-scripts"
+        ],
+        "cs": "php-cs-fixer check --diff",
+        "cs:fix": "php-cs-fixer fix",
+        "stan": [
+            "@php bin/console cache:warmup --quiet",
+            "phpstan analyse --no-progress"
+        ],
+        "deptrac": "deptrac analyse --no-progress",
+        "deptrac:selftest": "tools/deptrac-selftest.sh",
+        "test": "phpunit",
+        "test:coverage": [
+            "@php -d pcov.enabled=1 vendor/bin/phpunit --coverage-clover var/coverage/clover.xml",
+            "@php tools/coverage-check.php var/coverage/clover.xml"
+        ],
+        "qa": [
+            "@cs",
+            "@stan",
+            "@deptrac",
+            "@deptrac:selftest",
+            "@test"
+        ]
+    },
+    "scripts-descriptions": {
+        "cs": "php-cs-fixer 干跑（§13.3：0 差异）",
+        "cs:fix": "php-cs-fixer 就地修复",
+        "stan": "预热容器后跑 PHPStan level 8（§13.3：0 error）",
+        "deptrac": "模块与分层边界检查（§4.2 / §13.3：0 violation）",
+        "deptrac:selftest": "自检：故意的跨模块 Domain 引用必须被 deptrac 拦下（T-002 验收标准）",
+        "test": "PHPUnit 全量",
+        "test:coverage": "带覆盖率跑测试并校验 §13.3 的阈值（需 pcov 或 xdebug）",
+        "qa": "本地质量门禁全套：cs + stan + deptrac + selftest + test"
+    },
+    "conflict": {
+        "symfony/symfony": "*"
+    },
+    "extra": {
+        "symfony": {
+            "allow-contrib": false,
+            "require": "7.4.*"
+        }
+    }
+}

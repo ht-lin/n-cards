@@ -1,0 +1,21 @@
+# 静态分析（§13.3）：level 8，src/ 全量，0 error。
+#
+# phpstan-symfony / phpstan-phpunit 由 phpstan/extension-installer 自动加载，
+# 无需在此手写 includes。
+
+includes:
+    - phpstan-baseline.neon
+
+parameters:
+    level: 8
+
+    paths:
+        - src
+        - tests
+        - tools
+
+    tmpDir: var/phpstan
+
+    symfony:
+        # 需要先跑一次 `bin/console cache:warmup`（composer 脚本 `stan` 已包含这一步）。
+        containerXmlPath: var/cache/dev/App_KernelDevDebugContainer.xml
