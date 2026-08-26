@@ -29,6 +29,8 @@
 | `README.md` | 标题、一句话定义 |
 | `package.json` | `name: ncards-monorepo` |
 | `commitlint.config.js` | 无（scope 与品牌无关） |
+| `backend/composer.json` | `name: ncards/backend`（仅包名，改一行即可） |
+| `backend/` PHP 源码 | **无** —— T-002 刻意把根命名空间定为 Symfony 默认的 `App\` 而不是 `NCards\`，改名不触碰任何一行 PHP |
 | `docs/TECHNICAL_SPEC.md` | 全文 |
 | `scripts/setup-branch-protection.sh` | `REPO` 默认值 |
 | GitHub 仓库名 | `ht-lin/n-cards` |

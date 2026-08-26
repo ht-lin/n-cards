@@ -1,0 +1,73 @@
+# 后端质量门禁（§13.3）。由 T-002 交付的最小版本。
+#
+# T-011 会在此基础上补齐：集成测试（pg / redis / vault services）、契约测试、
+# Doctrine 迁移 up/down 往返、gitleaks、敏感日志扫描、TODO 检查，
+# 并把 backend / android / shared 三条流水线并行编排。
+#
+# ⚠️ 本 workflow 带 paths 过滤，因此**不要**把它加进
+# scripts/setup-branch-protection.sh 的 required_status_checks ——
+# 不碰 backend/** 的 PR 永远不会上报这个 context，配上
+# strict_required_status_checks_policy 会把那类 PR 永久卡死。
+# 这个坑由 T-011 统一处理（通常是加一个总是运行的 merge-gate job）。
+name: backend
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  quality-gates:
+    name: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # PHP 版本与 backend/composer.json 的 config.platform.php 一致（§12.2：8.3+）
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: ctype, iconv, intl, mbstring, sodium
+          coverage: pcov
+          ini-values: error_reporting=-1
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+        with:
+          working-directory: backend
+
+      # phpstan-symfony 需要编译好的容器 XML
+      - name: Warm up container
+        run: bin/console cache:warmup
+
+      - name: php-cs-fixer（§13.3：0 差异）
+        run: vendor/bin/php-cs-fixer check --diff
+
+      - name: PHPStan（§13.3：level 8，0 error）
+        run: vendor/bin/phpstan analyse --no-progress --error-format=github
+
+      - name: Deptrac（§4.2 / §13.3：0 violation）
+        run: vendor/bin/deptrac analyse --no-progress
+
+      # 证明 deptrac 规则本身还有效，而不只是「当前代码没违规」
+      - name: Deptrac 自检（跨模块 Domain 引用必须被拦下）
+        run: tools/deptrac-selftest.sh
+
+      - name: PHPUnit + 覆盖率门禁（§13.3）
+        run: |
+          vendor/bin/phpunit --coverage-clover var/coverage/clover.xml
+          php tools/coverage-check.php var/coverage/clover.xml
+
+      - name: composer audit（§13.3：0 高危）
+        run: composer audit

@@ -131,7 +131,22 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 | 敏感日志扫描 | 禁 `dump(`、`var_dump`、`Log.d/v/i` 打印实体；禁日志中插值 `barcode_value` / `email` |
 | TODO 检查 | `TODO` 必须带 issue 编号：`// TODO(#123): …` |
 
-（完整 CI 流水线由 T-011 交付，当前仓库只有 `commit-conventions` 一条。）
+后端门禁在 `backend/` 下用 `composer qa` 一键跑完，细则见 [`backend/README.md`](backend/README.md)。
+
+（完整 CI 流水线由 T-011 交付，当前仓库有 `commit-conventions` 与 `backend` 两条。
+后者带 `paths: backend/**` 过滤，因此**尚未**加进 required status checks —— 原因见
+[`.github/workflows/backend.yml`](.github/workflows/backend.yml) 头部注释。）
+
+### `.env` 的两处例外
+
+§14 的规则是「`.env` 绝不入库」，根 `.gitignore` 也是一刀切。T-002 对
+`backend/.env` 与 `backend/.env.test` 开了两个**窄口**：它们是 Symfony 约定的
+**非密钥默认值**文件，缺了它们 `bin/console` 直接起不来。约束：
+
+- 这两个文件里**只能**有非密钥的默认值，任何看起来像凭据的东西都不许写进去
+- 真实密钥走 `.env.local` / `.env.*.local`（仍被 `.gitignore` 全部忽略）、
+  容器环境变量（T-003）、sops(age) 加密下发（T-012）
+- 不要再开第三个口子
 
 ## 9. 范围纪律（§1.3）
 

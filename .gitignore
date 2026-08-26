@@ -17,6 +17,16 @@ backend/var/
 backend/.php-cs-fixer.cache
 backend/.phpunit.result.cache
 backend/public/bundles/
+# Symfony 每次 cache:warmup 自动生成的 IDE 辅助文件，不入库
+backend/config/reference.php
+
+# Symfony dotenv：上面的 `.env` / `.env.*` 是一刀切（§14），这里开两个窄口。
+# `backend/.env` 与 `backend/.env.test` 是 Symfony 约定的**默认值**文件，
+# 只放非密钥配置，入库是 Symfony 的标准做法（缺了它们 bin/console 直接起不来）。
+# 真实密钥走 `.env.local` / `.env.*.local`（仍被上面的 `.env.*` 全部忽略），
+# staging/prod 由容器环境变量与 sops(age) 下发（T-003 / T-012）。
+!backend/.env
+!backend/.env.test
 
 # --- Android / Gradle（T-008 起） ---
 .gradle/

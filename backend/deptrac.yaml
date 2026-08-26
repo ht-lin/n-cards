@@ -1,0 +1,615 @@
+# Deptrac —— 模块与分层边界的编译期强制（§4.2 / §12.2 / §13.3：0 violation）。
+#
+# ============================================================================
+# 为什么是一个 ruleset 而不是两个配置文件
+# ============================================================================
+# T-002 要求同时强制**两个维度**：
+#   ① 模块间：不得引用他模块的 Domain / Infrastructure，只能经 Application\Port\*
+#   ② 层  间：Http → Application → Domain；Domain 不得 import 任何框架类型
+#
+# 如果拆成「只按模块分层」和「只按架构分层」两份配置，像
+# `Wallet.Http → Identity.Domain` 这种跨维度组合会从两份配置的缝隙里漏过去。
+# 因此这里用「模块 × 分层」的交叉积图层，一次分析同时管住两个维度。
+#
+# ============================================================================
+# 图层命名
+# ============================================================================
+#   <Module>.Domain           src/Module/<M>/Domain
+#   <Module>.Application      src/Module/<M>/Application（不含 Port/ 与 Dto/）
+#   <Module>.Port             src/Module/<M>/Application/Port      ← 对外唯一同步入口
+#   <Module>.Dto              src/Module/<M>/Application/Dto       ← Port 的出入参
+#   <Module>.Infrastructure   src/Module/<M>/Infrastructure
+#   <Module>.Http             src/Module/<M>/Http
+#   Shared.*                  src/Shared/*
+#   Framework.{Http,Persistence,Core}   vendor 里的框架类型（按 FQCN 正则收集）
+#   Kernel                    src/Kernel.php
+#
+# ============================================================================
+# 新增一个模块时
+# ============================================================================
+# 1. 在 layers 里复制一整块 `<Module>.*`（6 个图层）并改名
+# 2. 在 ruleset 的 `_Ports` 策略里加上 `<Module>.Port` 与 `<Module>.Dto`
+# 3. 在 ruleset 里复制一整块 `<Module>.*`（6 条规则）并改名
+# 别只加一半 —— 漏掉的图层会拿到空白允许列表，任何依赖都会报 violation，
+# 这是刻意的「fail closed」。
+#
+# 本文件由人工维护，改动请在 PR 里说明理由，并附 `composer deptrac:selftest` 的输出。
+
+deptrac:
+  # 缓存写到 var/（根 .gitignore 已忽略 backend/var/）
+  cache_file: ./var/.deptrac.cache
+
+  paths:
+    - ./src
+
+  layers:
+    # ---------------------------------------------------------------- Shared
+    # §4.2 规则 4：所有模块都可以依赖 Shared；Shared 不得依赖任何模块。
+    # 后半句由「下面 Shared.* 的允许列表里没有出现过任何 <Module>.* 图层」保证。
+    - name: Shared.Domain
+      collectors:
+        - type: directory
+          value: src/Shared/Domain/.*
+    - name: Shared.Application
+      collectors:
+        - type: directory
+          value: src/Shared/Application/.*
+    - name: Shared.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Shared/Infrastructure/.*
+    - name: Shared.Http
+      collectors:
+        - type: directory
+          value: src/Shared/Http/.*
+
+    # ---------------------------------------------------------------- Identity
+    - name: Identity.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Identity/Domain/.*
+    - name: Identity.Port
+      collectors:
+        - type: directory
+          value: src/Module/Identity/Application/Port/.*
+    - name: Identity.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Identity/Application/Dto/.*
+    - name: Identity.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Identity/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Identity/Application/(Port|Dto)/.*
+    - name: Identity.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Identity/Infrastructure/.*
+    - name: Identity.Http
+      collectors:
+        - type: directory
+          value: src/Module/Identity/Http/.*
+
+    # ---------------------------------------------------------------- Wallet
+    - name: Wallet.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Wallet/Domain/.*
+    - name: Wallet.Port
+      collectors:
+        - type: directory
+          value: src/Module/Wallet/Application/Port/.*
+    - name: Wallet.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Wallet/Application/Dto/.*
+    - name: Wallet.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Wallet/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Wallet/Application/(Port|Dto)/.*
+    - name: Wallet.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Wallet/Infrastructure/.*
+    - name: Wallet.Http
+      collectors:
+        - type: directory
+          value: src/Module/Wallet/Http/.*
+
+    # ---------------------------------------------------------------- Sharing
+    - name: Sharing.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Sharing/Domain/.*
+    - name: Sharing.Port
+      collectors:
+        - type: directory
+          value: src/Module/Sharing/Application/Port/.*
+    - name: Sharing.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Sharing/Application/Dto/.*
+    - name: Sharing.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Sharing/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Sharing/Application/(Port|Dto)/.*
+    - name: Sharing.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Sharing/Infrastructure/.*
+    - name: Sharing.Http
+      collectors:
+        - type: directory
+          value: src/Module/Sharing/Http/.*
+
+    # ---------------------------------------------------------------- Social
+    - name: Social.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Social/Domain/.*
+    - name: Social.Port
+      collectors:
+        - type: directory
+          value: src/Module/Social/Application/Port/.*
+    - name: Social.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Social/Application/Dto/.*
+    - name: Social.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Social/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Social/Application/(Port|Dto)/.*
+    - name: Social.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Social/Infrastructure/.*
+    - name: Social.Http
+      collectors:
+        - type: directory
+          value: src/Module/Social/Http/.*
+
+    # ---------------------------------------------------------------- Sync
+    - name: Sync.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Sync/Domain/.*
+    - name: Sync.Port
+      collectors:
+        - type: directory
+          value: src/Module/Sync/Application/Port/.*
+    - name: Sync.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Sync/Application/Dto/.*
+    - name: Sync.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Sync/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Sync/Application/(Port|Dto)/.*
+    - name: Sync.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Sync/Infrastructure/.*
+    - name: Sync.Http
+      collectors:
+        - type: directory
+          value: src/Module/Sync/Http/.*
+
+    # ---------------------------------------------------------------- Notification
+    - name: Notification.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Notification/Domain/.*
+    - name: Notification.Port
+      collectors:
+        - type: directory
+          value: src/Module/Notification/Application/Port/.*
+    - name: Notification.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Notification/Application/Dto/.*
+    - name: Notification.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Notification/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Notification/Application/(Port|Dto)/.*
+    - name: Notification.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Notification/Infrastructure/.*
+    - name: Notification.Http
+      collectors:
+        - type: directory
+          value: src/Module/Notification/Http/.*
+
+    # ---------------------------------------------------------------- Compliance
+    - name: Compliance.Domain
+      collectors:
+        - type: directory
+          value: src/Module/Compliance/Domain/.*
+    - name: Compliance.Port
+      collectors:
+        - type: directory
+          value: src/Module/Compliance/Application/Port/.*
+    - name: Compliance.Dto
+      collectors:
+        - type: directory
+          value: src/Module/Compliance/Application/Dto/.*
+    - name: Compliance.Application
+      collectors:
+        - type: bool
+          must:
+            - type: directory
+              value: src/Module/Compliance/Application/.*
+          must_not:
+            - type: directory
+              value: src/Module/Compliance/Application/(Port|Dto)/.*
+    - name: Compliance.Infrastructure
+      collectors:
+        - type: directory
+          value: src/Module/Compliance/Infrastructure/.*
+    - name: Compliance.Http
+      collectors:
+        - type: directory
+          value: src/Module/Compliance/Http/.*
+
+    # ------------------------------------------------------------- Framework
+    # 用 FQCN 正则收集 vendor 里的框架类型 —— 它们不在 `paths` 下，但 deptrac 依然
+    # 会为依赖目标解析图层，所以能作为「禁止依赖」的靶子。
+    # 这三层就是「Domain 不得 import 任何框架类型」的强制点。
+    - name: Framework.Http
+      collectors:
+        - type: classLike
+          value: '^Symfony\\(Component\\(HttpFoundation|HttpKernel|Routing|Serializer|Security\\Http)|Bundle\\FrameworkBundle\\Controller)\\'
+    - name: Framework.Persistence
+      collectors:
+        - type: classLike
+          value: '^(Doctrine|Symfony\\Bridge\\Doctrine)\\'
+    - name: Framework.Core
+      collectors:
+        - type: bool
+          must:
+            - type: classLike
+              value: '^(Symfony|Psr|Twig)\\'
+          must_not:
+            - type: classLike
+              value: '^Symfony\\(Component\\(HttpFoundation|HttpKernel|Routing|Serializer|Security\\Http)|Bundle\\FrameworkBundle\\Controller)\\'
+            - type: classLike
+              value: '^Symfony\\Bridge\\Doctrine\\'
+
+    # ---------------------------------------------------------------- Kernel
+    - name: Kernel
+      collectors:
+        - type: directory
+          value: src/Kernel.php
+
+  ruleset:
+    # ------------------------------------------------------------------------
+    # 抽象策略：不是真实图层，只作为 `+` 继承的目标，避免把同一份清单抄 21 遍。
+    # ------------------------------------------------------------------------
+    # §4.2 规则 1 与 2 的落点：跨模块同步调用**只能**看到对方的 Port 与 Dto，
+    # 看不到对方的 Domain / Application / Infrastructure / Http。
+    _Ports:
+      - Identity.Port
+      - Identity.Dto
+      - Wallet.Port
+      - Wallet.Dto
+      - Sharing.Port
+      - Sharing.Dto
+      - Social.Port
+      - Social.Dto
+      - Sync.Port
+      - Sync.Dto
+      - Notification.Port
+      - Notification.Dto
+      - Compliance.Port
+      - Compliance.Dto
+
+    # ---------------------------------------------------------------- Shared
+    # Shared.Domain 是整棵依赖树的叶子：纯 PHP，不依赖任何东西。
+    Shared.Domain: []
+    Shared.Application:
+      - Shared.Domain
+      - Framework.Core
+    Shared.Infrastructure:
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Shared.Http:
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Identity
+    # Domain：只允许 Shared.Domain。没有任何 Framework.* —— 这就是
+    # §12.2「Domain 不得 import 任何框架类型」的强制点。
+    Identity.Domain:
+      - Shared.Domain
+    # Dto：跨模块契约的出入参，同样只能碰 Shared.Domain（Uuid 这类值对象）。
+    Identity.Dto:
+      - Shared.Domain
+    # Port：**刻意不含本模块的 Domain**。Port 是给别的模块用的契约，
+    # 一旦签名里出现自家实体，调用方就等于间接拿到了本模块的 Domain。
+    Identity.Port:
+      - Shared.Domain
+      - Identity.Dto
+    # Application：编排层。不含 Framework.Http（§12.2「不得了解 HTTP」），
+    # 也不含 Framework.Persistence（§12.2「不得直接写 SQL」）。
+    Identity.Application:
+      - '+_Ports'
+      - Identity.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    # Infrastructure：唯一允许碰 Doctrine / 外部 HTTP / Vault 的地方。
+    Identity.Infrastructure:
+      - '+_Ports'
+      - Identity.Domain
+      - Identity.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    # Http：**刻意不含本模块的 Domain**（只能经 Application 的 DTO 进出），
+    # 也不含 Framework.Persistence（§12.2「不得直接用 Doctrine」）。
+    Identity.Http:
+      - '+_Ports'
+      - Identity.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Wallet
+    Wallet.Domain:
+      - Shared.Domain
+    Wallet.Dto:
+      - Shared.Domain
+    Wallet.Port:
+      - Shared.Domain
+      - Wallet.Dto
+    Wallet.Application:
+      - '+_Ports'
+      - Wallet.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Wallet.Infrastructure:
+      - '+_Ports'
+      - Wallet.Domain
+      - Wallet.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Wallet.Http:
+      - '+_Ports'
+      - Wallet.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Sharing
+    Sharing.Domain:
+      - Shared.Domain
+    Sharing.Dto:
+      - Shared.Domain
+    Sharing.Port:
+      - Shared.Domain
+      - Sharing.Dto
+    Sharing.Application:
+      - '+_Ports'
+      - Sharing.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Sharing.Infrastructure:
+      - '+_Ports'
+      - Sharing.Domain
+      - Sharing.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Sharing.Http:
+      - '+_Ports'
+      - Sharing.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Social
+    Social.Domain:
+      - Shared.Domain
+    Social.Dto:
+      - Shared.Domain
+    Social.Port:
+      - Shared.Domain
+      - Social.Dto
+    Social.Application:
+      - '+_Ports'
+      - Social.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Social.Infrastructure:
+      - '+_Ports'
+      - Social.Domain
+      - Social.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Social.Http:
+      - '+_Ports'
+      - Social.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Sync
+    Sync.Domain:
+      - Shared.Domain
+    Sync.Dto:
+      - Shared.Domain
+    Sync.Port:
+      - Shared.Domain
+      - Sync.Dto
+    Sync.Application:
+      - '+_Ports'
+      - Sync.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Sync.Infrastructure:
+      - '+_Ports'
+      - Sync.Domain
+      - Sync.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Sync.Http:
+      - '+_Ports'
+      - Sync.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Notification
+    Notification.Domain:
+      - Shared.Domain
+    Notification.Dto:
+      - Shared.Domain
+    Notification.Port:
+      - Shared.Domain
+      - Notification.Dto
+    Notification.Application:
+      - '+_Ports'
+      - Notification.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Notification.Infrastructure:
+      - '+_Ports'
+      - Notification.Domain
+      - Notification.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Notification.Http:
+      - '+_Ports'
+      - Notification.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Compliance
+    Compliance.Domain:
+      - Shared.Domain
+    Compliance.Dto:
+      - Shared.Domain
+    Compliance.Port:
+      - Shared.Domain
+      - Compliance.Dto
+    Compliance.Application:
+      - '+_Ports'
+      - Compliance.Domain
+      - Shared.Domain
+      - Shared.Application
+      - Framework.Core
+    Compliance.Infrastructure:
+      - '+_Ports'
+      - Compliance.Domain
+      - Compliance.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Infrastructure
+      - Framework.Core
+      - Framework.Persistence
+      - Framework.Http
+    Compliance.Http:
+      - '+_Ports'
+      - Compliance.Application
+      - Shared.Domain
+      - Shared.Application
+      - Shared.Http
+      - Framework.Core
+      - Framework.Http
+
+    # ---------------------------------------------------------------- Kernel
+    Kernel:
+      - Framework.Core
+      - Framework.Http
+      - Framework.Persistence
+
+  # ==========================================================================
+  # §4.2 规则 5 的唯一例外
+  # ==========================================================================
+  # 「一张表由且仅由一个模块拥有；跨模块查询必须走接口，不得写跨模块 JOIN。」
+  # 例外：Sync 模块为性能考虑允许只读跨模块查询，但**必须**收敛到
+  # `Sync\Infrastructure\Doctrine\SyncReadModel` 这一个入口。
+  #
+  # T-002 阶段该类还不存在，先留槽位。T-202 实现 /sync 时按下面的形状填。
+  #
+  # 三条约束，改动前先读 §4.2：
+  #   1. key **只能**是 SyncReadModel 一个类，不得新增第二个 key
+  #   2. 列表只允许写只读查询要用到的 Domain 实体
+  #   3. 本列表**只允许缩短**；加条目必须在 PR 描述里说明为什么不能走 Application\Port
+  skip_violations: []
+  #  App\Module\Sync\Infrastructure\Doctrine\SyncReadModel:
+  #    - App\Module\Wallet\Domain\Entity\Card
