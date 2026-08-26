@@ -4,7 +4,9 @@
 #                    -f infra/compose/docker-compose.prod.yml up -d
 #
 # 由 T-012 的 Ansible playbook 下发与调用。真实的环境变量由 sops(age) 解密后
-# 写成目标主机上的 .env —— **不入库**（§14）。
+# 写成目标主机上的 `infra/compose/.env` —— **不入库**（§14）。
+# 位置不能挪：compose 的 project directory 取 `-f` 第一个文件所在目录，
+# .env 必须与 compose 文件同目录才会被自动加载，理由见 base 文件头部。
 #
 # ============================================================================
 # 相对 base 的四处实质差异

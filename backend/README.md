@@ -42,8 +42,15 @@ vendor/bin/phpunit
 ## 在容器里跑（T-003 起）
 
 裸机上 `composer qa` 全绿就够日常用，但需要真实 Postgres 的集成测试会 skip
-——后端服务按 §7.4 不映射宿主机端口，裸机连不上。要连真库跑，先在仓库根
-`docker compose up -d`，然后：
+——后端服务按 §7.4 不映射宿主机端口，裸机连不上。要连真库跑，先在仓库根起栈：
+
+```bash
+cp infra/compose/.env.example infra/compose/.env
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml
+docker compose up -d
+```
+
+然后：
 
 ```bash
 docker compose exec app bin/console --env=test doctrine:database:create --if-not-exists

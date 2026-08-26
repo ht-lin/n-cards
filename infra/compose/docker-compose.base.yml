@@ -1,14 +1,20 @@
 # NCards 本地全栈（§4.1 拓扑 / §14.2 服务清单 / T-003）。
 #
-# 这份文件**单独**就能跑起本地开发栈：
+# 这份文件**单独**就能跑起本地开发栈（在仓库根执行）：
 #
-#     cp .env.example .env          # 在仓库根
-#     docker compose up -d          # 仓库根的 compose.yaml 会 include 本文件
+#     cp infra/compose/.env.example infra/compose/.env
+#     docker compose -f infra/compose/docker-compose.base.yml up -d
 #
 # staging / production 用叠加文件覆盖成生产形态（T-012 的 Ansible 这么调）：
 #
 #     docker compose -f infra/compose/docker-compose.base.yml \
 #                    -f infra/compose/docker-compose.prod.yml up -d
+#
+# `.env` 与本文件同目录，是**刻意**的：compose 的 project directory 默认取 `-f` 的
+# 第一个文件所在目录，所以上面两条命令自动读同一份 `infra/compose/.env`，
+# 不需要 --env-file。若把 .env 放到别处（比如仓库根），本地那条能读到、叠加链却
+# 读不到，而所有变量都写了 ${VAR:-default} 兜底 —— 于是它不会报错，只会静默用
+# 默认值起来。那种失败最难查，别改回去。
 #
 # ============================================================================
 # 三条不能改松的约束（§7.4，改动前先读）
