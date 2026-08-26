@@ -1,0 +1,36 @@
+# Doctrine —— T-003 只装 **DBAL**，不装 ORM。
+#
+# 为什么没有 `orm:` 段：
+# T-003 需要的只是一条能 `SELECT 1` 的连接，用来实现 §14.2 / T-003 验收标准里的
+# `/health/ready`（PG 不可用时 503）。实体映射、仓储、迁移文件属于 T-101 起的任务，
+# 那时再 `composer require doctrine/orm` 并在本文件补 `orm:` 段。
+#
+# 现在就把 DBAL 装上（而不是写一段临时的原生 PDO 探活）的理由：
+# `DATABASE_URL`、`migrations/`、deptrac 的 `Framework.Persistence` 图层三者都要就位，
+# T-101 直接接着用，不产生一次性代码。
+#
+# ⚠️ doctrine-bundle 锁在 **2.x**：3.x 起要求 PHP ^8.4，而本项目按 §12.2 跑 PHP 8.3
+# （`composer.json` 的 `config.platform.php = 8.3.99`，CI 用 `php-version: '8.3'`）。
+# 将来若把基线抬到 8.4，可一并升到 doctrine-bundle 3.x。
+
+doctrine:
+    dbal:
+        url: '%env(resolve:DATABASE_URL)%'
+
+        # 显式钉死驱动与版本：DATABASE_URL 由容器环境变量注入（T-003）或 sops 下发
+        # （T-012），不应该靠 query string 里的 serverVersion 来决定平台行为。
+        driver: pdo_pgsql
+        server_version: '16'
+        charset: utf8
+
+        # 嵌套事务用 SAVEPOINT 而不是「静默忽略内层」—— §4.2 唯一强制同事务的跨模块
+        # 协作点（Social 解除好友 → Sharing 级联撤销）依赖嵌套事务语义正确。
+        use_savepoints: true
+
+        profiling_collect_backtrace: '%kernel.debug%'
+
+when@test:
+    doctrine:
+        dbal:
+            # "TEST_TOKEN" 由 ParaTest 注入；单进程跑时展开成空串，库名即 <db>_test。
+            dbname_suffix: '_test%env(default::TEST_TOKEN)%'

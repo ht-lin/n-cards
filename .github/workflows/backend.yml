@@ -1,8 +1,14 @@
-# 后端质量门禁（§13.3）。由 T-002 交付的最小版本。
+# 后端质量门禁（§13.3）。由 T-002 交付的最小版本，T-003 补了 postgres service。
 #
-# T-011 会在此基础上补齐：集成测试（pg / redis / vault services）、契约测试、
+# T-011 会在此基础上补齐：redis / vault services、契约测试、
 # Doctrine 迁移 up/down 往返、gitleaks、敏感日志扫描、TODO 检查，
 # 并把 backend / android / shared 三条流水线并行编排。
+#
+# ⚠️ T-003 有意的越界：本文件原本写着「集成测试 services 由 T-011 补齐」，
+# 但 T-003 的核心验收标准是「PG 不可用时 /health/ready 返回 503」，
+# 没有真实 PG，CI 里就只剩一条用替身跑的单测，真实 DBAL 连接路径完全没被验证
+# （tests/Integration/Health/DatabaseHealthCheckTest 会直接 skip）。
+# 所以 postgres service 提前到这里；T-011 接手时把 redis 与 vault 一并补上。
 #
 # ⚠️ 本 workflow 带 paths 过滤，因此**不要**把它加进
 # scripts/setup-branch-protection.sh 的 required_status_checks ——
@@ -30,15 +36,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    # 版本与 infra/compose/docker-compose.base.yml 保持一致 —— CI 跑的和本地
+    # 跑的不是同一个 Postgres 大版本，这类门禁就失去意义了。
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ncards
+          POSTGRES_USER: ncards
+          POSTGRES_PASSWORD: ncards
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ncards -d ncards"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # backend/.env.test 里有同样的默认值；显式写在这里是为了让「CI 连的是哪个库」
+      # 一眼可见，也方便将来 T-011 换成 service 容器的动态端口。
+      DATABASE_URL: postgresql://ncards:ncards@127.0.0.1:5432/ncards
+
     steps:
       - uses: actions/checkout@v4
 
       # PHP 版本与 backend/composer.json 的 config.platform.php 一致（§12.2：8.3+）
+      # pdo_pgsql 是 composer.json 的 require 之一（T-003 起）。
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: ctype, iconv, intl, mbstring, sodium
+          extensions: ctype, iconv, intl, mbstring, pdo_pgsql, sodium
           coverage: pcov
           ini-values: error_reporting=-1
 
@@ -63,6 +92,13 @@ jobs:
       # 证明 deptrac 规则本身还有效，而不只是「当前代码没违规」
       - name: Deptrac 自检（跨模块 Domain 引用必须被拦下）
         run: tools/deptrac-selftest.sh
+
+      # test 环境的库名带 `_test` 后缀（config/packages/doctrine.yaml 的 when@test），
+      # service 容器只建了 `ncards`，所以这一步不能省 —— 否则
+      # tests/Integration/Health/DatabaseHealthCheckTest 会静默 skip，
+      # 「PG 可用时 /health/ready 真能连上」这条就在 CI 里没人验证了。
+      - name: 建测试库
+        run: bin/console --env=test doctrine:database:create --if-not-exists
 
       - name: PHPUnit + 覆盖率门禁（§13.3）
         run: |

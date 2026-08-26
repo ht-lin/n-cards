@@ -16,21 +16,39 @@ NCards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在�
 | [`backend/`](backend/) | Symfony 7.x / PHP 8.3+ 模块化单体 | T-002 |
 | [`android/`](android/) | Android 客户端（Kotlin / Compose / Gradle 多模块） | T-008 |
 | [`infra/`](infra/) | compose / ansible / caddy / vault / monitoring | T-003, T-012 |
+| `compose.yaml` | 仓库根的一键入口，转发到 `infra/compose/` | T-003 |
 | [`scripts/`](scripts/) | 仓库运维脚本 | T-001 |
 | `.github/` | PR 与 issue 模板、CI 工作流 | T-001, T-011 |
 
 ## 如何起本地栈
 
-> ⏳ **尚未可用** —— 本地 Docker Compose 栈由 **T-003** 交付。届时命令为：
+前置：先在 `backend/` 跑一次 `composer install`（源码是**只读**挂进容器的，
+`vendor/` 用宿主机那份）。然后在仓库根：
 
 ```bash
-cp .env.example .env                      # T-003 提供
-docker compose -f infra/compose/docker-compose.base.yml up -d
+cp .env.example .env
+docker compose up -d                      # caddy · app · postgres · redis · vault
 docker compose exec app bin/console app:seed
-curl -f http://localhost/health/ready     # 期望 200
+curl -f http://localhost/health/ready      # 期望 200
 ```
 
+`compose.yaml` 只是转发到 [`infra/compose/docker-compose.base.yml`](infra/compose/docker-compose.base.yml)，
+让 `docker compose` 在仓库根就能用（`.env` 也就跟着待在仓库根）。
+
+80 端口被占用时改 `.env` 里的 `HTTP_PORT`，**不要**给后端服务加端口映射 ——
 Postgres / Redis / Vault **不映射宿主机端口**，仅 Docker 内网可达（§7.4）。
+要连库用 `docker compose exec postgres psql -U ncards`。
+
+验证一下就绪探针真的在探：
+
+```bash
+docker compose stop postgres
+curl -o /dev/null -w '%{http_code}\n' http://localhost/health/ready   # 期望 503
+docker compose start postgres
+```
+
+staging / production 用叠加文件，形态与本地不同（生产 Vault 需**人工 unseal**）——
+见 [`infra/compose/README.md`](infra/compose/README.md)。
 
 ## 如何跑测试
 
@@ -43,6 +61,15 @@ vendor/bin/php-cs-fixer check --diff           # 0 差异
 vendor/bin/phpstan analyse                     # level 8，0 error
 vendor/bin/deptrac analyse                     # 0 violation
 vendor/bin/phpunit                             # 单元 + 集成 + 契约
+```
+
+需要真实 Postgres 的集成测试在裸机上会 skip（后端服务没有宿主机端口）。
+要连真库跑，起栈之后在容器里跑：
+
+```bash
+docker compose exec app bin/console --env=test doctrine:database:create --if-not-exists
+docker compose exec app vendor/bin/phpunit
+docker compose exec app composer test:coverage   # dev 镜像里装了 pcov
 ```
 
 细则见 [`backend/README.md`](backend/README.md)。

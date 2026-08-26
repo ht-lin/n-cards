@@ -1,6 +1,17 @@
 # infra/vault
 
-Vault 策略文件与初始化脚本。**由 T-005 交付**，当前目录为空。
+Vault 配置。**策略文件与初始化脚本由 T-005 交付**；T-003 先交付了生产形态的
+服务器配置 [`vault.hcl`](vault.hcl)，好让 `docker-compose.prod.yml` 里的 vault
+能以非 dev 模式起来。
+
+| 文件 | 内容 | 交付任务 |
+|---|---|---|
+| [`vault.hcl`](vault.hcl) | 服务器配置：file 后端 + 内网 listener，**无 seal stanza** | T-003 |
+| `ncards-app.hcl` 等 policy | AppRole 最小权限策略（§17.4） | T-005 |
+| 初始化脚本 | 启用 Transit 引擎、建三把 key、建 AppRole | T-005 |
+
+> 本地开发跑的是 **dev 模式**（内存后端、自动 unseal、固定 root token），
+> 不读 `vault.hcl`。生产每次重启后都是**封印**状态，必须人工 unseal。
 
 ## Transit key（§5.3）
 

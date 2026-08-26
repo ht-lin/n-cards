@@ -1,0 +1,106 @@
+# 生产覆盖层（§14.2）。**必须**叠在 base 之上，不能单独用：
+#
+#     docker compose -f infra/compose/docker-compose.base.yml \
+#                    -f infra/compose/docker-compose.prod.yml up -d
+#
+# 由 T-012 的 Ansible playbook 下发与调用。真实的环境变量由 sops(age) 解密后
+# 写成目标主机上的 .env —— **不入库**（§14）。
+#
+# ============================================================================
+# 相对 base 的四处实质差异
+# ============================================================================
+# 1. app 用 prod target 且**不再绑定挂载源码** —— 代码来自镜像，镜像来自 GHCR。
+# 2. caddy 开 443 + 自动 TLS（真实域名触发 ACME）。
+# 3. vault 从 dev 模式换成 file 后端 + **人工 unseal**（Q6）。
+# 4. 全部镜像 tag 收紧到补丁版本 —— 生产不接受 `:16-alpine` 这种会自己漂移的 tag。
+#
+# ⚠️ 每次部署后 vault **是封印状态**，必须人工 unseal（Shamir 3-of-5）才能提供服务。
+# 这是刻意的（Q6：auto-unseal 关闭，unseal key 离线保管）。步骤见
+# docs/runbooks/vault-unseal.md（T-005 交付）。app 在 vault 未 unseal 时
+# /health/ready 会失败 —— 这正是期望行为，别为了「让健康检查绿」去开 auto-unseal。
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+  app:
+    build:
+      context: ../../backend
+      target: prod
+    # T-012 的流水线把 GHCR 镜像 tag 写进 .env（tag 用 commit sha）。
+    # 生产不在主机上现场构建 —— 部署的必须是 CI 验证过的那一个镜像。
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:latest}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+    # 覆盖掉 base 的源码绑定挂载。YAML 里 volumes 是列表，叠加时**整体替换**，
+    # 所以给一个空列表就等于「没有任何绑定挂载」。
+    volumes: []
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  postgres:
+    image: postgres:16.10-alpine
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+  redis:
+    image: redis:7.4-alpine
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  vault:
+    image: hashicorp/vault:1.18.5
+    # dev 模式的三个变量在这里显式清空 —— 叠加不会自动删掉 base 里的 key，
+    # 留着的话 vault 会继续以 dev 模式起来（内存后端 + 自动 unseal），
+    # 那等于把 §3.3 的整个加密威胁模型作废。
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ""
+      VAULT_DEV_LISTEN_ADDRESS: ""
+      VAULT_ADDR: http://127.0.0.1:8200
+    command: ["vault", "server", "-config=/vault/config/vault.hcl"]
+    volumes:
+      - ../vault/vault.hcl:/vault/config/vault.hcl:ro
+      # §7.4：独立数据卷，与 app 不共卷。
+      - vault_data:/vault/file
+    healthcheck:
+      # 封印状态下 `vault status` 退出码是 2，未初始化是 1，正常是 0。
+      # 这里只要求「进程活着且能应答」（0 或 2 都算健康）—— 封印是等待人工
+      # unseal 的正常中间态，不该让 compose 反复重启容器。
+      test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200; [ $$? -ne 1 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+# ============================================================================
+# 尚未交付的服务（§14.2 清单里有，依赖还没装）
+# ============================================================================
+#  worker:
+#    <<: app 的定义
+#    command: ["php", "bin/console", "messenger:consume", "async", "email", "--time-limit=3600"]
+#    deploy: { replicas: 2 }
+#    → 需要 symfony/messenger，T-004 装
+#
+#  scheduler:
+#    command: ["php", "bin/console", "messenger:consume", "scheduler_default"]
+#    → 每日清理、删号执行、导出过期清理、key rewrap。T-113
+#
+#  prometheus / grafana / loki / promtail / alertmanager:
+#    → §14.4 可观测性，Grafana 经 caddy basic auth 暴露。T-405
+#
+#  backup:
+#    → wal-g / pgBackRest + age，cron 容器，推 Hetzner Storage Box（芬兰，仍在 EU/EEA）。
+#      T-406，含一次真实恢复演练（§13.8 不可裁剪项）

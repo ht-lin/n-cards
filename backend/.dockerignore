@@ -1,0 +1,26 @@
+# 构建上下文排除。vendor/ 与 var/ 一定要排掉：
+#   vendor/  —— 由镜像内的 composer install 生成，宿主机那份的平台假设可能不同
+#   var/     —— 缓存与日志，运行时是 tmpfs
+.dockerignore
+Dockerfile
+
+vendor/
+var/
+
+.env.local
+.env.*.local
+.php-cs-fixer.cache
+.phpunit.result.cache
+
+# 质量门禁的配置、工具与测试不进运行时镜像 —— CI 在宿主机上跑它们
+# （.github/workflows/backend.yml），生产镜像里留着只是多余的攻击面。
+#
+# 本地要在容器里跑测试也没问题：compose 把整个 backend/ 以 :ro 挂进 /app，
+# 挂载会盖掉镜像里的那份，tests/ 与这些配置照样在。
+.php-cs-fixer.dist.php
+phpstan.neon
+phpstan-baseline.neon
+deptrac.yaml
+phpunit.xml.dist
+tools/
+tests/

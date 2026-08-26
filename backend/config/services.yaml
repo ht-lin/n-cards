@@ -14,6 +14,18 @@ services:
         autowire: true      # Automatically injects dependencies in your services.
         autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
 
+    # Shared 内核的两个「实现即注册」扩展点（T-003）。
+    #
+    # 新增一项就绪检查 / 一个模块的 seeder，只需实现对应接口 —— 不用回来改这里，
+    # 也不用改 HealthController 或 SeedCommand。收集端分别是
+    # App\Shared\Application\Health\ReadinessProbe 与
+    # App\Shared\Infrastructure\Console\SeedCommand 的 #[AutowireIterator]。
+    _instanceof:
+        App\Shared\Application\Health\HealthCheckInterface:
+            tags: ['app.health_check']
+        App\Shared\Application\Seed\SeederInterface:
+            tags: ['app.seeder']
+
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
     App\:

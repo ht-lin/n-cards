@@ -1,0 +1,213 @@
+# NCards 本地全栈（§4.1 拓扑 / §14.2 服务清单 / T-003）。
+#
+# 这份文件**单独**就能跑起本地开发栈：
+#
+#     cp .env.example .env          # 在仓库根
+#     docker compose up -d          # 仓库根的 compose.yaml 会 include 本文件
+#
+# staging / production 用叠加文件覆盖成生产形态（T-012 的 Ansible 这么调）：
+#
+#     docker compose -f infra/compose/docker-compose.base.yml \
+#                    -f infra/compose/docker-compose.prod.yml up -d
+#
+# ============================================================================
+# 三条不能改松的约束（§7.4，改动前先读）
+# ============================================================================
+# 1. postgres / redis / vault **没有 ports:**。只有 caddy 映射宿主机端口。
+#    要在宿主机上连库，用 `docker compose exec postgres psql`，不要加端口映射。
+# 2. app 容器非 root + read_only: true。可写点只有下面显式列出的 tmpfs。
+# 3. vault 用**独立**数据卷，不与 app 共卷。
+#
+# ============================================================================
+# 网络分层
+# ============================================================================
+# edge     caddy ↔ app。caddy 是唯一的入口。
+# backing  app ↔ postgres/redis/vault。`internal: true` —— 这个网络连出站都没有，
+#          三个后端服务不可能被误暴露，也不可能主动往外连。
+#          §7.4 只要求「不映射宿主机端口」，internal 是顺手多加的一道。
+
+name: ncards
+
+services:
+  # ---------------------------------------------------------------- caddy
+  # §4.1：TLS 终结 + 反向代理 + 安全响应头。本地是明文 :80，
+  # 真实域名与自动 TLS 在 .prod.yml / .staging.yml 里开。
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-http://localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------- app
+  app:
+    build:
+      context: ../../backend
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      APP_SECRET: ${APP_SECRET:-dev-only-not-a-secret}
+      # DATABASE_URL 在这里拼，而不是让 .env 里再写一份 —— 用户名/密码/库名
+      # 只在 .env 里出现一次，改一处即可。
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ncards}:${POSTGRES_PASSWORD:-ncards}@postgres:5432/${POSTGRES_DB:-ncards}
+      REDIS_URL: redis://redis:6379
+      VAULT_ADDR: http://vault:8200
+
+    # §7.4：非 root（Dockerfile 里 USER ncards）+ 只读根文件系统。
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+    # 只读 rootfs 下唯一的两个可写点：
+    #   /tmp      PHP 临时文件，以及 FrankenPHP 内嵌 Caddy 的 XDG 目录
+    #   /app/var  Symfony 的 cache/ 与 log/
+    #             （prod 环境下 Symfony **确实**会在运行时往 var/cache 写
+    #              cache.app / cache.system 的文件池，不能设成只读）
+    #
+    # 挂在 /app/var 而不是分别挂 /app/var/cache 与 /app/var/log：后者要求这两个
+    # 子目录在挂载点上**已经存在**，而 /app 是只读绑定挂载，Docker 建不出来，
+    # 容器会起不来（`make mountpoint: read-only file system`）。
+    # 两个子目录改由 docker/entrypoint.sh 在 tmpfs 里现场建，缓存也在那里预热 ——
+    # tmpfs 每次容器启动都是空的。
+    tmpfs:
+      - /tmp:mode=1777
+      - /app/var:uid=1000,gid=1000
+
+    volumes:
+      # 源码只读挂载：既保留本地改代码即生效，又不违反 read_only。
+      # Symfony 只往 var/ 写，而 var/cache 与 var/log 是上面的 tmpfs。
+      # 前置条件：先在 backend/ 跑过 `composer install`（见仓库根 README）。
+      - ../../backend:/app:ro
+
+    networks:
+      - edge
+      - backing
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------- postgres
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ncards}
+      POSTGRES_USER: ${POSTGRES_USER:-ncards}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ncards}
+      # 本地库固定 UTF-8 + C collation，与 §5.2 的 citext/大小写归一化假设对齐。
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    # ⚠️ 没有 ports: —— §7.4。要连库用 `docker compose exec postgres psql -U ncards`。
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - backing
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ncards} -d ${POSTGRES_DB:-ncards}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------- redis
+  # §14.2：限流（T-006）、幂等键（T-004）、缓存。
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # appendonly yes 是 §14.2 明确要求的：幂等键要活过一次重启，
+    # 否则重启窗口内的重放会被当成新请求处理。
+    command: ["redis-server", "--appendonly", "yes"]
+    # ⚠️ 没有 ports: —— §7.4。
+    volumes:
+      - redis_data:/data
+    networks:
+      - backing
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ---------------------------------------------------------------- vault
+  # 本地用 dev 模式（内存后端、自动 unseal、固定 root token）。
+  # 生产形态在 .prod.yml：file 后端 + **人工 unseal**（Q6），见那里的注释。
+  vault:
+    image: hashicorp/vault:1.18
+    restart: unless-stopped
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:-dev-only-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+      VAULT_ADDR: http://127.0.0.1:8200
+    cap_add:
+      # Vault 要 mlock 住内存，防止密钥被换页到磁盘。
+      - IPC_LOCK
+    # ⚠️ 没有 ports: —— §7.4。
+    volumes:
+      # §7.4 / T-003：Vault 用**独立**数据卷，绝不与 app 共卷。
+      # dev 模式其实是内存后端，这个卷现在是空的 —— 声明它是为了让本地与
+      # .prod.yml 的形态一致，T-005 初始化 Transit 引擎时不用再改结构。
+      - vault_data:/vault/file
+    networks:
+      - backing
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ==========================================================================
+  # 尚未交付的服务（§14.2 的清单里有，但依赖还没装，写出来也起不来）
+  # ==========================================================================
+  # worker      入口 `bin/console messenger:consume async email`，prod 下 2 副本。
+  #             需要 symfony/messenger —— T-004 装。
+  # scheduler   入口 Symfony Scheduler：每日清理、删号执行、导出过期清理、key rewrap。
+  #             T-113。
+  # prometheus / grafana / loki / promtail / alertmanager
+  #             §14.4 可观测性。T-405。
+  # backup      wal-g / pgBackRest + age，cron 容器，推 Hetzner Storage Box。
+  #             T-406（含一次真实恢复演练，§13.8 不可裁剪项）。
+
+networks:
+  edge:
+    driver: bridge
+  backing:
+    driver: bridge
+    # 无出站、无宿主机映射。
+    internal: true
+
+volumes:
+  pg_data:
+  redis_data:
+  # §7.4：与 app 不共卷。
+  vault_data:
+  caddy_data:
+  caddy_config:
