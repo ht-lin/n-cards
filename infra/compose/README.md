@@ -13,12 +13,21 @@ Docker Compose 栈（T-003 交付）。
 
 ## 怎么起
 
-**本地** —— 在仓库根，`compose.yaml` 会 include 进 base：
+**本地** —— 在仓库根：
 
 ```bash
-cp .env.example .env
+cp infra/compose/.env.example infra/compose/.env
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml   # 本 shell 内免敲 -f
 docker compose up -d
 ```
+
+> **`.env` 必须与 compose 文件同目录。** compose 的 project directory 默认取 `-f`
+> 的第一个文件所在目录，所以 `infra/compose/.env` 会被自动加载，本地与下面的
+> staging/prod 叠加链读到的是**同一份**。
+>
+> 别把它挪到仓库根：那样本地那条读得到、叠加链读不到，而本栈所有变量都写了
+> `${VAR:-default}` 兜底 —— 它不会报错，只会静默用默认值起来。这种失败最难查。
+> （真要放别处，每条叠加链命令都得记得加 `--env-file`，那就是在给自己留坑。）
 
 **staging / production** —— 由 T-012 的 Ansible playbook 调用，用显式叠加链：
 
@@ -62,6 +71,8 @@ docker compose -f docker-compose.base.yml -f docker-compose.prod.yml config
 （tmpfs 每次容器启动都是空的）。
 
 ## 验收（T-003）
+
+下面的命令假设已 `export COMPOSE_FILE=infra/compose/docker-compose.base.yml`。
 
 ```bash
 docker compose ps                                   # 五个服务全部 healthy
