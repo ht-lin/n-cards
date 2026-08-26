@@ -9,6 +9,9 @@
         "php": ">=8.3",
         "ext-ctype": "*",
         "ext-iconv": "*",
+        "ext-pdo_pgsql": "*",
+        "doctrine/doctrine-bundle": "^2.19",
+        "doctrine/doctrine-migrations-bundle": "^3.4",
         "symfony/console": "7.4.*",
         "symfony/dotenv": "7.4.*",
         "symfony/flex": "^2.11",
@@ -24,6 +27,7 @@
         "phpstan/phpstan-phpunit": "^2.0.18",
         "phpstan/phpstan-symfony": "^2.0.20",
         "phpunit/phpunit": "^12.5.33",
+        "symfony/browser-kit": "7.4.*",
         "symfony/phpunit-bridge": "7.4.*"
     },
     "config": {

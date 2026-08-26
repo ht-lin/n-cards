@@ -28,6 +28,15 @@
         <server name="APP_ENV" value="test" force="true" />
         <server name="KERNEL_CLASS" value="App\Kernel" />
         <server name="SHELL_VERBOSITY" value="-1" />
+
+        <!--
+          `<server>` 只写 $_SERVER，而 Symfony 挑环境时读的是 $_ENV["APP_ENV"] ?? $_SERVER[...]，
+          $_ENV 在前。裸机上 $_ENV 里没有 APP_ENV，所以上面那行就够了；但在容器里
+          compose 注入的 APP_ENV=dev 是**真实环境变量**，会同时落进 $_ENV 并赢过 $_SERVER，
+          于是 `docker compose exec app vendor/bin/phpunit` 会拿 dev 内核跑测试
+          （连错库、加载错配置）。这一行把 $_ENV 也钉成 test。
+        -->
+        <env name="APP_ENV" value="test" force="true" />
     </php>
 
     <testsuites>

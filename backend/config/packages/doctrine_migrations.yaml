@@ -1,0 +1,17 @@
+# Doctrine Migrations（§13.5）。
+#
+# T-003 只让 `doctrine:migrations:*` 命令可用 —— §14.3 的部署流程要调
+# `doctrine:migrations:migrate --no-interaction --allow-no-migration`。
+# 第一个迁移文件由 T-101 写。
+#
+# ⚠️ §13.5 / CONTRIBUTING §5 的硬性规范，写迁移前先读：
+#   - 只允许 expand–contract；禁止改列名、删列、无默认值地 SET NOT NULL
+#   - 索引用 CREATE INDEX CONCURRENTLY（不能锁表）
+#   - 每个迁移文件顶部注释写明：影响的表 / 预估执行时长 / 是否锁表 / 如何回滚
+#   - 每个迁移必须有可用的 down()
+
+doctrine_migrations:
+    migrations_paths:
+        # 命名空间刻意不叫 App\Migrations —— 迁移类不应被 composer autoload 收录。
+        'DoctrineMigrations': '%kernel.project_dir%/migrations'
+    enable_profiler: false

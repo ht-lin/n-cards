@@ -1,0 +1,42 @@
+# staging 覆盖层（§14.1）。叠在 base **和** prod 之上 —— staging 的形态必须与
+# 生产一致，否则它就证明不了任何东西：
+#
+#     docker compose -f infra/compose/docker-compose.base.yml \
+#                    -f infra/compose/docker-compose.prod.yml \
+#                    -f infra/compose/docker-compose.staging.yml up -d
+#
+# ⚠️⚠️ **staging 只用合成数据**（§14.1 / infra/README.md）。
+# 严禁把生产数据复制过来，哪怕脱敏。需要真实规模的测试就用生成器造数。
+# 这不是建议 —— 生产数据一旦落到 staging，GDPR 上的处理目的就变了。
+#
+# 相对 prod 的差异只有三处：域名、资源配额、日志级别。**没有**「staging 特有的
+# 简化」—— 比如不会把 vault 换回 dev 模式，unseal 流程在 staging 上也要真跑一遍，
+# 那正是 staging 的价值（§13.8：需要运维介入的事必须先有 runbook 并演练过）。
+
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:main}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+      # 唯一放松的一处：staging 打 debug 级日志，方便复现问题。
+      # 生产是 error 起。（monolog 由 T-405 接入，这个变量届时才生效。）
+      LOG_LEVEL: debug
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  postgres:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 256M

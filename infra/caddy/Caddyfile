@@ -1,0 +1,51 @@
+# NCards 边缘反向代理（§4.1 / §7.4）。
+#
+# 一份文件同时服务本地与生产，靠 CADDY_SITE_ADDRESS 参数化：
+#   本地      http://localhost          明文，Caddy 不申请证书
+#   staging   api.staging.ncards.de     Caddy 自动 TLS（ACME）
+#   prod      api.ncards.de             同上
+#
+# ⚠️ 交付归属：infra/README.md 把 infra/caddy/ 挂在 T-012 名下，但 T-003 起
+# caddy 服务就要真跑起来，没有配置文件起不来。所以这里是**最小可用版**：
+# 反向代理 + §7.4 的安全响应头。T-012 补静态法律页与真实域名的证书配置。
+
+{
+	# §7.4：禁用 Server 版本回显。Caddy 的 admin API 在容器内网也不需要。
+	admin off
+	# 访问日志走 stdout，由 Docker 收走（T-405 接 Loki）。
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$CADDY_SITE_ADDRESS:http://localhost} {
+	# ------------------------------------------------------------------
+	# §7.4 安全响应头
+	# ------------------------------------------------------------------
+	header {
+		# API 不返回 HTML，CSP 直接锁死到什么都不许加载。
+		Content-Security-Policy "default-src 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+
+		# 版本回显：Caddy 的 Server 头与 PHP 的 X-Powered-By 都拿掉。
+		# （PHP 侧 expose_php=Off 已经关了一道，这里是第二道。）
+		# Via 严格说不含版本号，但它一样在对外广播「这层是 Caddy」，一并拿掉。
+		-Server
+		-X-Powered-By
+		-Via
+	}
+
+	# HSTS 只在真正跑 TLS 的站点上发。本地是明文 http://localhost，
+	# 发了会把开发者的浏览器对 localhost 永久锁进 HTTPS —— 那是个很难排查的坑。
+	@https expression {scheme} == "https"
+	header @https Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+	reverse_proxy app:8080 {
+		# X-Request-Id 透传由应用侧的 RequestIdListener 负责生成与回填（T-004），
+		# Caddy 这里不插手，避免两处都生成导致日志里对不上号。
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
