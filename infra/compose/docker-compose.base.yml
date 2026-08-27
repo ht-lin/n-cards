@@ -83,6 +83,12 @@ services:
       REDIS_URL: redis://redis:6379
       VAULT_ADDR: http://vault:8200
 
+      # T-004。没有这一行，Symfony 会忽略 caddy 发来的 X-Forwarded-For：
+      # Request::getClientIp() 对每个请求都返回 caddy 容器的 IP，
+      # 于是幂等键的 IP 维度失效，T-006 的 §7.5 按 IP 限流更会把全世界当成一个 IP。
+      # `private_ranges` 覆盖本 compose 网络的网段。
+      TRUSTED_PROXIES: private_ranges
+
     # §7.4：非 root（Dockerfile 里 USER ncards）+ 只读根文件系统。
     read_only: true
     security_opt:
@@ -194,7 +200,10 @@ services:
   # 尚未交付的服务（§14.2 的清单里有，但依赖还没装，写出来也起不来）
   # ==========================================================================
   # worker      入口 `bin/console messenger:consume async email`，prod 下 2 副本。
-  #             需要 symfony/messenger —— T-004 装。
+  #             symfony/messenger 已由 T-004 装上，但两条总线目前全部路由到
+  #             `sync://`（见 backend/config/packages/messenger.yaml）——
+  #             消费一条 sync 总线的 worker 是个什么都不做的容器。
+  #             T-1xx 接上 async / email transport 之后再启用。
   # scheduler   入口 Symfony Scheduler：每日清理、删号执行、导出过期清理、key rewrap。
   #             T-113。
   # prometheus / grafana / loki / promtail / alertmanager

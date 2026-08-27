@@ -94,7 +94,8 @@ services:
 #    <<: app 的定义
 #    command: ["php", "bin/console", "messenger:consume", "async", "email", "--time-limit=3600"]
 #    deploy: { replicas: 2 }
-#    → 需要 symfony/messenger，T-004 装
+#    → symfony/messenger 已由 T-004 装上，但总线目前全部 `sync://`；
+#      T-1xx 接上 async / email transport 之后再启用
 #
 #  scheduler:
 #    command: ["php", "bin/console", "messenger:consume", "scheduler_default"]

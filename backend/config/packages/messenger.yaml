@@ -1,0 +1,52 @@
+# Messenger —— 命令总线与领域事件总线（§4.2 规则 3、§12.2）。
+#
+# ============================================================================
+# M0 阶段：两条总线，全部 sync
+# ============================================================================
+# T-004 只交付**总线抽象**（Shared\Application\Bus\{Command,Event}BusInterface）
+# 与它们的 Messenger 实现。此刻还没有任何领域事件，也没有任何 Handler，
+# 所以两条总线都路由到 `sync://`：dispatch 即同步执行。
+#
+# 这不是「先留个接口」——《CONTRIBUTING》§9 的范围纪律禁止那样做。总线现在就被
+# 需要：§4.2 规则 3 规定跨模块异步只能走 Domain Event，而 T-1xx 的第一个事件
+# 生产者不该同时还要设计总线。infra/compose 的 worker 槽位也是照这个前提写的。
+#
+# ============================================================================
+# T-1xx 接手时要做的事
+# ============================================================================
+# 1. 装 symfony/doctrine-messenger（或改用 redis transport），加 `async` transport。
+#    ⚠️ doctrine transport 会带来 `messenger_messages` 表 + 一个迁移 ——
+#    那是「第一个真实异步消费者」的决定，T-004 刻意不替它做。
+# 2. 把需要异步的事件路由到 async（§4.2 的协作点表：CardSharedWith / MemberRemoved
+#    等推送类事件；推送失败不应回滚业务事务）。
+# 3. 放开 infra/compose/docker-compose.{base,prod}.yml 里注释掉的 `worker` 服务。
+#    在那之前放开是没有意义的 —— 消费一条 sync 总线的 worker 什么也不做。
+#
+# ⚠️ 各模块**不得**直接注入 MessageBusInterface。deptrac 的 Framework.Messaging
+# 图层只对 *.Infrastructure 开放，唯一的合法入口是那两个 Shared 接口。
+framework:
+    messenger:
+        default_bus: command.bus
+
+        buses:
+            # 命令：恒同步，一条命令一个 Handler，返回值交回调用方。
+            #
+            # 刻意**没有** `validation` middleware：symfony/validator 没装（T-004 的
+            # AbstractApiController 不提供字段校验，模块暂时抛
+            # DomainException::validationFailed）。装不装 validator 是 T-1xx 的决定 ——
+            # 在这里放一个半成品会留下很难改的形状。
+            command.bus: ~
+            # 领域事件：允许零个或多个订阅者，没有返回值。
+            event.bus:
+                default_middleware:
+                    enabled: true
+                    # 事件可以没有订阅者 —— 那不是错误（§4.2：Notification 模块
+                    # 还没实现时，Sharing 照样要能发 CardSharedWith）。
+                    allow_no_handlers: true
+
+        transports:
+            sync: 'sync://'
+
+        routing:
+            # M0：全部同步。T-1xx 起按事件类型逐个改到 async。
+            App\Shared\Domain\Event\DomainEvent: sync

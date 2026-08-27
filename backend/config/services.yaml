@@ -7,6 +7,24 @@
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
 parameters:
+    # ------------------------------------------------------------------ T-004
+    # RFC 9457 `type` URI 的前缀（§6.1）。
+    #
+    # ⚠️ **在所有环境取同一个值**（生产值），staging 也不例外。
+    # RFC 9457 把 `type` 首先当作**标识符**、其次才是可解引用的 URL。若它随环境变化，
+    # 一个按 `type` 分支的客户端会在 staging 与 prod 上行为不同，而 Android 的
+    # 集成测试还要为此准备两套 fixture。做成 env 只是为了 ADR-0002 的品牌名
+    # （目前还是 Proposed）真定下来时能一处改掉。
+    ncards.problem_type_base_uri: '%env(PROBLEM_TYPE_BASE_URI)%'
+
+    # §6.1 的强制升级基线：低于此版本的客户端一律 426 client_too_old。
+    # ClientVersionListener 做判定，T-112 的 GET /v1/config 读**同一个参数**下发给客户端 ——
+    # 两处必须同源，否则会出现「服务端拒了但客户端不知道该升到哪个版本」。
+    ncards.min_supported_client: '%env(MIN_SUPPORTED_CLIENT)%'
+
+    # 超过这个大小的响应体不进幂等存储（只释放锁）。
+    # php.prod.ini 的 post_max_size = 2M 本来就兜了底，这里是第二道。
+    ncards.idempotency.max_body_bytes: 262144
 
 services:
     # default configuration for services in *this* file
@@ -31,5 +49,64 @@ services:
     App\:
         resource: '../src/'
 
+    # ------------------------------------------------------------------ T-004
+    # Shared 内核的接口 → 实现别名。
+    #
+    # Symfony 对「只有一个实现」的接口会自动建别名，所以下面这几条**目前**是冗余的。
+    # 显式写出来有两个理由：
+    #
+    #   1. IdempotencyScopeResolverInterface 在 T-1xx 会有第二个实现
+    #      （AuthenticatedIdempotencyScopeResolver）。第二个实现一出现，自动别名
+    #      立刻消失，autowiring 会报一个指向 Shared 内核、但根因在 Identity 模块的
+    #      费解错误。显式 alias 让那次替换变成改这里的一行。
+    #   2. 「这个接口在生产里到底注进去的是哪个类」应该在配置里一眼可查，
+    #      而不是靠推断容器的自动行为。
+    App\Shared\Domain\Time\ClockInterface: '@App\Shared\Infrastructure\Time\SystemClock'
+    App\Shared\Domain\Random\RandomnessInterface: '@App\Shared\Infrastructure\Random\SecureRandomness'
+    App\Shared\Domain\Identity\UuidGeneratorInterface: '@App\Shared\Domain\Identity\Uuid7Generator'
+
+    # 两条总线要注入的是**具名**的 Messenger bus，不是默认的那条 ——
+    # 事件总线必须走 allow_no_handlers 的 event.bus（见 messenger.yaml），
+    # 否则第一个还没有订阅者的领域事件会直接抛异常。
+    App\Shared\Infrastructure\Messenger\MessengerCommandBus:
+        arguments:
+            $commandBus: '@command.bus'
+    App\Shared\Infrastructure\Messenger\MessengerEventBus:
+        arguments:
+            $eventBus: '@event.bus'
+    App\Shared\Application\Bus\CommandBusInterface: '@App\Shared\Infrastructure\Messenger\MessengerCommandBus'
+    App\Shared\Application\Bus\EventBusInterface: '@App\Shared\Infrastructure\Messenger\MessengerEventBus'
+
+    App\Shared\Application\Transaction\TransactionRunnerInterface: '@App\Shared\Infrastructure\Doctrine\TransactionalRunner'
+    App\Shared\Application\Idempotency\IdempotencyStoreInterface: '@App\Shared\Infrastructure\Redis\RedisIdempotencyStore'
+
+    # ⚠️ T-1xx（Identity）落地后，把这一行指向 AuthenticatedIdempotencyScopeResolver。
+    # 这条 alias 现在就写出来，正是为了让那次替换是一行的、显眼的编辑 ——
+    # 依赖「单实现自动别名」的话，第二个实现一出现别名就消失，
+    # autowiring 会报一个指向 Shared 内核、根因却在 Identity 的费解错误。
+    App\Shared\Application\Idempotency\IdempotencyScopeResolverInterface: '@App\Shared\Infrastructure\Http\AnonymousIdempotencyScopeResolver'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+
+# ---------------------------------------------------------------------- T-004
+# 仅 test 环境的 /v1 探针端点。
+#
+# T-004 交付的是横切层，本身不含任何 /v1 路由（第一个真实端点 /v1/config 属 T-112），
+# 但验收标准要求契约测试跑在真实 HTTP 上。这个夹具提供那个 /v1 面。
+#
+# App\Tests\ 在 composer.json 的 autoload-dev 里；#[Route] 的 autoconfiguration
+# 会打上 `routing.controller` 标签，由 config/routes.yaml 的
+# `resource: routing.controllers` 收集 —— 与类所在目录无关（HealthController 的
+# 类注释已经解释过这个机制）。
+#
+# dev/prod 容器里这段不生效，服务不存在，路由自然也不存在。
+# tests/Api/RouteInventoryTest 会断言这一点。
+when@test:
+    services:
+        _defaults:
+            autowire: true
+            autoconfigure: true
+
+        App\Tests\Fixture\:
+            resource: '../tests/Fixture/'

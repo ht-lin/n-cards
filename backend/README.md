@@ -94,12 +94,35 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 | `Shared/Http/Controller/` | `HealthController`（`/health/live`、`/health/ready`） |
 
 两个扩展点都是「实现接口即注册」：`config/services.yaml` 的 `_instanceof` 打标签，
-收集端用 `#[AutowireIterator]`。加一项就绪检查（Redis → T-006、Vault → T-005）
-或一个模块 seeder，都不需要回头改控制器或命令。
+收集端用 `#[AutowireIterator]`。加一项就绪检查或一个模块 seeder，都不需要回头改
+控制器或命令 —— T-004 的 `RedisHealthCheck` 就是这样零配置接进去的（Vault → T-005）。
 
-> ⚠️ **T-004 注意**：`ClientVersionListener`（缺 `X-Client` 即 400）**必须**把
-> `/health/*` 排除在外。探活调用方是 Docker healthcheck / Caddy / Ansible，
-> 它们不带这个 header —— 漏掉这条，compose 与 §14.3 部署健康检查会一起失效。
+## 跨切面契约（T-004）
+
+`/v1/*` 上的每个请求都会穿过四个监听器。优先级是承重的，由
+[`tests/Integration/Shared/Http/ListenerOrderTest`](tests/Integration/Shared/Http/ListenerOrderTest.php)
+钉死 —— 属性把优先级散在各个类文件里，那个测试是唯一能看到全貌、也是唯一能防止
+后来者随手改序的东西。
+
+| 事件 | 优先级 | 监听器 | 作用 |
+|---|---:|---|---|
+| `kernel.request` | 512 | `RequestIdListener` | `X-Request-Id` 透传/生成。**必须最先** —— 后面谁抛异常都得有 id 可追 |
+| `kernel.request` | 40 | `ClientVersionListener` | 解析 `X-Client`，缺失即 400，过旧即 426。**早于路由**（32） |
+| `kernel.request` | 8 | `IdempotencyMiddleware` | `Idempotency-Key`。**晚于路由** —— `POST /v1/typo` 不该烧掉一个键 |
+| `kernel.response` | −256 | `IdempotencyMiddleware` | 落库（仅 2xx）或释放锁 |
+| `kernel.response` | −512 | `RequestIdListener` | 回显 `X-Request-Id` |
+| `kernel.exception` | 16 | `ApiProblemExceptionListener` | RFC 9457 Problem Details。**必须早于 Symfony 的 `ErrorListener` 并 `stopPropagation()`** |
+
+> ✅ **`/health/*` 的豁免已交付**（原本此处是给 T-004 的警告）。
+> 实现方式不是「排除 `/health/*`」那样的黑名单，而是反过来的正向白名单
+> [`ApiSurface::isProductApiPath()`](src/Shared/Domain/Http/ApiSurface.php)：
+> **只有 `/v1/` 受横切规则约束**，其余一律豁免。于是 T-007 之后任何新的非 `/v1`
+> 端点都自动豁免，不需要任何人记得去登记。
+>
+> 真正的强制点是 [`tests/Api/RouteInventoryTest`](tests/Api/RouteInventoryTest.php)：
+> 每条路由要么在 `/v1/` 下，要么登记在一份显式清单里，否则 CI 红。
+> 另有 `tests/Api/ClientVersionEnforcementTest::testHealthEndpointsAreExempt`
+> 直接守着两个探活端点 —— 它红了就说明 compose 起栈与 §14.3 的部署健康检查要挂。
 
 ## 分层职责
 

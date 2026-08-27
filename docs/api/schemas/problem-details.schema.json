@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.ncards.de/schemas/problem-details.json",
+  "title": "Problem Details",
+  "description": "RFC 9457 Problem Details as returned by every NCards API error response (spec §6.1). Delivered by T-004.",
+
+  "$comment": "给 T-007：openapi.yaml 的 components/schemas/Problem 必须用 $ref 指向本文件，**不要复制一份** —— 两份 code 枚举必然会漂。本文件的 properties.code.enum 与 App\\Shared\\Domain\\Error\\ErrorCode 的一致性由 tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest 逐项断言，少一个多一个都会让 CI 变红。同理 properties.errors.items.properties.code.enum 对应 App\\Shared\\Domain\\Error\\FieldErrorCode。",
+
+  "type": "object",
+
+  "required": ["type", "title", "status", "code", "detail", "instance", "request_id"],
+
+  "properties": {
+    "type": {
+      "description": "问题类型的稳定标识符。**所有环境同值**（含 staging）—— RFC 9457 把它首先当作标识符，其次才是可解引用的 URL。",
+      "type": "string",
+      "format": "uri"
+    },
+    "title": {
+      "description": "该问题类型的简短英文概括，不随具体出现而变。",
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "description": "HTTP 状态码。必须与响应的状态行、以及 code 的规范状态码三者一致。",
+      "type": "integer",
+      "minimum": 400,
+      "maximum": 599
+    },
+    "code": {
+      "description": "机器可读的稳定错误码（§6.1）。客户端**只能**对它分支，不得解析 detail。",
+      "type": "string",
+      "enum": [
+        "validation_failed",
+        "malformed_request",
+        "token_expired",
+        "token_invalid",
+        "insufficient_role",
+        "not_a_member",
+        "username_required",
+        "not_friends",
+        "not_found",
+        "method_not_allowed",
+        "revision_conflict",
+        "full_resync_required",
+        "already_exists",
+        "username_taken",
+        "username_immutable",
+        "id_conflict",
+        "idempotency_in_progress",
+        "payload_too_large",
+        "unsupported_media_type",
+        "username_invalid",
+        "limit_exceeded",
+        "idempotency_key_reused",
+        "client_too_old",
+        "rate_limited",
+        "internal_error",
+        "service_unavailable"
+      ]
+    },
+    "detail": {
+      "description": "英文开发者文案。服务端**绝不**返回可展示的德语文案（§6.1）—— 面向用户的文案一律由客户端本地化生成。",
+      "type": "string",
+      "minLength": 1
+    },
+    "instance": {
+      "description": "出问题的资源路径。**不含 query string** —— 那会把 username 一类的敏感参数写进每个错误体与每条日志（§3.8-C4）。",
+      "type": "string"
+    },
+    "request_id": {
+      "description": "本次请求的追踪 id，与响应的 X-Request-Id header 相同。恒存在，取不到时为 null。",
+      "type": ["string", "null"]
+    },
+
+    "errors": {
+      "description": "字段级错误。**为空时该成员不出现**，不会发成 []。客户端的模型必须给它默认值。",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "code", "message"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "required",
+              "too_short",
+              "too_long",
+              "invalid_format",
+              "invalid_type",
+              "out_of_range",
+              "not_unique",
+              "unknown_field",
+              "unsupported_parameter"
+            ]
+          },
+          "message": {
+            "description": "英文开发者文案，同 detail。",
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+
+    "current": {
+      "description": "服务端当前状态快照，供 §5.4.3 的冲突解决使用（主要是 revision_conflict）。**为空时该成员不出现**。",
+      "type": "object",
+      "additionalProperties": true
+    },
+
+    "debug": {
+      "description": "仅在 kernel.debug 下出现，**永远不会出现在 staging/prod**。客户端不得依赖它。",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+
+  "additionalProperties": true
+}

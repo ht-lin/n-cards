@@ -5,6 +5,23 @@ framework:
     # Note that the session will be started ONLY if you read or write from it.
     session: true
 
+    # ---------------------------------------------------------------- T-004
+    # ⚠️ 这两行修的是一个从 T-003 起就存在、但要到 T-006 才会显形的隐患。
+    #
+    # infra/caddy/Caddyfile 发 X-Forwarded-Proto，Caddy 还会自动加 X-Forwarded-For，
+    # 但**没有 trusted_proxies 时 Symfony 两个都忽略**：
+    #   - Request::getClientIp() 对每个请求都返回 Caddy 容器的 IP
+    #   - Request::isSecure() 在 TLS 后面恒为 false
+    #
+    # T-004 立刻受影响：幂等键在没有认证用户时按 IP 分作用域，所有匿名客户端会
+    # 挤进同一个桶。T-006 则是灾难性的 —— §7.5 的 `POST /auth/otp/request` IP 20/h
+    # 与 `GET /v1/users/lookup` IP 100/h 会把全世界算作一个 IP，等于对登录端点的
+    # 拒绝服务，而且看起来完全像是「限流生效了」。
+    #
+    # 回归测试：tests/Api/TrustedProxyTest。
+    trusted_proxies: '%env(TRUSTED_PROXIES)%'
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port']
+
     #esi: true
     #fragments: true
 
