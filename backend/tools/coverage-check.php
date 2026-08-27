@@ -22,6 +22,16 @@ const GLOBAL_THRESHOLD = 70.0;
 const PATH_THRESHOLDS = [
     'src/Module/*/Domain' => 85.0,
     'src/Module/*/Application' => 85.0,
+
+    // T-004 补上 Shared 的两层。§13.3 的字面只写了 `Module/*`，但那条要求的**理由**
+    // （Domain 与 Application 是不变量与编排的所在，测不到就等于没保障）对全仓库
+    // 复用率最高的 Shared 内核只会更成立 —— 这里的每个类都会被七个模块 import。
+    //
+    // 不含 Shared/Infrastructure 与 Shared/Http：那两层是框架适配（监听器、控制器
+    // 基类、Doctrine 类型），端到端行为由 tests/Api 覆盖，行覆盖率不是衡量它们的
+    // 好指标，硬卡 85% 只会诱导为覆盖率而写的测试。
+    'src/Shared/Domain' => 85.0,
+    'src/Shared/Application' => 85.0,
 ];
 
 $cloverPath = $argv[1] ?? 'var/coverage/clover.xml';
