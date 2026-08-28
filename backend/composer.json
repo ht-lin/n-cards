@@ -17,6 +17,7 @@
         "symfony/dotenv": "7.4.*",
         "symfony/flex": "^2.11",
         "symfony/framework-bundle": "7.4.*",
+        "symfony/http-client": "7.4.*",
         "symfony/messenger": "7.4.*",
         "symfony/monolog-bundle": "^4.0",
         "symfony/runtime": "7.4.*",

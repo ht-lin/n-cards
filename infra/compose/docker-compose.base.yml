@@ -83,6 +83,12 @@ services:
       REDIS_URL: redis://redis:6379
       VAULT_ADDR: http://vault:8200
 
+      # T-005：本地与 CI 用 dev 模式的 root token 直连 Vault。
+      # 生产改用 AppRole（VAULT_ROLE_ID / VAULT_SECRET_ID，由 sops 下发，见 .prod.yml）——
+      # root token 没有 policy 限制，等于把 §17.4 那份最小权限清单整个作废。
+      # 选择逻辑在 Shared\Infrastructure\Vault\VaultTokenProviderFactory。
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN_ID:-dev-only-root-token}
+
       # T-004。没有这一行，Symfony 会忽略 caddy 发来的 X-Forwarded-For：
       # Request::getClientIp() 对每个请求都返回 caddy 容器的 IP，
       # 于是幂等键的 IP 维度失效，T-006 的 §7.5 按 IP 限流更会把全世界当成一个 IP。
@@ -195,6 +201,38 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  # ---------------------------------------------------------------- vault-init
+  # T-005：一次性容器，跑 infra/vault/bootstrap.sh —— 启用 Transit、建三把 key、
+  # 建 kv-v2 与 JWT 密钥、写两份 policy、配 AppRole。
+  #
+  # 为什么是一个服务而不是「起栈后自己敲一条命令」：根 README 承诺
+  # `docker compose up -d` 一键起全栈，而一个没有 Transit 引擎的 Vault 会让
+  # /health/ready 之外的一切涉密端点全部 503 —— 那不算「起来了」。
+  #
+  # 脚本是幂等的（每个创建动作前先探测存在性，且绝不覆盖已有密钥材料），
+  # 所以每次 `up` 重跑一遍是安全的，`restart: "no"` 让它跑完就退出。
+  #
+  # ⚠️ **只在本地与 staging 用**。生产没有这个服务（见 docker-compose.prod.yml）：
+  # 那里 Vault 每次重启都是封印状态，初始化是 unseal 之后的人工步骤，
+  # 且需要一个用完即吊销的 root token —— 不该常驻在 compose 文件里。
+  vault-init:
+    # 自建镜像：脚本要 curl / jq / openssl，而 `backing` 是 internal: true
+    # （连出站都没有），启动时装不了包 —— 只能构建期装好。见 infra/vault/Dockerfile。
+    build:
+      context: ../vault
+    restart: "no"
+    depends_on:
+      vault:
+        condition: service_healthy
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN_ID:-dev-only-root-token}
+    volumes:
+      # 只读挂载 infra/vault/ —— 脚本与 policies/ 都在里面，改一行策略不用重建镜像。
+      - ../vault:/vault/bootstrap:ro
+    networks:
+      - backing
 
   # ==========================================================================
   # 尚未交付的服务（§14.2 的清单里有，但依赖还没装，写出来也起不来）

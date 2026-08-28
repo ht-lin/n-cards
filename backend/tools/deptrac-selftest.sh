@@ -17,6 +17,16 @@
 #      而在此之前**没有任何东西**证明这条规则还有效 —— 场景 ① 只覆盖模块维度。
 #      这条一旦失守，Domain 层会悄悄长出框架依赖，等发现时已经改不动了。
 #
+#   ③ 加密门面只经接口暴露（T-005 验收标准）
+#      Wallet.Application import Shared\Infrastructure\Crypto\VaultTransitCrypto
+#      → 必须 violation。
+#      T-005 的验收标准原文是「deptrac 确认无模块直接 import VaultTransitCrypto
+#      （只经接口）」。这一条**今天自动成立** —— Shared.Infrastructure 不在任何模块的
+#      允许列表里 —— 恰恰因为如此才需要这个自检：`deptrac analyse` 全绿只能说明
+#      「当前没人这么写」，说明不了「这么写会被拦下」。谁哪天往某个模块的允许列表里
+#      加了 Shared.Infrastructure（比如为了图省事直接注入某个 Infrastructure 服务），
+#      §5.3 的门面就被架空了，而 CI 不会有任何反应。
+#
 # 用法：composer deptrac:selftest
 #
 set -euo pipefail
@@ -26,9 +36,10 @@ cd "$(dirname "$0")/.."
 MODULE_VIOLATOR='src/Module/Wallet/Domain/__DeptracSelfTestViolation.php'
 MODULE_TARGET='src/Module/Identity/Domain/__DeptracSelfTestTarget.php'
 LAYER_VIOLATOR='src/Shared/Domain/__DeptracSelfTestFrameworkImport.php'
+CRYPTO_VIOLATOR='src/Module/Wallet/Application/__DeptracSelfTestCryptoImport.php'
 
 cleanup() {
-    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR"
+    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR" "$CRYPTO_VIOLATOR"
 }
 trap cleanup EXIT
 
@@ -129,5 +140,35 @@ assert_violation \
     'Framework\.Http' \
     'deptrac.yaml 的 `Shared.Domain: []` 已被放宽。T-004 的 Uuid/Clock/ErrorCode 全部依赖这条规则 —— 见 src/Shared/Domain/Identity/Uuid.php 的类注释。'
 
+rm -f "$LAYER_VIOLATOR"
+
+# ---------------------------------------------------------------- 场景 ③
+# 引用的是**真实**的 VaultTransitCrypto，不是临时靶子 —— 验收标准点了这个类的名，
+# 自检就照着它写。将来若该类被改名或搬走，这里会因为找不到类而失败，
+# 那正是「有人动了加密门面的结构，请重新确认边界」该有的信号。
+cat > "$CRYPTO_VIOLATOR" <<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace App\Module\Wallet\Application;
+
+use App\Shared\Infrastructure\Crypto\VaultTransitCrypto;
+
+/** deptrac 自检临时文件：模块直接 import 加密实现（而非接口），必须被拦下（T-005）。 */
+final class __DeptracSelfTestCryptoImport
+{
+    public function __construct(public readonly VaultTransitCrypto $crypto)
+    {
+    }
+}
+PHP
+
+assert_violation \
+    '模块直接 import VaultTransitCrypto' \
+    'Wallet\.Application' \
+    'Shared\.Infrastructure' \
+    'deptrac.yaml 里某个模块的 Application 允许列表被加进了 Shared.Infrastructure。T-005 的验收标准「无模块直接 import VaultTransitCrypto」就此失效 —— 加解密必须只经 Shared\Application\Crypto 的三个接口，见 CryptoServiceInterface 的类注释。'
+
 echo
-echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单）。"
+echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单 + 加密门面只经接口）。"
