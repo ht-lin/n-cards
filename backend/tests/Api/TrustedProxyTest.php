@@ -87,6 +87,46 @@ final class TrustedProxyTest extends WebTestCase
     }
 
     /**
+     * ⚠️⚠️ 反面：X-Forwarded-Host **绝不**可信，哪怕它来自受信代理。
+     *
+     * 这条和上面两条的方向正好相反，理由在 Caddy 的行为里：`reverse_proxy` 对
+     * X-Forwarded-For 是**追加**、对 X-Forwarded-Proto 被 Caddyfile 的 header_up
+     * **显式覆盖**，唯独 X-Forwarded-Host 是「客户端没发才补」。而
+     * trusted_proxies: private_ranges 让 Caddy 容器受信 —— 于是把这个 header 加进
+     * trusted_headers，等于让任意外网客户端直接控制 Request::getHost()。
+     *
+     * 后果按时间排：现在该值被回显进框架 404 的 detail；T-006 之后，§7.1 邮件里的
+     * Magic Link 会指向攻击者的域名 —— 而绝对 URL 正是本文件上面那条
+     * testProtocolComesFromXForwardedProto 所守护的东西。
+     *
+     * 修法是不信任它（现状）；真要按 Host 分支，得先配 framework.trusted_hosts。
+     */
+    public function testForwardedHostIsNotTrusted(): void
+    {
+        $client = self::createClient();
+
+        $client->request('GET', '/v1/_probe/echo', server: [
+            'HTTP_X_CLIENT' => self::CLIENT,
+            // REMOTE_ADDR 是**受信**的代理 —— 这正是这条测试的要害：
+            // 即便转发链本身可信，Host 这一项依然由外部客户端说了算。
+            'REMOTE_ADDR' => '127.0.0.1',
+            'HTTP_HOST' => 'api.ncards.de',
+            'HTTP_X_FORWARDED_HOST' => 'evil.example',
+        ]);
+
+        /** @var array<string, mixed> $body */
+        $body = json_decode((string) $client->getResponse()->getContent(), true, 512, \JSON_THROW_ON_ERROR);
+
+        self::assertSame(
+            'api.ncards.de',
+            $body['host'],
+            'X-Forwarded-Host 被信任了 —— 攻击者可以控制 Request::getHost()，'
+            .'进而控制 §7.1 Magic Link 邮件里的绝对 URL。'
+            .'把 x-forwarded-host 从 framework.yaml 的 trusted_headers 里去掉。',
+        );
+    }
+
+    /**
      * 反面：**不**受信的来源发的 X-Forwarded-For 必须被忽略。
      *
      * 否则任何人都能伪造自己的 IP，把 §7.5 的按 IP 限流整个绕过去。

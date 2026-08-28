@@ -53,6 +53,9 @@ final class ProbeApiController extends AbstractApiController
             'request_id' => $this->requestId($request),
             'client_ip' => $request->getClientIp(),
             'is_secure' => $request->isSecure(),
+            // 生成绝对 URL（§7.1 的 Magic Link）时用的就是这个 —— TrustedProxyTest
+            // 靠它盯住「X-Forwarded-Host 不受信」。
+            'host' => $request->getHost(),
         ]);
     }
 

@@ -19,8 +19,24 @@ framework:
     # 拒绝服务，而且看起来完全像是「限流生效了」。
     #
     # 回归测试：tests/Api/TrustedProxyTest。
+    # ⚠️⚠️ 这个列表里**没有** x-forwarded-host，是刻意的。别「补全」它。
+    #
+    # 这三项就是 Symfony 自己的默认集（http-kernel/Kernel.php：FOR | PORT | PROTO）——
+    # 上游把 HOST 排除在外是有理由的，我们不该比上游更宽松。
+    #
+    # 具体到本栈：Caddy 的 reverse_proxy 只在客户端**没发**时才补 X-Forwarded-Host
+    # （X-Forwarded-For 是追加，X-Forwarded-Proto 被 Caddyfile 的 header_up 显式覆盖，
+    # 只有 Host 是「有就不动」）。而 trusted_proxies: private_ranges 意味着 Caddy 容器
+    # 受信 —— 于是外网客户端只要自己带上 `X-Forwarded-Host: evil.example`，
+    # 就直接控制了 Request::getHost()：
+    #   - 现在：该值被回显进框架 404 的 detail
+    #   - T-006 之后：§7.1 邮件里的 Magic Link 会指向攻击者的域名
+    #     （而绝对 URL 正是本节 trusted_proxies 存在的理由之一）
+    #
+    # 真需要按 Host 分支时，先配 framework.trusted_hosts 白名单，再谈信任这个 header。
+    # 回归测试：tests/Api/TrustedProxyTest::testForwardedHostIsNotTrusted。
     trusted_proxies: '%env(TRUSTED_PROXIES)%'
-    trusted_headers: ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port']
+    trusted_headers: ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-port']
 
     #esi: true
     #fragments: true
