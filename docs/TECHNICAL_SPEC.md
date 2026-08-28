@@ -1106,7 +1106,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
   "code": "revision_conflict",
   "detail": "The card was modified by another member.",
   "instance": "/v1/cards/0192f3a1-...",
-  "request_id": "01J...",
+  "request_id": "0192f3a1-b2c3-7d4e-8f01-23456789abcd",
   "errors": [ { "field": "title", "code": "too_long", "message": "..." } ],
   "current": { }
 }
@@ -1120,6 +1120,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 | HTTP | code | 含义 | 客户端应对 |
 |---|---|---|---|
 | 400 | `validation_failed` | 字段校验失败 | 显示字段错误 |
+| 400 | `malformed_request` | 请求体不是合法 JSON / 不是 JSON 对象 / 为空 | 客户端 bug，上报 Sentry |
 | 401 | `token_expired` | Access token 过期 | 静默刷新后重试一次 |
 | 401 | `token_invalid` | 令牌无效/会话已撤销 | 清空本地会话，跳登录 |
 | 403 | `insufficient_role` | 角色不足（viewer 试图改卡/删卡/邀请成员） | 提示只读；**同时上报 Sentry**——正常 UI 不应产生此请求 |
@@ -1127,16 +1128,65 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 | 403 | `username_required` | 注册未完成（`username IS NULL`） | 跳转 username 设定页 |
 | 403 | `not_friends` | 共享操作要求双方是已确认好友 | 提示需先加为好友；刷新好友列表 |
 | 404 | `not_found` | 含 username 查无此人 | 显示"未找到该用户" |
+| 405 | `method_not_allowed` | 路由存在但方法不允许 | 客户端 bug，上报 Sentry |
 | 409 | `revision_conflict` | 乐观锁失败 | 走冲突解决（§5.4.3） |
 | 409 | `full_resync_required` | 游标失效 | 清库全量重同步 |
 | 409 | `already_exists` | 好友已存在 / 已是成员 / 已有待处理邀请 | 幂等处理 |
 | 409 | `username_taken` | username 已被占用 | 提示重新输入 |
 | 409 | `username_immutable` | 试图修改已设定的 username | 客户端 bug，上报 Sentry |
+| 409 | `id_conflict` | 客户端生成的 id 已属于他人（§5.4.3） | 重新生成 id 重试 |
+| 409 | `idempotency_in_progress` | 同一 `Idempotency-Key` 的前一次请求仍在处理中（响应带 `Retry-After`） | 退避重试（outbox 本就重试 409） |
+| 413 | `payload_too_large` | 请求体超过上限 | 客户端 bug，上报 Sentry |
+| 415 | `unsupported_media_type` | `Content-Type` 不是 `application/json` | 客户端 bug，上报 Sentry |
 | 422 | `username_invalid` | 不符字符集/长度/保留词 | 显示具体规则 |
 | 422 | `limit_exceeded` | 触达系统限额 | 显示限额说明 |
+| 422 | `idempotency_key_reused` | 同一 `Idempotency-Key` 配了不同的请求体 | 客户端 bug，**不重试**，上报 Sentry |
 | 426 | `client_too_old` | 低于最低支持版本 | 强制升级墙 |
 | 429 | `rate_limited` | 限流（响应带 `Retry-After`） | 退避重试 |
+| 500 | `internal_error` | 未预期的服务端故障（`detail` 恒为固定文案） | 提示稍后重试；上报 Sentry |
 | 503 | `service_unavailable` | 维护中（响应带 `Retry-After`） | 显示维护页 |
+
+> **T-004 的扩表说明**：`malformed_request` / `method_not_allowed` / `id_conflict` /
+> `idempotency_in_progress` / `payload_too_large` / `unsupported_media_type` /
+> `idempotency_key_reused` / `internal_error` 是 T-004 补入的。§13.6 允许新增错误码
+> （向后兼容），但**禁止**改变已有 code 的含义。
+> 其中 `id_conflict` 原本就在 §5.4.3 里定义过，只是本表漏了 —— 属于修正规格自相矛盾。
+>
+> 本表是 Android 侧 T-010 生成 `ApiError` sealed class 的**唯一输入**。
+> 后端的落地是 `App\Shared\Domain\Error\ErrorCode`，两者由
+> `backend/tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest` 与
+> `docs/api/schemas/problem-details.schema.json` 三方钉死，改一处不改另两处会 CI 红。
+
+**`errors[].code` 词表**（T-004 补：原文只用 `too_long` 举了个例子，没有成表；
+§13.6 的「禁止改变 code 含义」对这一层同样成立，所以必须列全）
+
+| code | 含义 |
+|---|---|
+| `required` | 必填字段缺失或为 null |
+| `too_short` | 长度/元素个数低于下限 |
+| `too_long` | 长度/元素个数超过上限 |
+| `invalid_format` | 不符合字符集或格式（UUID、RFC 3339 时间、`X-Client`……） |
+| `invalid_type` | JSON 类型不对 |
+| `out_of_range` | 数值超出允许区间 |
+| `not_unique` | 唯一性冲突的字段级形态 |
+| `unknown_field` | 请求体里出现本端点不认识的字段 |
+| `unsupported_parameter` | 参数被本 API 明确不支持（如 `?offset=`） |
+
+**通用列表信封**（T-004 补：§6.1/§6.2 原本从未明说；§5.4.2 的同步响应已在用
+`next_cursor` / `has_more`，此处只是把它推广到全部列表端点，唯一的新名字是 `items`）
+
+```json
+{ "items": [ ], "next_cursor": "eyJ2IjoxLC...", "has_more": true }
+```
+
+`has_more` 为 `false` 时 `next_cursor` 恒为 `null`。
+
+**Content-Type 的澄清**（T-004）：上表「编码」一行的
+`application/json; charset=utf-8` 适用于**成功响应**；错误响应用 RFC 9457 规定的
+`application/problem+json`，该媒体类型**不带** charset 参数（JSON 按定义就是 UTF-8）。
+
+**`Idempotency-Replayed`**（T-004 新增的响应头）：命中幂等回放时为 `true`。
+标准里没有这个 header，是本项目自定义的 —— 客户端据此区分「真的执行了」与「拿到了回放」。
 
 ### 6.2 端点清单
 

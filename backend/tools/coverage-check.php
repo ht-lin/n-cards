@@ -22,6 +22,27 @@ const GLOBAL_THRESHOLD = 70.0;
 const PATH_THRESHOLDS = [
     'src/Module/*/Domain' => 85.0,
     'src/Module/*/Application' => 85.0,
+
+    // T-004 补上 Shared/Domain。§13.3 的字面只写了 `Module/*`，但那条要求的**理由**
+    // （Domain 是不变量的所在，测不到就等于没保障）对全仓库复用率最高的 Shared
+    // 内核只会更成立 —— 这里的每个类都会被七个模块 import。实测 98.3%（175/178）。
+    'src/Shared/Domain' => 85.0,
+
+    // ⚠️ 刻意**不**给 `src/Shared/Application` 设百分比门槛，尽管 §13.3 的字面
+    // 对 `Module/*/Application` 是有的。理由是分母：
+    //
+    // 该目录按设计是**契约层**，绝大部分是接口，而接口不产生可覆盖行。
+    // T-004 交付后它一共只有 **14 行**可覆盖代码（ReadinessProbe + IdempotencyRecord），
+    // 于是一行未覆盖就是 7.1 个百分点 —— 门槛量的是噪声，不是测试质量。
+    // T-1xx 起这里还会继续加 Port 接口（同样 0 行），分母不会变大。
+    //
+    // 对比 `src/Module/*/Application`：那里会有 Command / Handler / Query / DTO，
+    // 是几百行的真实编排逻辑，85% 在那里有意义。
+    //
+    // 这不是「没过就降标准」：本次实测 78.6%（11/14），随后补了
+    // tests/Unit/Shared/Application/Idempotency/IdempotencyRecordTest 覆盖真实缺口。
+    // 撤掉的是这个**指标**，不是对该层的要求 —— 该层的行为由
+    // tests/Api 与 tests/Integration 的端到端用例把关。
 ];
 
 $cloverPath = $argv[1] ?? 'var/coverage/clover.xml';

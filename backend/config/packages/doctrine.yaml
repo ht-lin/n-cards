@@ -17,6 +17,19 @@ doctrine:
     dbal:
         url: '%env(resolve:DATABASE_URL)%'
 
+        # T-004：Uuid 值对象 ↔ Postgres 原生 `uuid` 列（16 字节，索引友好；
+        # §9.3 假设 cards 表 75 万行，与 VARCHAR(36) 是实质差别）。
+        #
+        # `dbal.types` 走 doctrine-bundle 的 DBAL pass，不需要 `orm:` 段 ——
+        # 本文件此刻正确地还没有那一段。
+        #
+        # ⚠️ 给 T-101：装 ORM 时要一并补
+        #     mapping_types: { uuid: uuid }
+        # 否则反向工程与 `doctrine:schema:validate` 会把 PG 的原生 `uuid`
+        # 映回 DBAL 内建的 `guid`（string），而不是我们的 UuidType。
+        types:
+            uuid: App\Shared\Infrastructure\Doctrine\UuidType
+
         # 显式钉死驱动与版本：DATABASE_URL 由容器环境变量注入（T-003）或 sops 下发
         # （T-012），不应该靠 query string 里的 serverVersion 来决定平台行为。
         driver: pdo_pgsql

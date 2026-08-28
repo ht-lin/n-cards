@@ -1,0 +1,89 @@
+# Monolog —— 结构化日志与脱敏（§14.4）。
+#
+# ============================================================================
+# 两个 processor 是 T-004 的交付内容
+# ============================================================================
+#   RequestContextProcessor  往每条记录注入 request_id / route / method。
+#                            这是 T-004「X-Request-Id ……写入所有日志」的后半句 ——
+#                            生成了 id 却不进日志，客户端报障时运维搜不到任何东西。
+#   PiiRedactionProcessor    §14.4 的硬性要求：barcode_value / note / email /
+#                            code / refresh_token 一律 [REDACTED]。
+#                            这是**安全**控制：日志是绕过 §5.3 服务端加密的旁路，
+#                            Loki 里没有 Vault。
+#
+# 两者实现 Monolog\Processor\ProcessorInterface，由 MonologBundle 的
+# autoconfiguration 自动打上 `monolog.processor` 标签 —— 不需要在 services.yaml
+# 里手写，也因此会作用于**所有** handler。
+#
+# ============================================================================
+# fingers_crossed 与我们的错误码语义恰好配合得很好
+# ============================================================================
+# prod 用 fingers_crossed(action_level: error)：平时缓冲，出错时才整段吐出来。
+#
+# ApiProblemExceptionListener 按 ErrorCode::logLevel() 记日志，而那个方法只把
+# `internal_error` 记成 error，业务分支（409 revision_conflict、403 insufficient_role……）
+# 记 info，刻意状态（429 / 503）记 warning。于是：
+#   - 正常业务错误**不会**触发日志刷出 —— 每天成千上万次 409 不会淹掉日志
+#   - 真正的服务端故障会触发，并且带上此前缓冲的全部上下文
+# 换成「所有 4xx 都记 error」就会两头落空：日志爆炸，且 §14.4 的告警失去意义。
+#
+# T-405 接手 §14.4 的完整可观测性（Loki、user_id、duration_ms、指标）时，
+# 在此基础上补，不用推倒。
+monolog:
+    channels:
+        - deprecation # Deprecations are logged in the dedicated "deprecation" channel when it exists
+
+when@dev:
+    monolog:
+        handlers:
+            main:
+                type: stream
+                path: "%kernel.logs_dir%/%kernel.environment%.log"
+                level: debug
+                channels: ["!event"]
+            console:
+                type: console
+                process_psr_3_messages: false
+                channels: ["!event", "!doctrine", "!console"]
+
+when@test:
+    monolog:
+        handlers:
+            main:
+                type: fingers_crossed
+                action_level: error
+                handler: nested
+                excluded_http_codes: [404, 405]
+                channels: ["!event"]
+            nested:
+                type: stream
+                path: "%kernel.logs_dir%/%kernel.environment%.log"
+                level: debug
+
+when@prod:
+    monolog:
+        handlers:
+            main:
+                type: fingers_crossed
+                action_level: error
+                handler: nested
+                excluded_http_codes: [404, 405]
+                channels: ["!deprecation"]
+                buffer_size: 50 # How many messages should be saved? Prevent memory leaks
+            nested:
+                type: stream
+                # 写 stderr 而不是文件：§7.4 的容器是只读 rootfs，日志由 Docker
+                # 收走再进 Loki（§14.4）。写文件会撞上只读挂载。
+                path: php://stderr
+                level: debug
+                # §14.4：JSON 结构化日志。
+                formatter: monolog.formatter.json
+            console:
+                type: console
+                process_psr_3_messages: false
+                channels: ["!event", "!doctrine"]
+            deprecation:
+                type: stream
+                channels: [deprecation]
+                path: php://stderr
+                formatter: monolog.formatter.json

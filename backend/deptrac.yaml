@@ -21,7 +21,8 @@
 #   <Module>.Infrastructure   src/Module/<M>/Infrastructure
 #   <Module>.Http             src/Module/<M>/Http
 #   Shared.*                  src/Shared/*
-#   Framework.{Http,Persistence,Core}   vendor 里的框架类型（按 FQCN 正则收集）
+#   Framework.{Http,Persistence,Messaging,Logging,Core}
+#                             vendor 里的框架类型（按 FQCN 正则收集）
 #   Kernel                    src/Kernel.php
 #
 # ============================================================================
@@ -283,7 +284,11 @@ deptrac:
     # ------------------------------------------------------------- Framework
     # 用 FQCN 正则收集 vendor 里的框架类型 —— 它们不在 `paths` 下，但 deptrac 依然
     # 会为依赖目标解析图层，所以能作为「禁止依赖」的靶子。
-    # 这三层就是「Domain 不得 import 任何框架类型」的强制点。
+    # 这几层就是「Domain 不得 import 任何框架类型」的强制点。
+    #
+    # ⚠️ 加新依赖时**先想它该落哪一层**。deptrac 会**静默忽略**它分不了类的依赖
+    # （报告里只算进 "Uncovered"，不是 violation），所以一个没被任何 collector
+    # 覆盖到的 vendor 命名空间 = 一个任何层都能随便 import 的后门。
     - name: Framework.Http
       collectors:
         - type: classLike
@@ -292,6 +297,42 @@ deptrac:
       collectors:
         - type: classLike
           value: '^(Doctrine|Symfony\\Bridge\\Doctrine)\\'
+        # T-004：Redis / Predis 与原生数据库扩展也是持久化。
+        #
+        # 在此之前 `\Redis`、`\PDO` 这些**全局命名空间**的类不属于任何图层，
+        # 于是「某个模块的 Domain 里 new \PDO(...)」今天能大摇大摆过 CI。
+        # T-004 引入 Redis 让这个洞变得有吸引力，所以顺手补上。
+        # 注意全局类要用 `$` 结尾精确匹配 —— 它们没有命名空间分隔符。
+        - type: classLike
+          value: '^Predis\\'
+        - type: classLike
+          value: '^(Redis|RedisArray|RedisCluster|RedisSentinel|Relay|PDO|PDOStatement|Memcached)$'
+        # symfony/cache 的**适配器**是持久化，不该被 Application 或 Http 直接 import。
+        # 但 Symfony\Contracts\Cache\ 是合法的 Application 层抽象，留在 Framework.Core。
+        - type: classLike
+          value: '^Symfony\\Component\\Cache\\'
+
+    # T-004：Messenger 单独成层。
+    #
+    # 若让它落进 Framework.Core，任何模块的 Application 都能直接注入
+    # `MessageBusInterface`，绕过 Shared\Application\Bus\{Command,Event}BusInterface ——
+    # §4.2 规则 3「跨模块异步通知只能通过 Domain Event」就没有强制点了。
+    # 只对 *.Infrastructure 开放，所以唯一能碰 Messenger 的是那两个总线实现。
+    - name: Framework.Messaging
+      collectors:
+        - type: classLike
+          value: '^Symfony\\Component\\Messenger\\'
+
+    # T-004：Monolog 单独成层，同理。
+    #
+    # Application 与 Domain 只该认识 `Psr\Log\LoggerInterface`（在 Framework.Core）。
+    # 具体的 Monolog processor / handler / formatter 只允许出现在 Infrastructure，
+    # 否则「换掉日志实现」会变成一次跨全仓库的改动。
+    - name: Framework.Logging
+      collectors:
+        - type: classLike
+          value: '^Monolog\\'
+
     - name: Framework.Core
       collectors:
         - type: bool
@@ -303,6 +344,12 @@ deptrac:
               value: '^Symfony\\(Component\\(HttpFoundation|HttpKernel|Routing|Serializer|Security\\Http)|Bundle\\FrameworkBundle\\Controller)\\'
             - type: classLike
               value: '^Symfony\\Bridge\\Doctrine\\'
+            # 下面三条与上面新增的图层一一对应 —— 不排除的话同一个类会同时落进
+            # 两个图层，Framework.Core 的宽松允许列表会把窄图层的限制架空。
+            - type: classLike
+              value: '^Symfony\\Component\\Messenger\\'
+            - type: classLike
+              value: '^Symfony\\Component\\Cache\\'
 
     # ---------------------------------------------------------------- Kernel
     - name: Kernel
@@ -344,6 +391,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Shared.Http:
       - Shared.Domain
       - Shared.Application
@@ -382,6 +431,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     # Http：**刻意不含本模块的 Domain**（只能经 Application 的 DTO 进出），
     # 也不含 Framework.Persistence（§12.2「不得直接用 Doctrine」）。
     Identity.Http:
@@ -417,6 +468,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Wallet.Http:
       - '+_Ports'
       - Wallet.Application
@@ -450,6 +503,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Sharing.Http:
       - '+_Ports'
       - Sharing.Application
@@ -483,6 +538,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Social.Http:
       - '+_Ports'
       - Social.Application
@@ -516,6 +573,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Sync.Http:
       - '+_Ports'
       - Sync.Application
@@ -549,6 +608,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Notification.Http:
       - '+_Ports'
       - Notification.Application
@@ -582,6 +643,8 @@ deptrac:
       - Framework.Core
       - Framework.Persistence
       - Framework.Http
+      - Framework.Messaging
+      - Framework.Logging
     Compliance.Http:
       - '+_Ports'
       - Compliance.Application
