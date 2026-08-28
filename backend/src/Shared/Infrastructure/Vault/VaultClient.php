@@ -215,8 +215,36 @@ final class VaultClient
     private function decode(string $path, int $status, string $body): array
     {
         if ($status >= 200 && $status < 300) {
-            /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($body, true, 512, \JSON_THROW_ON_ERROR);
+            // ⚠️ 2xx 不等于「有 JSON body」。Vault 的写入端点里有一大类回的是
+            // **204 No Content**，body 是空串，而 `json_decode('')` 抛 JsonException。
+            //
+            // 那条异常不是 DomainException，于是它会绕过本类全部的
+            // CryptoFailed/CryptoUnavailable 映射：`ApiProblemExceptionListener`
+            // 认不出它，Symfony 的 ErrorListener 把它记成 CRITICAL，客户端拿到一个
+            // 光秃秃的 500 —— 明明只是「这个端点没有返回内容」。
+            //
+            // 今天所有调用方都恰好打在 200 端点上（transit 的 encrypt/decrypt/hmac、
+            // approle 的 login/renew-self、transit/keys/<name>/rotate），所以踩不到；
+            // 但 204 的端点就在隔壁，随手一加就中招：
+            //   - `transit/keys/<name>/config`（T-404 轮换要配 min_decryption_version）
+            //   - `auth/approle/role/<name>`、`sys/policies/acl/<name>`（运维/测试用）
+            if ('' === trim($body)) {
+                return [];
+            }
+
+            try {
+                $decoded = json_decode($body, true, 512, \JSON_THROW_ON_ERROR);
+            } catch (\JsonException $e) {
+                // 2xx 但 body 不是 JSON —— 现实里通常是中间挡了个反向代理或门户，
+                // 回的是一张 HTML 错误页。归 CryptoFailed 而不是 CryptoUnavailable：
+                // 重试没用，是部署拓扑要修。
+                // ⚠️ 绝不把 $body 拼进消息 —— decrypt 的响应体里就是明文（见类注释）。
+                throw new CryptoFailed(\sprintf('Vault returned a non-JSON body for "%s".', $path), $e);
+            }
+
+            if (!\is_array($decoded)) {
+                throw new CryptoFailed('Vault returned a malformed response.');
+            }
 
             $data = $decoded['data'] ?? [];
 

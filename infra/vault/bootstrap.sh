@@ -102,13 +102,63 @@ must_write() {
     esac
 }
 
-# 某个路径是否已存在（GET 返回 2xx）。
+# 某个路径是否已存在。2xx = 存在，404 = 不存在，**其余一律中止**。
+#
+# ⚠️ 「其余一律中止」是这个函数的全部重点，别把它简化回 `2*) 0 ;; *) 1`。
+# 那种写法会把 403（token 权限不够）、5xx（Vault 内部错）、以及 curl 连不上时的
+# 000 全都读成「还没建」，于是调用方的**创建**分支照常执行。
+# 最坏的一条是下面第 3 节的 JWT 签名密钥：生产上按 runbook 在 unseal 之后跑这个
+# 脚本时，一次瞬时 5xx 就足以让它重新生成一把 Ed25519 并覆盖线上那把，
+# 全部已签发的 access token 立刻不可验签（§7.1）—— 而脚本会打印「✓ 已生成」。
+# 探测不出结论时停下来让人看，比猜一个「不存在」便宜得多。
+#
+# 只能用于「不存在 = 404」的端点，也就是 transit/keys/<name> 与 secret/data/<path>
+# （已在 Vault 1.18 上实测）。sys/mounts/<path> 与 sys/auth/<path> **不是** ——
+# 它们对未挂载的路径回的是 400（`No secret engine mount at transit/`），
+# 与真正的参数错误分不开，所以那两类走下面的 mounted()。
 exists() {
-    _status="$(status_of "$(api GET "$1")")"
+    _response="$(api GET "$1")"
+    _status="$(status_of "$_response")"
+
     case "$_status" in
         2*) return 0 ;;
-        *) return 1 ;;
+        404) return 1 ;;
+        *)
+            echo "✗ 探测 $1 是否存在时返回 HTTP ${_status} —— 判断不了，中止。" >&2
+            echo "  只有 404 才算「不存在」。当前状态更像是权限、Vault 故障或网络问题；" >&2
+            echo "  此时继续跑下去会覆盖已存在的密钥材料。" >&2
+            echo "  Vault 响应：$(body_of "$_response")" >&2
+            exit 1
+            ;;
     esac
+}
+
+# 某个 secrets engine / auth method 是否已挂载。
+#
+# 走**列表**端点（GET sys/mounts、GET sys/auth）再用 jq 查键，而不是逐个 GET
+# sys/mounts/<path>：后者对「未挂载」回 400 而不是 404（见 exists() 的注释），
+# 于是「不存在」和「请求有问题」在状态码上是同一个，没法安全区分。
+# 列表端点只有一种成功形态，非 2xx 一律是故障，判断是干净的。
+#
+#   $1 列表路径：sys/mounts | sys/auth
+#   $2 要找的键，带尾斜杠：transit/ | secret/ | approle/
+mounted() {
+    _list_path="$1"
+    _key="$2"
+
+    _response="$(api GET "$_list_path")"
+    _status="$(status_of "$_response")"
+
+    case "$_status" in
+        2*) ;;
+        *)
+            echo "✗ 读取 ${_list_path} 失败（HTTP ${_status}）：$(body_of "$_response")" >&2
+            exit 1
+            ;;
+    esac
+
+    # -e：查到返回 0，没查到返回 1，正好当布尔用。
+    body_of "$_response" | jq -e --arg k "$_key" '(.data // .) | has($k)' >/dev/null
 }
 
 # ----------------------------------------------------------------------------
@@ -147,7 +197,7 @@ fi
 # ----------------------------------------------------------------------------
 # 1. Transit 引擎
 # ----------------------------------------------------------------------------
-if exists "sys/mounts/transit"; then
+if mounted 'sys/mounts' 'transit/'; then
     echo "✓ transit 引擎已启用，跳过。"
 else
     must_write ' 启用 transit 引擎' 'sys/mounts/transit' '{"type":"transit"}'
@@ -205,7 +255,7 @@ create_key ncards-hmac \
 # ----------------------------------------------------------------------------
 # T-005 只负责把密钥**放到位**，不写读取侧 —— 那是 T-104（TokenIssuer）的事。
 # 先建好，T-104 开工当天就能用。
-if exists "sys/mounts/secret"; then
+if mounted 'sys/mounts' 'secret/'; then
     echo "✓ kv 引擎（secret/）已启用，跳过。"
 else
     must_write '启用 kv-v2 引擎' 'sys/mounts/secret' '{"type":"kv","options":{"version":"2"}}'
@@ -264,7 +314,7 @@ write_policy ncards-ops
 # ----------------------------------------------------------------------------
 # 5. AppRole（§3.3 / §7.4）
 # ----------------------------------------------------------------------------
-if exists "sys/auth/approle"; then
+if mounted 'sys/auth' 'approle/'; then
     echo "✓ approle auth 已启用，跳过。"
 else
     must_write '启用 approle auth' 'sys/auth/approle' '{"type":"approle"}'
