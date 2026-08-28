@@ -96,7 +96,7 @@ final class RedisIdempotencyStoreTest extends TestCase
     public function testCompleteMakesTheRecordReplayable(): void
     {
         $this->store->claim($this->key, 'fp', 60);
-        $this->store->complete($this->key, 201, ['content-type' => 'application/json'], '{"id":1}', 86400);
+        $this->store->complete($this->key, 'fp', 201, ['content-type' => 'application/json'], '{"id":1}', 86400);
 
         $record = $this->store->claim($this->key, 'fp', 60);
 
@@ -116,12 +116,44 @@ final class RedisIdempotencyStoreTest extends TestCase
     public function testCompletePreservesTheFingerprint(): void
     {
         $this->store->claim($this->key, 'original-fingerprint', 60);
-        $this->store->complete($this->key, 200, [], '{}', 86400);
+        $this->store->complete($this->key, 'original-fingerprint', 200, [], '{}', 86400);
 
         $record = $this->store->claim($this->key, 'original-fingerprint', 60);
 
         self::assertNotNull($record);
         self::assertSame('original-fingerprint', $record->fingerprint);
+    }
+
+    /**
+     * ⚠️ 在途锁**已经过期**时，complete 仍必须写出带正确指纹的已完成记录。
+     *
+     * 这是上一条测试盖不住的那半边：早先的实现在 complete 里回读 Redis 重建指纹，
+     * 键还在时一切正常，因此所有测试都绿。但在途锁只有 60 秒 —— 一个耗时超过 60 秒的
+     * 请求（慢 PG/Vault 调用、上游卡顿）走到这里时键已经没了，回读得到空指纹，
+     * 已完成记录带着 `fp: ''` 落库。之后**同键同 body** 的正常重试会在中间件里
+     * 被判成 `422 idempotency_key_reused`；而按 §5.4.3，Android 的 outbox 不重试
+     * 409/429 之外的 4xx —— 客户端于是永久放弃一笔服务端其实已经成功的操作。
+     *
+     * 这里用 del 直接模拟锁过期。
+     */
+    public function testCompleteKeepsTheFingerprintAfterTheLockExpired(): void
+    {
+        $this->store->claim($this->key, 'original-fingerprint', 60);
+
+        // 模拟「请求耗时超过 60 秒，在途锁自然过期」。
+        $this->factory->create()->del([RedisIdempotencyStore::KEY_PREFIX.$this->key]);
+
+        $this->store->complete($this->key, 'original-fingerprint', 201, [], '{"id":1}', 86400);
+
+        $record = $this->store->claim($this->key, 'original-fingerprint', 60);
+
+        self::assertNotNull($record, '锁过期后 complete 仍应留下一条可回放的记录');
+        self::assertTrue($record->completed);
+        self::assertSame(
+            'original-fingerprint',
+            $record->fingerprint,
+            '指纹必须来自调用方传入的值，不能靠回读已经过期的键重建',
+        );
     }
 
     public function testReleaseFreesTheKeyForRetry(): void
@@ -149,7 +181,7 @@ final class RedisIdempotencyStoreTest extends TestCase
     public function testCompleteExtendsTheTtlToTheRecordLifetime(): void
     {
         $this->store->claim($this->key, 'fp', 60);
-        $this->store->complete($this->key, 200, [], '{}', 86400);
+        $this->store->complete($this->key, 'fp', 200, [], '{}', 86400);
 
         $ttl = $this->factory->create()->ttl(RedisIdempotencyStore::KEY_PREFIX.$this->key);
 

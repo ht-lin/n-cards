@@ -26,6 +26,15 @@ final class InMemoryIdempotencyStore implements IdempotencyStoreInterface
     /** 非 null 时所有方法都抛这个异常 —— 用来验 fail-open 分支。 */
     public ?IdempotencyStoreUnavailable $failWith = null;
 
+    /**
+     * true 时 `complete()` 会先把在途记录抹掉，模拟「请求耗时超过 60 秒的
+     * LOCK_TTL_SECONDS，在途锁已经自然过期」。
+     *
+     * 真实 Redis 里这是个纯时间条件，测试没法等 60 秒 —— 但它决定了
+     * complete 能不能拿到正确的指纹，所以必须可模拟。
+     */
+    public bool $lockExpiresBeforeComplete = false;
+
     public function claim(string $key, string $fingerprint, int $lockTtlSeconds): ?IdempotencyRecord
     {
         $this->guard();
@@ -39,12 +48,20 @@ final class InMemoryIdempotencyStore implements IdempotencyStoreInterface
         return null;
     }
 
-    public function complete(string $key, int $status, array $headers, string $body, int $ttlSeconds): void
+    public function complete(string $key, string $fingerprint, int $status, array $headers, string $body, int $ttlSeconds): void
     {
         $this->guard();
 
+        if ($this->lockExpiresBeforeComplete) {
+            unset($this->records[$key]);
+        }
+
+        // ⚠️ 指纹取参数，**不**从 $this->records 里捞。
+        // 之前这里写的是 `$this->records[$key]->fingerprint ?? ''`，恰好复制了
+        // RedisIdempotencyStore 回读重建指纹的那个 bug —— 于是替身和真实现同时错，
+        // 中间件的单测一条都测不出来。替身可以简化存储，但不能复制它的错误假设。
         $this->records[$key] = IdempotencyRecord::completed(
-            $this->records[$key]->fingerprint ?? '',
+            $fingerprint,
             $status,
             $headers,
             $body,

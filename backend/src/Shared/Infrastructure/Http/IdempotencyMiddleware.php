@@ -145,7 +145,11 @@ final readonly class IdempotencyMiddleware
         if (null === $record) {
             // 抢到了。**只有这条路径**写 attribute —— 于是下面 onResponse 里
             // 「释放锁」永远不会误删别人的键。
+            //
+            // 指纹一并存下：complete() 要把它原样写进已完成记录，而那一步不能靠
+            // 存储回读重建（在途锁 60 秒，慢请求走到那里时键可能已经没了）。
             $request->attributes->set(RequestAttributes::IDEMPOTENCY_KEY, $key);
+            $request->attributes->set(RequestAttributes::IDEMPOTENCY_FINGERPRINT, $fingerprint);
 
             return;
         }
@@ -172,6 +176,10 @@ final readonly class IdempotencyMiddleware
             return;
         }
 
+        // 与键成对写入，所以到这里必然是字符串 —— 这个判断只是为了收窄类型。
+        $fingerprint = $request->attributes->get(RequestAttributes::IDEMPOTENCY_FINGERPRINT);
+        $fingerprint = \is_string($fingerprint) ? $fingerprint : '';
+
         $response = $event->getResponse();
         $status = $response->getStatusCode();
         $body = (string) $response->getContent();
@@ -180,6 +188,7 @@ final readonly class IdempotencyMiddleware
             if ($status >= 200 && $status < 300 && \strlen($body) <= $this->maxBodyBytes) {
                 $this->store->complete(
                     $key,
+                    $fingerprint,
                     $status,
                     self::replayableHeaders($response),
                     $body,

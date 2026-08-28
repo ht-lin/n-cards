@@ -44,11 +44,19 @@ interface IdempotencyStoreInterface
      * 只对 **2xx** 响应调用。理由见 `IdempotencyMiddleware` 的类注释 ——
      * 回放一个 `401 token_expired` 会永久打死 §6.1 规定的「静默刷新后重试一次」。
      *
-     * @param array<string, string> $headers 白名单过的响应头
+     * ⚠️ `$fingerprint` 必须由调用方**原样传回** claim 时用的那个值，实现**不得**
+     * 自己回读存储去重建它。在途锁只有 60 秒（见类注释），一个耗时超过 60 秒的请求
+     * 走到这里时锁已经过期 —— 回读只会得到空值，于是已完成记录带着空指纹落库，
+     * 之后**同键同 body** 的正常重试会被判成 `422 idempotency_key_reused`。
+     * 而按 §5.4.3，Android 的 outbox 不重试 409/429 之外的 4xx：客户端会永久放弃
+     * 一笔服务端其实已经成功的操作。
+     *
+     * @param string                $fingerprint 与 {@see claim()} 同一个值
+     * @param array<string, string> $headers     白名单过的响应头
      *
      * @throws IdempotencyStoreUnavailable
      */
-    public function complete(string $key, int $status, array $headers, string $body, int $ttlSeconds): void;
+    public function complete(string $key, string $fingerprint, int $status, array $headers, string $body, int $ttlSeconds): void;
 
     /**
      * 释放在途锁，让客户端可以用同一个键重试。

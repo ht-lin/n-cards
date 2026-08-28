@@ -40,6 +40,17 @@ final class RequestAttributes
      */
     public const IDEMPOTENCY_KEY = '_ncards_idempotency_key';
 
+    /**
+     * 本次请求体的 sha256，由 {@see IdempotencyMiddleware} 与 {@see IDEMPOTENCY_KEY}
+     * **成对写入**（同一条「抢到锁」路径，要么两个都有，要么两个都没有）。
+     *
+     * 存下来而不是在 `kernel.response` 里重算，是因为存储的 `complete()` 需要它 ——
+     * 而让存储自己回读 Redis 去重建指纹是错的：在途锁只有 60 秒，慢请求走到那一步时
+     * 键可能已经过期，重建会得到空指纹，之后同键同 body 的正常重试会被误判成
+     * `422 idempotency_key_reused`。
+     */
+    public const IDEMPOTENCY_FINGERPRINT = '_ncards_idempotency_fingerprint';
+
     private function __construct()
     {
     }

@@ -66,10 +66,12 @@ final readonly class RedisIdempotencyStore implements IdempotencyStoreInterface
         }
     }
 
-    public function complete(string $key, int $status, array $headers, string $body, int $ttlSeconds): void
+    public function complete(string $key, string $fingerprint, int $status, array $headers, string $body, int $ttlSeconds): void
     {
         $payload = self::encode([
-            'fp' => $this->fingerprintOf($key),
+            // ⚠️ 指纹用调用方传进来的，**不**回读 Redis 重建 —— 理由见接口注释：
+            // 在途锁只有 60 秒，慢请求走到这里时键可能已经没了，回读会得到空指纹。
+            'fp' => $fingerprint,
             'done' => true,
             'status' => $status,
             'headers' => $headers,
@@ -77,7 +79,9 @@ final readonly class RedisIdempotencyStore implements IdempotencyStoreInterface
         ]);
 
         try {
-            // 无 NX：这里是**覆盖**在途记录，键必然已经存在（是我们自己占的）。
+            // 无 NX：这里是**覆盖**在途记录。键通常已经存在（是我们自己占的），
+            // 但请求耗时超过 60 秒时在途锁已经过期 —— 那种情况下这条命令等于重新建键，
+            // 已完成记录照样落库，回放窗口不受影响。
             // TTL 在此刻重置为 24h —— §6.1 要的就是这个。
             $this->connections->create()->set(self::KEY_PREFIX.$key, $payload, 'EX', $ttlSeconds);
         } catch (\Throwable $e) {
@@ -92,27 +96,6 @@ final readonly class RedisIdempotencyStore implements IdempotencyStoreInterface
         } catch (\Throwable $e) {
             throw new IdempotencyStoreUnavailable('Failed to release an idempotency key.', 0, $e);
         }
-    }
-
-    /**
-     * 读回在途记录里的指纹，好在 complete 时原样写回去。
-     *
-     * 不这么做的话，已完成记录里的指纹会丢，而「同键不同 body」的检测正是靠它 ——
-     * 第二次带着不同 body 的请求会被当成合法回放，返回第一次的响应。
-     */
-    private function fingerprintOf(string $key): string
-    {
-        try {
-            $existing = $this->connections->create()->get(self::KEY_PREFIX.$key);
-        } catch (\Throwable $e) {
-            throw new IdempotencyStoreUnavailable('Failed to read an idempotency key.', 0, $e);
-        }
-
-        if (!\is_string($existing)) {
-            return '';
-        }
-
-        return self::decode($existing)->fingerprint;
     }
 
     /**

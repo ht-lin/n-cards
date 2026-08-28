@@ -153,6 +153,41 @@ final class IdempotencyTest extends WebTestCase
     }
 
     /**
+     * ⚠️ 请求耗时超过 60 秒的在途锁 TTL 时，重试仍必须拿到**回放**而不是 422。
+     *
+     * 早先的实现在存储的 complete() 里回读 Redis 重建指纹。键还在时一切正常，
+     * 所以上面每一条测试都绿；但慢请求（慢 PG/Vault 调用、上游卡顿）走到那一步时
+     * 锁已经过期，回读得到空指纹，已完成记录带着 `fp: ''` 落库。
+     * 于是**同键同 body** 的正常重试撞上「指纹不符」，返回 422 idempotency_key_reused ——
+     * 而按 §5.4.3，Android 的 outbox 不重试 409/429 之外的 4xx，客户端会永久放弃
+     * 一笔服务端其实已经成功的操作。指纹改由中间件传入后，这条路径才闭合。
+     */
+    public function testReplayStillWorksWhenTheLockExpiredMidRequest(): void
+    {
+        $client = $this->client();
+        $server = self::server(['HTTP_IDEMPOTENCY_KEY' => self::KEY]);
+
+        // 第一次请求：处理期间在途锁过期。
+        $this->store->lockExpiresBeforeComplete = true;
+        $client->request('POST', '/v1/_probe/echo-body', server: $server, content: '{"a":1}');
+        $first = (string) $client->getResponse()->getContent();
+        $this->store->lockExpiresBeforeComplete = false;
+
+        self::assertResponseIsSuccessful();
+
+        // 客户端没收到响应，用同一个键、同一个 body 重试。
+        $client->request('POST', '/v1/_probe/echo-body', server: $server, content: '{"a":1}');
+        $retry = $client->getResponse();
+
+        self::assertSame(
+            'true',
+            $retry->headers->get(IdempotencyMiddleware::REPLAYED_HEADER),
+            '同键同 body 的重试必须是回放 —— 拿到 422 的话客户端会永久放弃一笔已成功的操作',
+        );
+        self::assertSame($first, (string) $retry->getContent());
+    }
+
+    /**
      * ⚠️ 回放**不能**带回第一次的 X-Request-Id。
      *
      * 带回去的话，两次不同的请求在日志里长得一模一样，关联直接断掉。
