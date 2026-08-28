@@ -121,6 +121,16 @@ services:
       # 前置条件：先在 backend/ 跑过 `composer install`（见仓库根 README）。
       - ../../backend:/app:ro
 
+      # 契约 schema。**只为跑测试**，运行时代码一行都不读 docs/。
+      #
+      # tests/Api/Support/ProblemDetailsAssertions 用 realpath 往上找
+      # `docs/api/schemas/problem-details.schema.json`（T-004）。只挂 backend/ 的话
+      # 那个路径在容器里落到 `/docs/...`，realpath 返回 false，于是
+      # `docker compose exec app vendor/bin/phpunit` —— 仓库根 README 明确让人跑的
+      # 那条命令 —— 会有 43 个 Api 用例失败，而裸机上跑同一套是全绿的。
+      # 挂载点刻意选 /docs，与容器里的解析结果一致。
+      - ../../docs:/docs:ro
+
     networks:
       - edge
       - backing
