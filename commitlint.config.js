@@ -28,6 +28,11 @@ export default {
         'infra',
         'ci',
         'docs',
+        // T-005 补：docs/TECHNICAL_SPEC.md 的页脚要求「变更本文档需提 PR，
+        // 标题以 `docs(spec):` 开头」，而这里原先没有 `spec`，于是那条规矩
+        // 一旦被真的照做，PR 标题校验就会失败（本 workflow 也校验 PR 标题，
+        // 因为 squash merge 之后它就是 main 上的 commit message）。
+        'spec',
         'deps',
         'release',
       ],
