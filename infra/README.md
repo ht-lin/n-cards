@@ -7,7 +7,7 @@
 | [`compose/`](compose/) | `docker-compose.{base,prod,staging}.yml` | T-003 ✅ |
 | [`ansible/`](ansible/) | Hetzner 主机配置与部署 playbook | T-012 |
 | [`caddy/`](caddy/) | Caddyfile：反代 + 安全响应头 / 自动 TLS + 法律页 | T-003 ✅ 初版 · T-012 完善 |
-| [`vault/`](vault/) | `vault.hcl` 服务器配置 / policy 与初始化脚本 | T-003 ✅ 初版 · T-005 完善 |
+| [`vault/`](vault/) | `vault.hcl` 服务器配置 / policy 与初始化脚本 | T-003 ✅ 初版 · T-005 ✅ |
 | [`monitoring/`](monitoring/) | prometheus.yml、Grafana dashboards、Loki | T-405 |
 
 ## 全局硬性约束

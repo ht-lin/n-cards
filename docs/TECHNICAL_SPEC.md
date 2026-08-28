@@ -1479,6 +1479,10 @@ Bob:  【选择接受或拒绝】
 - [ ] 禁用 `X-Powered-By` / `Server` 版本回显
 - [ ] `.env` 不入库；生产配置由 `sops` 加密后随 Ansible 下发
 - [ ] Vault AppRole：`secret_id` TTL 24h 自动续期，policy 最小化（仅 `transit/encrypt|decrypt|rewrap` 对指定 key）
+  - ⚠️ **T-005 实际落地与本行有两处偏差，见 [ADR-0004](adr/0004-manual-vault-unseal.md) 的 Consequences**：
+    ① `secret_id_ttl=0`（不过期）而非 24h —— 24h 需要 Vault Agent 一类的自动投递机制，
+    T-005 不交付那个，配上会让服务在部署 24 小时后集体认证失败；token 侧才是 1h 自动续期。正解归 T-406。
+    ② `rewrap` **不授予**应用，归独立的 `ncards-ops`（§17.4 的策略文本即如此）。
 - [ ] 每周自动依赖漏洞扫描 + 每月手动镜像基线更新
 
 ### 7.5 系统限额（§3.1 的落地）
@@ -1877,10 +1881,16 @@ backend/
 │   ├── Kernel.php
 │   ├── Shared/
 │   │   ├── Domain/          Uuid.php  Clock.php  DomainEvent.php  DomainException.php
+│   │   │   └── Crypto/      CryptoKey.php  Ciphertext.php
+│   │   │                    CryptoFailed.php  CryptoUnavailable.php
 │   │   ├── Application/     CommandBusInterface.php  EventBusInterface.php
+│   │   │   └── Crypto/      CryptoServiceInterface.php  BatchDecryptorInterface.php
+│   │   │                    HmacHasherInterface.php
 │   │   ├── Infrastructure/
-│   │   │   ├── Crypto/      CryptoServiceInterface.php  VaultTransitCrypto.php
-│   │   │   │                HmacHasher.php  BatchDecryptor.php
+│   │   │   ├── Crypto/      VaultTransitCrypto.php  VaultBatchDecryptor.php
+│   │   │   │                VaultHmacHasher.php
+│   │   │   ├── Vault/       VaultClient.php  AppRoleTokenProvider.php
+│   │   │   │                StaticTokenProvider.php  VaultTokenProviderFactory.php
 │   │   │   ├── Doctrine/    UuidType.php  ChangeLogSubscriber.php  TransactionalRunner.php
 │   │   │   ├── RateLimit/   LimitEnforcer.php
 │   │   │   └── Http/        ApiProblemExceptionListener.php  ClientVersionListener.php
@@ -1928,6 +1938,20 @@ backend/
 | `Application` | 编排、事务边界、权限检查、DTO 组装 | 直接写 SQL、了解 HTTP |
 | `Domain` | 实体、值对象、不变量、领域服务、领域事件 | import 任何框架类型 |
 | `Infrastructure` | Doctrine 映射与仓储实现、外部 HTTP 客户端、Vault、Mailer | 被 Domain 直接引用（只能实现其接口） |
+
+> **加密门面为什么跨三层**（T-005 修正）：本节早先把 `CryptoServiceInterface` 画在
+> `Shared/Infrastructure/Crypto/` 下，但那样**没有任何模块能引用它** —— deptrac 里
+> 每个模块 `Application` 的允许列表是 `[_Ports, <M>.Domain, Shared.Domain,
+> Shared.Application, Framework.Core]`，不含 `Shared.Infrastructure`；`Domain` 更窄。
+> 于是加解密只能发生在各模块自己的 Infrastructure 层，被迫塞进 Doctrine 仓储里，
+> 而 T-109 的「列表查询用 BatchDecryptor」恰恰是 Application 层的编排。
+>
+> 因此：**值对象**（`CryptoKey` / `Ciphertext` / 两个异常）放 `Shared/Domain/Crypto`，
+> **接口**放 `Shared/Application/Crypto`，**实现**留在 `Shared/Infrastructure/Crypto`。
+> 与 `ErrorCode` 放在 `Shared/Domain/Error` 是同一套论证。
+> 副作用是 T-005 那条验收标准「无模块直接 import `VaultTransitCrypto`」变成**结构性成立**：
+> `Shared.Infrastructure` 不在任何模块的允许列表里，想违规都违不了
+> （由 `tools/deptrac-selftest.sh` 的场景 ③ 钉住）。
 
 ### 12.3 Android 目录
 
@@ -2556,7 +2580,7 @@ path "auth/token/renew-self"         { capabilities = ["update"] }
 | Q3 | 邮件服务商最终选型 | **单一**商业邮件服务，要求：EU/EEA 处理 + 可签 DPA + 支持 SPF/DKIM 自定义域（候选 Brevo FR / Mailjet FR / Postmark EU）。**不做双活**（§3.2） | 后端负责人 | M0 结束 |
 | Q4 | 一期是否启用证书固定 | **不启用**，记为已接受风险，上线后 30 天内加 | 技术负责人 | M3 |
 | Q5 | Sentry 自托管 vs EU SaaS | EU SaaS（省运维，需 DPA） | 技术负责人 | M1 |
-| Q6 | Vault unseal 方案（人工 vs 外部 KMS auto-unseal） | 人工 + runbook | 技术负责人 | M0 结束 |
+| ~~Q6~~ | ~~Vault unseal 方案（人工 vs 外部 KMS auto-unseal）~~ | **已决（2026-08-28）：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭。见 [ADR-0004](adr/0004-manual-vault-unseal.md) 与 [`docs/runbooks/vault-unseal.md`](runbooks/vault-unseal.md)** | 技术负责人 | ✅ M0 |
 | Q7 | 卡片调色板的具体色值（需满足 4.5:1 对比度） | 设计交付 | 设计 | M1 |
 | Q8 | 是否上架 F-Droid（会与 ML Kit/FCM 冲突） | 一期不上 | 创始人 | M4 |
 | Q9 | username 保留词黑名单的最终清单（德语场景需补 `impressum`、`hilfe`、`konto` 等） | 由技术负责人起草，产品确认 | 产品 | M1 结束 |

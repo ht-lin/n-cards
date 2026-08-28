@@ -39,6 +39,18 @@ services:
     environment:
       APP_ENV: prod
       APP_DEBUG: 0
+
+      # T-005：生产走 AppRole，**不用** root token（§3.3 / §7.4 / §17.4）。
+      #
+      # 把 base 注入的 VAULT_TOKEN 显式清空 —— 叠加不会自动删掉 base 里的 key，
+      # 留着的话 VaultTokenProviderFactory 仍然会挑 AppRole（判据是 VAULT_ROLE_ID
+      # 非空），但一个能用的 root token 躺在生产容器的环境里本身就是个洞：
+      # `docker inspect` 或任何一次 RCE 都能读到，而它没有 policy 限制。
+      VAULT_TOKEN: ""
+      # 两者由 sops(age) 解密后写进目标主机的 infra/compose/.env（T-012）。
+      # ⚠️ VAULT_SECRET_ID 是凭据，绝不入库、绝不进 CI。
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:?VAULT_ROLE_ID 未配置：生产必须走 AppRole，见 docs/runbooks/vault-unseal.md}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:?VAULT_SECRET_ID 未配置：由 sops 下发，见 T-012}
     # 覆盖掉 base 的源码绑定挂载。YAML 里 volumes 是列表，叠加时**整体替换**，
     # 所以给一个空列表就等于「没有任何绑定挂载」。
     volumes: []
@@ -86,6 +98,23 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  # T-005：base 里的 vault-init 在生产**必须不跑**。
+  #
+  # profiles 让一个服务只在显式激活该 profile 时才启动，而没有任何生产命令会带
+  # `--profile disabled` —— 这是叠加层「删掉一个服务」的唯一干净办法
+  # （depends_on / environment 那种 key 合并在这里帮不上忙）。
+  #
+  # 为什么不能跑：
+  #   1. 生产 Vault 每次重启都是**封印**状态。脚本探测到 503 会直接退出，
+  #      于是每次 `docker compose up` 都多一个失败容器，纯噪声。
+  #   2. 脚本需要 root 级 token。把那个 token 常驻在 compose 环境里，
+  #      等于给 §17.4 那份最小权限清单开一个永久后门。
+  #
+  # 生产的正确做法是 unseal 之后**人工**跑一次，用一个用完即吊销的 root token：
+  # 步骤见 docs/runbooks/vault-unseal.md。
+  vault-init:
+    profiles: ["disabled"]
 
 # ============================================================================
 # 尚未交付的服务（§14.2 清单里有，依赖还没装）

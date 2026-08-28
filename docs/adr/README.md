@@ -62,5 +62,7 @@
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | 采用 ADR 记录架构决策 | Accepted |
 | [0002](0002-brand-name-and-domain.md) | 品牌名与域名采用 NCards / ncards.de | Proposed |
+| [0003](0003-problem-details-and-idempotency-semantics.md) | Problem Details 错误码扩展、幂等语义与 Redis 降级策略 | Proposed |
+| [0004](0004-manual-vault-unseal.md) | Vault 采用人工 unseal（Shamir 3-of-5），auto-unseal 关闭 | Accepted |
 
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。

@@ -21,8 +21,10 @@
 #   <Module>.Infrastructure   src/Module/<M>/Infrastructure
 #   <Module>.Http             src/Module/<M>/Http
 #   Shared.*                  src/Shared/*
-#   Framework.{Http,Persistence,Messaging,Logging,Core}
+#   Framework.{Http,HttpClient,Persistence,Messaging,Logging,Core}
 #                             vendor 里的框架类型（按 FQCN 正则收集）
+#                             ⚠️ Http 是**入站**（HttpFoundation/HttpKernel/Routing），
+#                                HttpClient 是**出站**（打 Vault 之类）。两者不是一回事。
 #   Kernel                    src/Kernel.php
 #
 # ============================================================================
@@ -333,6 +335,22 @@ deptrac:
         - type: classLike
           value: '^Monolog\\'
 
+    # T-005：出站 HTTP 客户端单独成层。
+    #
+    # `symfony/http-client` 是 T-005 为了打 Vault 才引入的第一个出站 HTTP 客户端。
+    # 不单独成层的话，`Symfony\Contracts\HttpClient\HttpClientInterface` 会落进
+    # Framework.Core —— 而 Framework.Core 对**每个模块的 Application 层开放**。
+    # 后果是任何 Handler 都能注入 HttpClientInterface 直接打 Vault，
+    # 把 Shared\Application\Crypto 的整套门面绕过去，§12.2 分层职责表里
+    # 「Application 不得了解 HTTP」也就没有强制点了。
+    #
+    # 注意要同时收 Component 与 Contracts 两个命名空间：真正会被注入的类型是
+    # Contracts 里的那个接口，只收 Component 等于没收。
+    - name: Framework.HttpClient
+      collectors:
+        - type: classLike
+          value: '^Symfony\\(Component|Contracts)\\HttpClient\\'
+
     - name: Framework.Core
       collectors:
         - type: bool
@@ -344,12 +362,15 @@ deptrac:
               value: '^Symfony\\(Component\\(HttpFoundation|HttpKernel|Routing|Serializer|Security\\Http)|Bundle\\FrameworkBundle\\Controller)\\'
             - type: classLike
               value: '^Symfony\\Bridge\\Doctrine\\'
-            # 下面三条与上面新增的图层一一对应 —— 不排除的话同一个类会同时落进
+            # 下面四条与上面新增的图层一一对应 —— 不排除的话同一个类会同时落进
             # 两个图层，Framework.Core 的宽松允许列表会把窄图层的限制架空。
             - type: classLike
               value: '^Symfony\\Component\\Messenger\\'
             - type: classLike
               value: '^Symfony\\Component\\Cache\\'
+            # T-005：与 Framework.HttpClient 对应。
+            - type: classLike
+              value: '^Symfony\\(Component|Contracts)\\HttpClient\\'
 
     # ---------------------------------------------------------------- Kernel
     - name: Kernel
@@ -393,6 +414,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Shared.Http:
       - Shared.Domain
       - Shared.Application
@@ -433,6 +455,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     # Http：**刻意不含本模块的 Domain**（只能经 Application 的 DTO 进出），
     # 也不含 Framework.Persistence（§12.2「不得直接用 Doctrine」）。
     Identity.Http:
@@ -470,6 +493,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Wallet.Http:
       - '+_Ports'
       - Wallet.Application
@@ -505,6 +529,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Sharing.Http:
       - '+_Ports'
       - Sharing.Application
@@ -540,6 +565,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Social.Http:
       - '+_Ports'
       - Social.Application
@@ -575,6 +601,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Sync.Http:
       - '+_Ports'
       - Sync.Application
@@ -610,6 +637,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Notification.Http:
       - '+_Ports'
       - Notification.Application
@@ -645,6 +673,7 @@ deptrac:
       - Framework.Http
       - Framework.Messaging
       - Framework.Logging
+      - Framework.HttpClient
     Compliance.Http:
       - '+_Ports'
       - Compliance.Application

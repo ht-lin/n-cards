@@ -95,7 +95,8 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 
 两个扩展点都是「实现接口即注册」：`config/services.yaml` 的 `_instanceof` 打标签，
 收集端用 `#[AutowireIterator]`。加一项就绪检查或一个模块 seeder，都不需要回头改
-控制器或命令 —— T-004 的 `RedisHealthCheck` 就是这样零配置接进去的（Vault → T-005）。
+控制器或命令 —— T-004 的 `RedisHealthCheck` 与 T-005 的 `VaultHealthCheck`
+都是这样零配置接进去的。
 
 ## 跨切面契约（T-004）
 
@@ -124,6 +125,52 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 > 另有 `tests/Api/ClientVersionEnforcementTest::testHealthEndpointsAreExempt`
 > 直接守着两个探活端点 —— 它红了就说明 compose 起栈与 §14.3 的部署健康检查要挂。
 
+## 加密门面（T-005）
+
+§5.3 的服务端信封加密。**所有**涉及 `*_encrypted` 列与 `*_hash` 列的读写都必须走这里。
+
+```
+明文 ──► Transit encrypt (ncards-card) ──► "vault:v1:BASE64" ──► Postgres TEXT
+```
+
+三个接口在 `Shared\Application\Crypto`，值对象在 `Shared\Domain\Crypto`，
+实现在 `Shared\Infrastructure\Crypto`：
+
+| 接口 | 用途 | 谁会用 |
+|---|---|---|
+| `CryptoServiceInterface` | 单条 `encrypt` / `decrypt` | T-101（email）、T-109（建卡/改卡） |
+| `BatchDecryptorInterface` | **批量** `decrypt`，一次请求解一批 | T-109 列表、T-203 bootstrap |
+| `HmacHasherInterface` | 带 pepper 的 HMAC-SHA256，返回 32 字节裸摘要 | `email_hash`、`barcode_value_fingerprint`、`code_hash` |
+
+**四条规矩**
+
+1. **要解多于一条就用 `BatchDecryptorInterface`。** 在循环里调 `decrypt()` 是 §5.3
+   明令禁止的写法：200 张卡会变成 200 次 HTTP 往返，把 T-203 的 700 ms 预算吃掉大半。
+   强制点是 `VaultBatchDecryptorTest::testDecryptsTwoHundredItemsInASingleRequest()`。
+2. **`*_encrypted` 列的类型是 `Ciphertext`，不是 `string`。** 那几列在 §17.1 里是 `TEXT`，
+   数据库分不出密文与明文；一次漏调 encrypt 的重构会把卡号以明文写满整张表且不报错。
+   `Ciphertext::fromString()` 只接受 `vault:v<N>:` 前缀，是唯一靠得住的闸门。
+3. **不缓存明文**（§5.3）。当前没有任何 memo，实测也不需要（见
+   [`infra/vault/README.md`](../infra/vault/README.md) 的实测表）。
+   ⚠️ 真要加也**不能**往这几个类里塞 `private array $memo` —— 它们是容器单例，
+   而 FrankenPHP 的 worker 长驻，那会变成跨请求缓存，正是 §5.3 禁止的东西。
+4. **Vault 不可用时 fail-CLOSED**，与 T-004 幂等的 fail-open **相反**。
+   解不了密就没有可返回的正确数据，加密侧更糟（fail-open = 把明文写进密文列）。
+   `CryptoUnavailable` 是 `DomainException` 子类，渲染为 `503 service_unavailable`（可重试、
+   记 warning）；`CryptoFailed` 是 `500 internal_error`。这个不对称是刻意的，
+   理由见两个类的注释与 `IdempotencyStoreUnavailable` 的对照。
+
+**认证**：dev/test 用 `VAULT_TOKEN`（compose dev 模式的 root token），
+staging/prod 用 `VAULT_ROLE_ID` + `VAULT_SECRET_ID` 走 AppRole。
+判据是「配没配 `VAULT_ROLE_ID`」而不是 `APP_ENV`，选择逻辑在 `VaultTokenProviderFactory`。
+
+**本地起栈**：`docker compose up -d` 会自动跑 `vault-init` 初始化 Transit。
+裸机跑 `composer test` 时 Vault 不可达，相关集成用例自行 skip（全绿）。
+
+**运维**：生产每次重启后 Vault 是封印状态，必须人工 unseal ——
+[ADR-0004](../docs/adr/0004-manual-vault-unseal.md) 与
+[`docs/runbooks/vault-unseal.md`](../docs/runbooks/vault-unseal.md)。
+
 ## 分层职责
 
 | 层 | 允许做 | 禁止做 |
@@ -140,8 +187,11 @@ Deptrac 同时强制**两个维度**，用「模块 × 分层」的交叉积图�
 1. **模块间**：不得引用他模块的 `Domain` / `Application` / `Infrastructure` / `Http`，
    只能看到对方的 `Application\Port\*` 与 `Application\Dto\*`。
 2. **层间**：`Http → Application → Domain`；`Infrastructure` 实现 `Domain` 定义的接口。
-   `Framework.{Http,Persistence,Core}` 三个图层收集 vendor 里的框架类型，
-   `*.Domain` 的允许列表里一个都没有 —— 这就是「Domain 不得 import 框架类型」的强制点。
+   `Framework.{Http,HttpClient,Persistence,Messaging,Logging,Core}` 六个图层收集 vendor 里的
+   框架类型，`*.Domain` 的允许列表里一个都没有 —— 这就是「Domain 不得 import 框架类型」的强制点。
+   其中窄图层（`HttpClient` / `Messaging` / `Logging` / 部分 `Persistence`）**只对 `*.Infrastructure` 开放**：
+   落进宽松的 `Framework.Core` 的话，任何模块的 `Application` 都能直接注入
+   `HttpClientInterface` 或 `MessageBusInterface`，把 Shared 的门面整个绕过去。
 
 拆成两份配置会让 `Wallet.Http → Identity.Domain` 这类跨维度组合从缝隙里漏过去，
 所以坚持一个 ruleset。文件头部有「新增模块时怎么改」的清单。
@@ -149,9 +199,18 @@ Deptrac 同时强制**两个维度**，用「模块 × 分层」的交叉积图�
 唯一豁免：`Sync\Infrastructure\Doctrine\SyncReadModel`（§4.2 规则 5 的跨模块只读查询入口），
 `deptrac.yaml` 末尾的 `skip_violations` 留了槽位与使用约束，T-202 实现时填。
 
-**`composer deptrac:selftest`** 会临时写入一个跨模块 `Domain` 引用并断言 deptrac 拦得住。
+**`composer deptrac:selftest`** 会临时写入三段违规代码并断言 deptrac 逐一拦得住。
 `deptrac analyse` 只能证明「当前代码没违规」，证明不了「规则还有效」—— 谁把规则改松了，
-自检会红而 `analyse` 依然是绿的。
+自检会红而 `analyse` 依然是绿的。三个场景：
+
+| # | 违规 | 守的是什么 |
+|---|---|---|
+| ① | `Wallet.Domain` → `Identity.Domain` | 模块边界（T-002 验收标准） |
+| ② | `Shared.Domain` → `Symfony\...\Request` | `Shared.Domain: []` 空白名单（T-004） |
+| ③ | `Wallet.Application` → `Shared\Infrastructure\Crypto\VaultTransitCrypto` | 加密门面只经接口暴露（T-005 验收标准） |
+
+场景 ③ 尤其需要：它今天**自动成立**（`Shared.Infrastructure` 不在任何模块的允许列表里），
+恰恰因为如此才没有任何东西会在它失守时报警。
 
 ## 质量门禁（§13.3）
 
@@ -165,9 +224,13 @@ Deptrac 同时强制**两个维度**，用「模块 × 分层」的交叉积图�
 
 ## 配置与密钥
 
-`DATABASE_URL` / `REDIS_URL` / `VAULT_ADDR` 在容器里由 compose 注入（拼接来源是
-仓库根 `.env`，见 `infra/compose/docker-compose.base.yml`）；下面这两个文件只提供
-**裸机**上跑 `composer test` / `bin/console` 时的默认值。
+`DATABASE_URL` / `REDIS_URL` / `VAULT_ADDR` / `VAULT_TOKEN` 在容器里由 compose 注入
+（拼接来源是 `infra/compose/.env`，见 `infra/compose/docker-compose.base.yml`）；
+下面这两个文件只提供**裸机**上跑 `composer test` / `bin/console` 时的默认值。
+
+⚠️ **`VAULT_SECRET_ID` 是凭据**，只在 staging/prod 存在，由 sops(age) 加密后随 Ansible
+下发（T-012），绝不入库、绝不进 CI。入库文件里那一行是空值占位，
+存在只是为了让「应用会读这个变量」有据可查。
 
 `.env` 与 `.env.test` 是 Symfony 约定的**非密钥默认值**文件，入库
 （仓库根 `.gitignore` 对这两个文件开了窄口，其余 `.env*` 一律忽略）。

@@ -29,8 +29,17 @@ cp infra/compose/.env.example infra/compose/.env
 export COMPOSE_FILE=infra/compose/docker-compose.base.yml   # 本 shell 内免敲 -f
 
 docker compose up -d                       # caddy · app · postgres · redis · vault
+                                           #   外加一次性的 vault-init（T-005）：
+                                           #   启用 Transit、建三把 key、写 policy、配 AppRole
 docker compose exec app bin/console app:seed
 curl -f http://localhost/health/ready      # 期望 200
+```
+
+`vault-init` 跑完就退出，`docker compose ps` 里看不到它是正常的。
+它是幂等的，每次 `up` 都会重跑一遍且**绝不覆盖已有密钥材料**；要看它做了什么：
+
+```bash
+docker compose logs vault-init
 ```
 
 不 `export` 就每条都得写全：`docker compose -f infra/compose/docker-compose.base.yml …`。
@@ -53,8 +62,11 @@ curl -o /dev/null -w '%{http_code}\n' http://localhost/health/ready   # 期望 5
 docker compose start postgres
 ```
 
-staging / production 用叠加文件，形态与本地不同（生产 Vault 需**人工 unseal**）——
-见 [`infra/compose/README.md`](infra/compose/README.md)。
+staging / production 用叠加文件，形态与本地不同（生产 Vault 需**人工 unseal**，
+且没有 `vault-init` —— 初始化是解封之后的人工步骤）——
+见 [`infra/compose/README.md`](infra/compose/README.md)、
+[ADR-0004](docs/adr/0004-manual-vault-unseal.md) 与
+[`docs/runbooks/vault-unseal.md`](docs/runbooks/vault-unseal.md)。
 
 ## 如何跑测试
 
@@ -69,7 +81,7 @@ vendor/bin/deptrac analyse                     # 0 violation
 vendor/bin/phpunit                             # 单元 + 集成 + 契约
 ```
 
-需要真实 Postgres 的集成测试在裸机上会 skip（后端服务没有宿主机端口）。
+需要真实 Postgres / Redis / Vault 的集成测试在裸机上会 skip（后端服务没有宿主机端口）。
 要连真库跑，起栈之后在容器里跑（同样先 `export COMPOSE_FILE=…`）：
 
 ```bash
@@ -110,4 +122,8 @@ npx commitlint --from HEAD~1 # 校验最近一条 commit message
 
 ## 开放问题
 
-品牌名与域名（Q1）暂定为 **NCards** / `ncards.de`，见 [ADR-0002](docs/adr/0002-brand-name-and-domain.md)（Status: Proposed）。其余开放问题见 §17.5 与 [`docs/tasks/README.md`](docs/tasks/README.md)。
+品牌名与域名（Q1）暂定为 **NCards** / `ncards.de`，见 [ADR-0002](docs/adr/0002-brand-name-and-domain.md)（Status: Proposed）。
+
+Vault unseal 方案（Q6）已决：人工 Shamir 3-of-5，auto-unseal 关闭，见 [ADR-0004](docs/adr/0004-manual-vault-unseal.md)（Status: Accepted）。
+
+其余开放问题见 §17.5 与 [`docs/tasks/README.md`](docs/tasks/README.md)。

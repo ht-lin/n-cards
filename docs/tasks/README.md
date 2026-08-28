@@ -56,7 +56,7 @@ T-301 Friendship ─► T-303 级联撤销 ◄─ T-304/305 共享（同事务�
 | Q3 | 邮件服务商选型（EU/EEA + DPA） | Brevo FR / Mailjet FR / Postmark EU 三选一 | T-102 | M0 |
 | Q4 | 是否启用证书固定 | **不启用**，记为已接受风险 | T-451 | M3 |
 | Q5 | Sentry 自托管 vs EU SaaS | EU SaaS | T-405 | M1 |
-| Q6 | Vault unseal 方案 | 人工 + runbook | T-005, T-406 | M0 |
+| ~~Q6~~ | ~~Vault unseal 方案~~ | ✅ **已决**：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭（[ADR-0004](../adr/0004-manual-vault-unseal.md)） | ~~T-005~~, T-406 | ✅ M0 |
 | Q7 | 卡片调色板色值（≥ 4.5:1） | 设计交付 | T-153 | M1 |
 | Q8 | 是否上架 F-Droid | 不上 | T-454 | M4 |
 | Q9 | username 保留词最终清单 | 技术负责人起草 | T-107 | M1 |

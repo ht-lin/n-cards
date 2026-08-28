@@ -1,8 +1,9 @@
 # 后端质量门禁（§13.3）。由 T-002 交付的最小版本，T-003 补了 postgres service。
 #
-# T-011 会在此基础上补齐：vault service、Doctrine 迁移 up/down 往返、
+# T-011 会在此基础上补齐：Doctrine 迁移 up/down 往返、
 # gitleaks、敏感日志扫描、TODO 检查，
 # 并把 backend / android / shared 三条流水线并行编排。
+# （vault service 由 T-005 补上，见下方注释。）
 # （redis service 由 T-004 补上，见下方注释；契约测试由 T-004 起以
 #  tests/Api/ProblemDetailsContractTest 的形态存在，T-007 换成 openapi 全量校验。）
 #
@@ -10,7 +11,7 @@
 # 但 T-003 的核心验收标准是「PG 不可用时 /health/ready 返回 503」，
 # 没有真实 PG，CI 里就只剩一条用替身跑的单测，真实 DBAL 连接路径完全没被验证
 # （tests/Integration/Health/DatabaseHealthCheckTest 会直接 skip）。
-# 所以 postgres service 提前到这里；vault 仍归 T-005 / T-011。
+# 所以 postgres service 提前到这里。
 #
 # ⚠️ T-004 同理补上了 redis service：幂等键的核心保证是 `SET NX EX` 的**原子性**，
 # 而那条保证只有真 Redis 能验（替身实现怎么写都是对的）。没有这个 service，
@@ -71,11 +72,40 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # T-005 起：Transit 加密门面。dev 模式（内存后端、自动 unseal、固定 root token），
+      # 与 infra/compose/docker-compose.base.yml 的本地形态一致。
+      #
+      # 与 T-003 加 postgres、T-004 加 redis 是同一个理由：没有真 Vault，
+      # tests/Integration/Shared/{Crypto,Vault}/* 与 Health/VaultHealthCheckTest 会整组静默
+      # skip，于是三条验收标准 ——「加解密往返一致」「200 条 batch decrypt 有基准」
+      # 「policy 确实是最小权限」—— 在 CI 里全都没人验证。
+      #
+      # ⚠️ AppRolePolicyTest 尤其只能在这里跑到：它是全仓库唯一验证
+      # infra/vault/policies/*.hcl 真实效果的地方，别的测试都用 root token，
+      # policy 对它们完全不起作用。
+      vault:
+        image: hashicorp/vault:1.18
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: dev-only-root-token
+          VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+        ports:
+          - 8200:8200
+        options: >-
+          --cap-add=IPC_LOCK
+          --health-cmd "vault status -address=http://127.0.0.1:8200"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       # backend/.env.test 里有同样的默认值；显式写在这里是为了让「CI 连的是哪个库」
       # 一眼可见，也方便将来 T-011 换成 service 容器的动态端口。
       DATABASE_URL: postgresql://ncards:ncards@127.0.0.1:5432/ncards
       REDIS_URL: redis://127.0.0.1:6379
+      VAULT_ADDR: http://127.0.0.1:8200
+      # dev 模式的 root token。**不是**秘密 —— 它只存在于这个一次性的 service 容器里。
+      # 生产走 AppRole（§7.4 / §17.4），见 infra/compose/docker-compose.prod.yml。
+      VAULT_TOKEN: dev-only-root-token
 
     steps:
       - uses: actions/checkout@v4
@@ -118,6 +148,18 @@ jobs:
       # 「PG 可用时 /health/ready 真能连上」这条就在 CI 里没人验证了。
       - name: 建测试库
         run: bin/console --env=test doctrine:database:create --if-not-exists
+
+      # T-005：启用 Transit、建三把 key、建 kv-v2 与 JWT 密钥、写两份 policy、配 AppRole。
+      #
+      # 脚本走 HTTP API 而不是 vault CLI —— runner 上没有那个二进制
+      # （理由见 infra/vault/bootstrap.sh 顶部）。curl / jq / openssl 是 runner 自带的。
+      #
+      # ⚠️ 这一步**必须**在 phpunit 之前：Vault 起来了但没初始化时，
+      # tests/Integration/Support/RequiresVault 会 fail 而不是 skip —— 那是刻意的，
+      # 免得 bootstrap 坏掉之后测试静默变成空跑。
+      - name: 初始化 Vault（Transit / policy / AppRole）
+        working-directory: .
+        run: infra/vault/bootstrap.sh
 
       - name: PHPUnit + 覆盖率门禁（§13.3）
         run: |

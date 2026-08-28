@@ -80,6 +80,21 @@ services:
     App\Shared\Application\Transaction\TransactionRunnerInterface: '@App\Shared\Infrastructure\Doctrine\TransactionalRunner'
     App\Shared\Application\Idempotency\IdempotencyStoreInterface: '@App\Shared\Infrastructure\Redis\RedisIdempotencyStore'
 
+    # ------------------------------------------------------------------ T-005
+    # 加密门面（§5.3）。三个接口在 Shared\Application\Crypto，实现在
+    # Shared\Infrastructure\Crypto —— 这个分层是刻意的，理由见
+    # CryptoServiceInterface 的类注释（照 §12.2 字面把接口放进 Infrastructure，
+    # deptrac 会让任何模块都无法引用它）。
+    App\Shared\Application\Crypto\CryptoServiceInterface: '@App\Shared\Infrastructure\Crypto\VaultTransitCrypto'
+    App\Shared\Application\Crypto\BatchDecryptorInterface: '@App\Shared\Infrastructure\Crypto\VaultBatchDecryptor'
+    App\Shared\Application\Crypto\HmacHasherInterface: '@App\Shared\Infrastructure\Crypto\VaultHmacHasher'
+
+    # token provider 由工厂在**运行时**按环境变量挑：配了 VAULT_ROLE_ID 走 AppRole，
+    # 否则走静态 VAULT_TOKEN。不用 `when@prod` —— staging 与 prod 的 APP_ENV 同为 prod，
+    # 而判据本来就该是「有没有凭据」而不是环境名。详见工厂的类注释。
+    App\Shared\Infrastructure\Vault\VaultTokenProviderInterface:
+        factory: ['@App\Shared\Infrastructure\Vault\VaultTokenProviderFactory', 'create']
+
     # ⚠️ T-1xx（Identity）落地后，把这一行指向 AuthenticatedIdempotencyScopeResolver。
     # 这条 alias 现在就写出来，正是为了让那次替换是一行的、显眼的编辑 ——
     # 依赖「单实现自动别名」的话，第二个实现一出现别名就消失，
