@@ -62,9 +62,35 @@ final readonly class ClientVersionListener
         #[Autowire('%ncards.min_supported_client%')]
         string $minimumSupported,
     ) {
-        // 在构造期解析：配错了要在容器编译/首次实例化时就炸，而不是等到
-        // 某个真实请求进来才发现最低版本是个垃圾字符串。
-        $this->minimum = ClientVersion::parse($minimumSupported);
+        // 在构造期解析：配错了要在首次实例化时就炸，而不是等到某个真实请求进来
+        // 才发现最低版本是个垃圾字符串。
+        //
+        // ⚠️ 但**必须**把 DomainException 换掉。ClientVersion::parse 抛的是
+        // validation_failed + FieldError('X-Client')，那是给**客户端发来的 header**
+        // 准备的语义；这里解析的是**服务端配置**，原样冒出去会变成一个 400，
+        // 指着客户端说「你的 X-Client 格式不对」。
+        //
+        // 后果远不止措辞难看：
+        //   - EventDispatcher::sortListeners() 会在调用任何监听器**之前**实例化
+        //     kernel.request 上的全部监听器，所以这个异常早于 RequestIdListener(512)
+        //     抛出 —— 响应里的 request_id 是 null，恰好打穿本文件所依赖的可追踪性；
+        //   - validation_failed 按 ErrorCode::logLevel() 记 info，§14.4 的 5xx 告警
+        //     一声不响；
+        //   - /health/live 与 /health/ready 同样 400（监听器在豁免判断**之前**就已构造），
+        //     compose healthcheck 与 §14.3 的 Ansible 部署一起失败，而运维看到的
+        //     是一个「客户端错误」。
+        //
+        // 换成 LogicException → ApiProblemExceptionListener 归到 internal_error(500)，
+        // 按 error 记日志，告警照常响。配错的服务端就该以 5xx 示人，然后被健康检查
+        // 挡在流量之外。
+        //
+        // 这里不能做成「容器编译期失败」—— 值来自 `%env(MIN_SUPPORTED_CLIENT)%`，
+        // env 是运行期解析的，编译期根本拿不到。首次实例化是能做到的最早时机。
+        try {
+            $this->minimum = ClientVersion::parse($minimumSupported);
+        } catch (DomainException $e) {
+            throw new \LogicException(\sprintf('MIN_SUPPORTED_CLIENT is not a valid client version: "%s". Expected something like "android/1.4.0 (26)".', $minimumSupported), 0, $e);
+        }
     }
 
     public function onRequest(RequestEvent $event): void

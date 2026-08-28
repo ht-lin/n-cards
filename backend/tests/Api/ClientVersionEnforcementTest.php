@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Tests\Api;
 
+use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Infrastructure\Http\ClientVersionListener;
 use App\Tests\Api\Support\ProblemDetailsAssertions;
@@ -129,6 +130,61 @@ final class ClientVersionEnforcementTest extends WebTestCase
         $client->request('GET', '/v1/_probe/echo', server: ['HTTP_X_CLIENT' => 'android/1.4.0 (26)']);
 
         self::assertIsProblemDetails($client->getResponse(), ErrorCode::ClientTooOld);
+    }
+
+    // ========================================================================
+    // 配置错误
+    // ========================================================================
+
+    /**
+     * ⚠️ `MIN_SUPPORTED_CLIENT` 配错是**服务端**故障，不能表现成客户端的 400。
+     *
+     * `ClientVersion::parse` 抛的是 validation_failed + FieldError('X-Client')，
+     * 那套语义是给客户端发来的 header 准备的。构造期原样冒出去的话：
+     *   - 一个环境变量的拼写错误（比如漏了 `android/` 前缀）会让每个请求收到 400，
+     *     指着客户端说「你的 X-Client 格式不对」；
+     *   - `/health/live` 与 `/health/ready` 同样 400 —— EventDispatcher::sortListeners()
+     *     在调用任何监听器之前就实例化了全部监听器，所以豁免判断根本没机会跑，
+     *     compose healthcheck 与 §14.3 的 Ansible 部署一起失败；
+     *   - validation_failed 按 info 记日志，§14.4 的 5xx 告警一声不响。
+     *
+     * 换成 LogicException 后归到 internal_error(500)：健康检查照挡流量，告警照响，
+     * 而且错误不再赖到客户端头上。
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function malformedMinimumVersions(): iterable
+    {
+        yield 'missing platform prefix' => ['1.4.0'];
+        yield 'missing build' => ['android/1.4.0'];
+        yield 'empty' => [''];
+    }
+
+    #[DataProvider('malformedMinimumVersions')]
+    public function testMalformedMinimumSupportedVersionIsAServerError(string $configured): void
+    {
+        self::expectException(\LogicException::class);
+        self::expectExceptionMessage('MIN_SUPPORTED_CLIENT is not a valid client version');
+
+        new ClientVersionListener($configured);
+    }
+
+    /**
+     * 配置错误绝不能伪装成 DomainException —— 那是 4xx 的家族，会把服务端故障
+     * 渲染成客户端错误，并把日志级别降到 info。
+     */
+    public function testMalformedMinimumIsNotADomainException(): void
+    {
+        try {
+            new ClientVersionListener('1.4.0');
+            self::fail('配错的最低版本必须抛异常');
+        } catch (\Throwable $e) {
+            self::assertNotInstanceOf(
+                DomainException::class,
+                $e,
+                '服务端配置错误不能走 DomainException —— 那会变成一个 400，并且不触发 §14.4 的 5xx 告警',
+            );
+        }
     }
 
     // ========================================================================
