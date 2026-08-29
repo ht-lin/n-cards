@@ -265,6 +265,12 @@ J5 删号
 
 **修订**：
 - Room **必须**使用 **SQLCipher**（`net.zetetic:sqlcipher-android`），passphrase 为 32 字节随机值，通过 Android Keystore 的 AES-GCM 密钥包裹后存于 `EncryptedSharedPreferences`。
+  - ⚠️ **T-009 实际落地与本行有一处偏差，见 [ADR-0007](adr/0007-android-secret-storage-without-jetpack-security.md)**：
+    `androidx.security:security-crypto` 已被 Google 停止维护，而它在本设计里只是
+    「Keystore 包裹」之外的**第二层容器**（两层锚在同一个 Keystore 上，不提升防护强度）。
+    落地形态是 `core:crypto` 自建的 `SecretStore` 门面：Keystore AES-GCM 包裹后
+    写普通 `SharedPreferences`。本行的其余每一条（32 字节随机、AES-GCM 包裹、
+    不绑用户认证）全部照做。
 - **重要约束**：Keystore 密钥**不得**设置 `setUserAuthenticationRequired(true)`。原因：Widget 与 FCM 后台同步需要在无用户交互时读写数据库。这是有意识的取舍——防护目标是"设备丢失且未解锁"与"应用间越权"，不是"取证级攻击"。此取舍必须写入威胁模型，不得在文案中夸大。
 - App 内提供可选的**生物识别应用锁**（BiometricPrompt），只锁 UI 不锁数据库。
 - `android:allowBackup="false"`、`android:fullBackupContent` 排除数据库，防止通过 adb backup / 云备份外泄。
@@ -1428,7 +1434,7 @@ Bob:  【选择接受或拒绝】
 | T05 | Info Disclosure | DB / 备份泄露 | 全量会员号 | Vault Transit 加密 payload、note、email | ✅ 一期 |
 | T06 | Info Disclosure | **邮箱**枚举（OTP 端点） | 邮箱有效性验证服务 | 恒定 202 + decoy challenge + 常量时间。**v1.1：好友邮箱端点已删除，此面收窄至仅 OTP** | ✅ 一期 |
 | T07 | Info Disclosure | 应用主机 RCE | 全量明文 | ❌ 不防护。缓解：最小攻击面（无文件上传、无反序列化用户输入）、依赖漏洞扫描、容器非 root、只读根文件系统 | ⚠️ 已接受，见 §3.3 |
-| T08 | Info Disclosure | 手机丢失 | 本机全部卡 | SQLCipher + Keystore + `allowBackup=false` + 可选生物识别锁 + 远程登出 | ✅ 一期 |
+| T08 | Info Disclosure | 手机丢失 | 本机全部卡 | SQLCipher + Keystore + `allowBackup=false` + `dataExtractionRules`（含 `device-transfer`）+ 可选生物识别锁 + 远程登出。**边界（§3.4 的有意取舍，T-009 落地）**：Keystore 密钥**不绑定用户认证**（`setUserAuthenticationRequired(false)`），因为 Widget 与 FCM 后台同步必须在无用户交互时读写数据库。因此防护的是「**设备丢失且未解锁**」与「应用间越权」；对**已解锁设备上以本应用 UID 执行代码**的攻击者（已 root、取证工具）**不防护** —— 他能让 Keystore 替他解密。对外文案不得超出这条边界 | ✅ 一期（边界见右） |
 | T09 | Info Disclosure | Widget / 锁屏泄露码值 | 会员号被瞥见 | Widget 不渲染条码（§3.9） | ✅ 一期 |
 | T10 | Info Disclosure | FCM 载荷含个人数据 | Google 获知社交关系 | data-only 空载荷（§3.12） | ✅ 一期 |
 | T11 | DoS | OTP 邮件轰炸 | 域名进黑名单 → 全站无法登录 | 多层限流 + 全局熔断 + SPF/DKIM/DMARC。**v1.1：攻击面收窄**（取消邮箱邀请后，用户无法让系统向任意第三方发信，§3.1）；但 **ESP 双活已撤销**，故障恢复能力降低 → 记为已接受风险（§3.2、R1） | ⚠️ 部分缓解 |
@@ -1454,7 +1460,10 @@ Bob:  【选择接受或拒绝】
 - [ ] Release 构建启用 R8 + 混淆 + 资源压缩；`minifyEnabled true`
 - [ ] 禁止在 release 构建输出任何日志（`Timber` 只在 debug 种植 `DebugTree`）
 - [ ] `networkSecurityConfig` 禁止明文流量（`cleartextTrafficPermitted="false"`）
-- [ ] 令牌只存 `EncryptedSharedPreferences`
+- [ ] 令牌只存 `EncryptedSharedPreferences` —— ⚠️ 落地形态改为 `core:crypto` 的
+      `SecretStore`（Keystore AES-GCM 包裹后写普通 `SharedPreferences`），
+      理由见 [ADR-0007](adr/0007-android-secret-storage-without-jetpack-security.md)。
+      **要求不变**：令牌绝不明文写 `SharedPreferences` 或 Room（T-150 复用同一门面）
 - [ ] 深链接（App Links）必须校验 `assetlinks.json`，`autoVerify="true"`
 - [ ] 所有 `Activity` 默认 `exported="false"`，仅必要的入口显式导出
 - [ ] 不使用 `WebView` 加载远程内容（法律页面用本地 HTML 或原生渲染）

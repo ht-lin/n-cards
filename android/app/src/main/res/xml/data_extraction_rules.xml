@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  §7.3：排除全部数据。与 android:allowBackup="false" 是**两件事**，缺一不可。
+
+  allowBackup="false" 关的是「备份」这条路（adb backup / Google 云备份）。
+  Android 12（API 31）起还有第二条路：**设备间直传**（D2D，换新机时的数据迁移），
+  而它**不看** allowBackup —— 只写 <cloud-backup> 不写 <device-transfer>，
+  换机时数据库文件会连同 SharedPreferences 里的 Keystore 包裹一起被搬到新设备上。
+
+  搬过去的密文其实解不开（Keystore 密钥不可导出，不会跟着走），但那不是让它
+  搬过去的理由：一堆解不开的文件只会让新设备上的应用走进恢复路径、把库清掉，
+  而用户看到的是「我的卡没了」。不如从一开始就不搬。
+
+  <exclude domain="root"/> 名义上覆盖其余几项，其余几条仍逐个写出来 ——
+  这个文件的读者需要一眼看到「全都排除了」，而不是去查 domain 的包含关系。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

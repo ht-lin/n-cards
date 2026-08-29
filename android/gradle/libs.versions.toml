@@ -50,7 +50,17 @@ composeBom = "2026.08.00"
 # ---- DI / 持久化 / 序列化 ------------------------------------------------
 hilt = "2.60.1"
 androidxHilt = "1.4.0"
-room = "2.8.4"             # ncards.android.room 用；实际建表是 T-009
+room = "2.8.4"             # ncards.android.room 用；建表是 T-009
+# SQLCipher（§3.4：本地库必须加密）。**必须**是 net.zetetic:sqlcipher-android，
+# 不是那个同名的老 artifact net.zetetic:android-database-sqlcipher ——
+# 后者已停止维护，且初始化 API 完全不同（loadLibs(context) vs. System.loadLibrary）。
+#
+# 4.9.0 的两条选型依据：
+#   ① 16 KB page size 对齐（4.6.1 起）。Play 对 targetSdk ≥ 35 的应用要求原生库
+#      按 16 KB 对齐，不满足的包会被拒 —— T-456 上架时才发现就晚了。
+#   ② 它只声明 androidx.sqlite:sqlite 2.2.0，而 Room 2.8.4 要 2.6.x；
+#      Gradle 取高版本，SupportSQLiteOpenHelper 的接口在两者间未变。
+sqlcipher = "4.9.0"
 kotlinxSerialization = "1.11.0"
 kotlinxCoroutines = "1.11.0"
 
@@ -107,6 +117,8 @@ androidx-hilt-navigation-compose = { module = "androidx.hilt:hilt-navigation-com
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+# 只给 core:database。别的模块要读数据就去用 data:* 的 Repository（§12.3）。
+sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher" }
 
 # ---- Kotlin 生态 ---------------------------------------------------------
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
