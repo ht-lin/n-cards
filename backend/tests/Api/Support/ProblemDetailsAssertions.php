@@ -20,7 +20,24 @@ use Symfony\Component\HttpFoundation\Response;
  *   2. `type` 由 `code` 按 slug 规则派生
  *   3. `instance` 不含 query string（§3.8-C4 的 username 枚举泄露面）
  *
- * T-007 之后 openapi.yaml 用 `$ref` 引同一份 schema，本 trait 继续有效。
+ * ============================================================================
+ * T-007 之后：这**就是**契约校验，不需要再走一遍 openapi.yaml
+ * ============================================================================
+ * openapi.yaml 的 `components/schemas/Problem` 是一个**指向本 schema 文件的
+ * `$ref`**（不是拷贝）。所以「对着这份 JSON Schema 校验」与「对着契约里的
+ * Problem 校验」是同一件事 —— 再加一遍只会得到一条恒真的断言。
+ *
+ * 那个「是 $ref 而不是拷贝」的前提本身也是被守住的，在 {@see OpenApiContract}
+ * 的两个邻居里：
+ *   - `OpenApiDocumentTest::testProblemSchemaIsAReferenceToTheSharedFileNotACopy()`
+ *     看**未解引用**的 yaml，确认它确实只是一个 `$ref`；
+ *   - `OpenApiDocumentTest::testResolvedProblemCodeEnumMatchesErrorCode()`
+ *     看**解引用之后**的结果，确认它真的解到了这份文件（$ref 指错、或路径变了
+ *     导致解引用悄悄退化成空 schema，都会在这里红）。
+ *
+ * 整份契约的校验（路径匹配、状态码、响应头、body）走
+ * {@see OpenApiContract::assertResponseMatchesContract()}；本 trait 只管
+ * 错误响应的形状，两者不重叠。
  */
 trait ProblemDetailsAssertions
 {

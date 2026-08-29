@@ -31,4 +31,35 @@ final class ContainerCompilesTest extends KernelTestCase
             self::getContainer()->getParameter('kernel.project_dir'),
         );
     }
+
+    /**
+     * ⚠️ `config/packages/*.yaml` 里**不得**注册来自 `require-dev` 的类。
+     *
+     * 这条测试存在的具体原因（T-007）：`nyholm/psr7` 是契约测试用的 dev 依赖，
+     * 而它的 Symfony recipe 会自动生成 `config/packages/nyholm_psr7.yaml`，
+     * 把六个 PSR-17 服务注册进**所有**环境的容器。`symfony.lock` 里至今记着这条
+     * recipe，所以 `composer recipes:install nyholm/psr7 --force` 会把它请回来。
+     *
+     * 它的危害只在生产才显形：`composer install --no-dev` 之后
+     * `Nyholm\Psr7\Factory\Psr17Factory` 不存在，容器编译直接炸 ——
+     * 而 CI 装的是全量依赖，本地也是，谁都不会在合入前发现。
+     *
+     * 契约测试自己 `new Psr17Factory()` 就够了（见 tests/Api/Support/OpenApiContract），
+     * 根本不需要容器注册。
+     */
+    public function testNoDevOnlyRecipeConfigLeakedIntoTheContainer(): void
+    {
+        $devOnlyConfigs = [
+            'nyholm_psr7.yaml' => 'nyholm/psr7 是 require-dev（T-007 的契约测试用），'
+                .'它的 recipe 会把 PSR-17 服务注册进生产容器 —— '
+                .'composer install --no-dev 之后容器编译会找不到类',
+        ];
+
+        foreach ($devOnlyConfigs as $file => $why) {
+            self::assertFileDoesNotExist(
+                \dirname(__DIR__, 2).'/config/packages/'.$file,
+                \sprintf("config/packages/%s 不该存在：%s。\n删掉它。", $file, $why),
+            );
+        }
+    }
 }

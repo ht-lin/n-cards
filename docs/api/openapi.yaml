@@ -1,0 +1,1471 @@
+# NCards API — 唯一真相源（§13.1 第 1 条）。
+#
+# ============================================================================
+# 改这个文件之前先读这一段
+# ============================================================================
+# 1. 任何接口变更**必须先改这里**，并在**同一个 PR** 内一并改后端实现、契约测试
+#    与 Android 生成代码（§13.1）。反过来做——先写实现再补契约——会让契约跟着
+#    实现漂移，这正是本项目禁用 API Platform / NelmioApiDocBundle 的理由。
+# 2. `/v1` 内**只允许向后兼容的变更**（§13.6）：可以加端点、加可选请求字段、
+#    加响应字段、加枚举值、放宽校验；**不可以**删字段、改类型、把可选变必填、
+#    收紧校验、改错误 code 的含义。破坏性变更走 `/v2`，`/v1` 并行 6 个月。
+# 3. 所有 schema 必须 `additionalProperties: true`（§13.1 第 5 条），
+#    每个操作必须有 operationId、至少一个错误响应、每个响应必须有 example。
+#    这四条由 `.spectral.yaml` 强制，本地跑 `npm run lint:api`。
+#
+# ============================================================================
+# ⚠️ 关于 `additionalProperties: true` 在**请求**方向上的含义
+# ============================================================================
+# §13.1 第 5 条要求所有 schema 都 `additionalProperties: true`，它的目的是让
+# **客户端**前向兼容：服务端将来加响应字段时，老客户端不能因为多了一个键就崩。
+#
+# 但后端对**请求体**里的未知字段是**主动拒绝**的（`400 validation_failed` +
+# `errors[].code = unknown_field`，见 §6.1 的字段错误码词表）。也就是说本契约在
+# 请求方向上比实现**宽**——契约描述的是「最大可接受形状」，不是「服务端保证接受
+# 任意字段」。这是刻意的，不要为了「让契约和实现一致」把请求 schema 改成
+# `additionalProperties: false`：那会让 §13.6「新增可选请求字段」变成破坏性变更。
+#
+# ============================================================================
+# ⚠️ 路径里**没有** `/v1`
+# ============================================================================
+# `servers[].url` 已经带了 `/v1`（§6.1 的基址就是这么定的，§17.2 的参考片段也
+# 这么写），所以下面 paths 下写的是 `/cards`，而后端路由是 `/v1/cards`。
+# `league/openapi-psr7-validator` 会自动处理这个 base path 落差，
+# 见 backend/tests/Api/Support/OpenApiContract.php。
+#
+# ============================================================================
+# 本文件的范围（T-007 首版）
+# ============================================================================
+# Auth + Cards + 全套通用组件。§6.2 的其余端点（Me/Devices、Sharing、Friends、
+# Sync、Config）由各自的任务在「先改契约」时补入——这不是遗漏，是契约优先的
+# 正常工作方式。通用组件已经全部就位，补端点时直接 $ref 即可。
+
+openapi: 3.1.0
+
+info:
+  title: NCards API
+  version: "1.0.0"
+  summary: 面向德国及欧盟市场的移动卡券钱包
+  description: |
+    会员卡 / 积分卡 / 优惠券的条码收纳与共享。
+
+    **通用约定**（§6.1）
+
+    - 字段名一律 `snake_case`；时间一律 RFC 3339 UTC。
+    - 成功响应 `application/json; charset=utf-8`；错误响应 `application/problem+json`
+      （RFC 9457，**不带** charset —— JSON 按定义就是 UTF-8）。
+      媒体类型的 key 里不写 charset，那是传输层的事。
+    - 认证 `Authorization: Bearer <access_jwt>`（Access token 15 分钟，EdDSA）。
+    - **所有** `/v1` 请求必须带 `X-Client`，缺失即 `400`。
+    - 所有 `POST` 支持 `Idempotency-Key`（UUID，Redis 存 24h）。
+    - 分页一律游标式 `?cursor=&limit=`，**不使用 offset**——`offset` / `page` /
+      `skip` / `per_page` / `start` 任一出现即 `400 validation_failed`
+      （`errors[].code = unsupported_parameter`）。
+  contact:
+    name: NCards Engineering
+    url: https://github.com/ht-lin/n-cards
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.ncards.de/v1
+    description: production
+  - url: https://api.staging.ncards.de/v1
+    description: staging（合成数据，禁止生产数据副本 —— §14.1）
+
+tags:
+  - name: auth
+    description: 认证与会话（§7.1）。这一组**不需要** Bearer。
+  - name: cards
+    description: 卡的 CRUD 与摆放。owner 是唯一的写入者；viewer 只能看，以及摆放自己钱包里的位置（§5.2）。
+
+# 默认全局要求 Bearer；auth 组的五个端点各自用 `security: []` 覆盖。
+security:
+  - bearerAuth: []
+
+paths:
+  # ==========================================================================
+  # 认证（§6.2 / §7.1）—— 无需 Bearer
+  # ==========================================================================
+  /auth/otp/request:
+    post:
+      tags: [auth]
+      operationId: requestOtp
+      summary: 请求登录用的一次性验证码
+      description: |
+        **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。邮箱不存在时
+        服务端创建一个哑挑战（`is_decoy`），不发信、验证时永远失败，但耗时与
+        真实路径一致。客户端**不能**从本接口的响应推断账号是否存在。
+
+        限速（§7.5）：按 `email_hash` 1/min、5/h、10/day；按 IP 20/h。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OtpRequest' }
+            example:
+              email: anna@example.de
+              locale: de
+      responses:
+        '202':
+          description: 挑战已创建（无论邮箱是否存在）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OtpChallenge' }
+              example:
+                challenge_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                expires_at: "2026-08-29T10:35:00Z"
+                resend_after_seconds: 60
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /auth/otp/verify:
+    post:
+      tags: [auth]
+      operationId: verifyOtp
+      summary: 校验验证码，换取令牌对
+      description: |
+        首次验证成功即注册（创建 `users` 行）。此时 `username` 仍为 `null`，
+        用户处于 `onboarding_incomplete` 状态：除 `GET /me`、`POST /me/username`、
+        `POST /auth/logout` 外，所有 `/v1` 端点对其返回 `403 username_required`。
+        客户端据 `user.onboarding_complete` 路由到 username 设定页，**该页不可跳过**（§5.2）。
+
+        限速（§7.5）：按 `challenge_id` 5 次总计；按 IP 60/h。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OtpVerification' }
+            example:
+              challenge_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+              code: "418396"
+              device:
+                id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+                platform: android
+                model: Pixel 7a
+                os_version: "14"
+                app_version: 1.4.0
+      responses:
+        '200':
+          description: 登录成功
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+              example:
+                access_token: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkyZjNhMSJ9.c2ln
+                expires_in: 900
+                refresh_token: 9tK3zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS4
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: null
+                  locale: de
+                  onboarding_complete: false
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /auth/magic/consume:
+    post:
+      tags: [auth]
+      operationId: consumeMagicLink
+      summary: 消费 Magic Link 令牌
+      description: |
+        ⚠️ **必须是 POST**。企业邮件安全网关（Microsoft Defender、Barracuda 等）
+        会自动 `GET` 邮件里的所有链接做扫描——如果 Magic Link 是 `GET` 即消费，
+        用户还没点开就已失效（§7.1）。邮件里的链接指向落地页，`GET` 只渲染
+        「点击继续登录」按钮，实际消费走本端点。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MagicLinkConsumption' }
+            example:
+              token: bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS49tK3zQ1sX7
+              device:
+                id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+                platform: android
+                model: Pixel 7a
+                os_version: "14"
+                app_version: 1.4.0
+      responses:
+        '200':
+          description: 登录成功
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+              example:
+                access_token: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkyZjNhMSJ9.c2ln
+                expires_in: 900
+                refresh_token: 9tK3zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS4
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: anna_b
+                  locale: de
+                  onboarding_complete: true
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /auth/token/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshToken
+      summary: 轮换令牌对
+      description: |
+        每次刷新签发**新的** refresh token，旧的立即失效（§7.1）。
+
+        ⚠️ 收到一个**已被使用过**的 refresh token 会被判定为令牌被窃：撤销该会话
+        家族的全部令牌、写 `audit_log(reuse_detected)`、告警、给用户发安全提醒邮件。
+        客户端拿到 `401 token_invalid` 时必须清空本地会话并跳登录，**不要重试**。
+
+        限速（§7.5）：按 session 60/h。
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRefresh' }
+            example:
+              refresh_token: 9tK3zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS4
+      responses:
+        '200':
+          description: 轮换后的新令牌对
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+              example:
+                access_token: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkyZjNhMSJ9.bmV3
+                expires_in: 900
+                refresh_token: Q1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS49tK3z
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: anna_b
+                  locale: de
+                  onboarding_complete: true
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: 撤销当前会话
+      description: |
+        这是 auth 组里**唯一需要 Bearer** 的端点。撤销当前 session；
+        access token 不做黑名单（15 分钟窗口可接受，§7.1），但 refresh 立即失效。
+
+        `onboarding_incomplete` 的用户也可以调用（否则中途放弃注册的人无法登出）。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: 已登出（无响应体）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ==========================================================================
+  # 卡（§6.2 / §5.2）
+  # ==========================================================================
+  /cards:
+    get:
+      tags: [cards]
+      operationId: listCards
+      summary: 列出我能看到的全部卡
+      description: |
+        首次登录用；日常增量走 `GET /sync`（T-202）。包含我 own 的卡与别人共享给我的卡。
+        游标分页，**没有** offset。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 一页卡
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CardPage' }
+              example:
+                items:
+                  - id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                    title: REWE Payback
+                    merchant_label: REWE
+                    color: blue_600
+                    barcode_format: EAN_13
+                    barcode_value: "4012345678901"
+                    note: null
+                    expires_on: null
+                    owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                    owner_username: anna_b
+                    my_role: owner
+                    can_edit: true
+                    member_count: 3
+                    sort_order: 0
+                    is_pinned: true
+                    revision: 7
+                    updated_at: "2026-08-29T10:30:12Z"
+                next_cursor: eyJ2IjoxLCJhZnRlciI6IjAxOTJmM2ExIn0
+                has_more: true
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+    post:
+      tags: [cards]
+      operationId: createCard
+      summary: 创建一张卡
+      description: |
+        ⚠️ `id` 由**客户端生成**（UUIDv7）。这是离线优先的前提：用户在超市地下层
+        没网时加的卡，本地就已经有了最终 id，联网后原样上行——不需要「本地临时 id
+        → 服务端真 id」的重映射（§5.4.3）。
+
+        因此本端点**天然幂等**：同一个 `id` 重复提交返回同一张卡。若该 `id` 已属于
+        **别人**，返回 `409 id_conflict`，客户端必须重新生成 id 重试。
+
+        限额（§7.5）：每用户 500 张卡，超出 `422 limit_exceeded`。
+        共享给我的卡**不计入**我的额度（Q11）。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CardCreate' }
+            example:
+              id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+              title: REWE Payback
+              merchant_label: REWE
+              color: blue_600
+              barcode_format: EAN_13
+              barcode_value: "4012345678901"
+              note: null
+              expires_on: null
+      responses:
+        '201':
+          description: 已创建
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Card' }
+              example:
+                id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                title: REWE Payback
+                merchant_label: REWE
+                color: blue_600
+                barcode_format: EAN_13
+                barcode_value: "4012345678901"
+                note: null
+                expires_on: null
+                owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                owner_username: anna_b
+                my_role: owner
+                can_edit: true
+                member_count: 1
+                sort_order: 0
+                is_pinned: false
+                revision: 1
+                updated_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /cards/{cardId}:
+    get:
+      tags: [cards]
+      operationId: getCard
+      summary: 取单张卡
+      description: |
+        owner 与 viewer 都能读。非成员 → `403 not_a_member`，客户端应据此
+        **从本地删除该卡**（说明共享已被撤销，§6.1）。
+
+        响应随调用者角色裁剪：viewer 拿到的 `Card` 没有 `member_count`（§5.2 / C11）。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: 卡
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Card' }
+              example:
+                id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                title: REWE Payback
+                merchant_label: REWE
+                color: blue_600
+                barcode_format: EAN_13
+                barcode_value: "4012345678901"
+                note: Anna 的主卡
+                expires_on: "2028-12-31"
+                owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                owner_username: anna_b
+                my_role: viewer
+                can_edit: false
+                sort_order: 3
+                is_pinned: false
+                revision: 7
+                updated_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+    patch:
+      tags: [cards]
+      operationId: updateCard
+      summary: 修改一张卡（乐观锁）
+      description: |
+        **仅 owner**。viewer 调用返回 `403 insufficient_role`，且客户端应同时上报
+        Sentry——正常 UI 不应产生这个请求（§6.1）。
+
+        `If-Match` 带当前 `revision`，不匹配返回 `409 revision_conflict`，
+        problem body 的 `current` 成员携带服务端当前状态，客户端据此走 §5.4.3 的
+        冲突解决。
+
+        `sort_order` / `is_pinned` **不在这里改**——它们是每成员私有的，走
+        `PUT /cards/{cardId}/placement`。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/CardId'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CardUpdate' }
+            example:
+              title: REWE Payback (Zweitkarte)
+              note: Rückseite abgenutzt
+      responses:
+        '200':
+          description: 已更新，`revision` 已递增
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Card' }
+              example:
+                id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                title: REWE Payback (Zweitkarte)
+                merchant_label: REWE
+                color: blue_600
+                barcode_format: EAN_13
+                barcode_value: "4012345678901"
+                note: Rückseite abgenutzt
+                expires_on: null
+                owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                owner_username: anna_b
+                my_role: owner
+                can_edit: true
+                member_count: 3
+                sort_order: 0
+                is_pinned: true
+                revision: 8
+                updated_at: "2026-08-29T11:02:44Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+    delete:
+      tags: [cards]
+      operationId: deleteCard
+      summary: 删除一张卡
+      description: |
+        **仅 owner**。软删（写 `deleted_at`），90 天后硬删。会使**全部 viewer**
+        失去该卡——他们的 `/sync` 会收到墓碑记录（§5.2）。
+
+        ⚠️ 墓碑的 audience 取**删除前**的成员快照，否则被删的成员永远收不到通知。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '204':
+          description: 已删除（无响应体）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /cards/{cardId}/placement:
+    put:
+      tags: [cards]
+      operationId: updateCardPlacement
+      summary: 设置我自己对该卡的排序与置顶
+      description: |
+        `sort_order` / `is_pinned` 存在 `card_members` 上，是**每成员私有**的
+        （§5.2）——同一张共享卡，Anna 置顶、Bob 不置顶，互不影响。
+
+        因此本端点：
+        - **owner 与 viewer 都能调用**。这是 viewer 唯一的上行写入端点。
+        - **不走 revision 锁**，不需要 `If-Match`，也不会递增卡的 `revision`——
+          它改的根本不是卡本身。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CardPlacement' }
+            example:
+              sort_order: 0
+              is_pinned: true
+      responses:
+        '200':
+          description: 已更新（返回的是**调用者视角**的卡）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Card' }
+              example:
+                id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                title: REWE Payback
+                merchant_label: REWE
+                color: blue_600
+                barcode_format: EAN_13
+                barcode_value: "4012345678901"
+                note: null
+                expires_on: null
+                owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                owner_username: anna_b
+                my_role: viewer
+                can_edit: false
+                sort_order: 0
+                is_pinned: true
+                revision: 7
+                updated_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+components:
+
+  # ==========================================================================
+  # 安全
+  # ==========================================================================
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        `Authorization: Bearer <access_jwt>`。EdDSA (Ed25519) 签名，15 分钟有效，
+        claims `sub, sid, did, jti, iat, exp`（§7.1）。过期时客户端静默刷新后**重试一次**。
+
+  # ==========================================================================
+  # 参数
+  # ==========================================================================
+  parameters:
+    XClient:
+      name: X-Client
+      in: header
+      required: true
+      description: |
+        **所有 `/v1` 请求必填**（§6.1）。缺失或格式不符即 `400 validation_failed`。
+        用于强制升级判定（低于 `min_supported_client` → `426 client_too_old`）与指标切分。
+
+        pattern 与后端 `App\Shared\Domain\Client\ClientVersion::PATTERN` 的**判定结果
+        逐例一致**，由 `backend/tests/Api/OpenApiDocumentTest` 用一张对照表断言 ——
+        改一处不改另一处，CI 立刻红。
+        （唯一的差别是后端会先 `trim()` 一次，正则表达不了这个。）
+
+        ⚠️ `/health/live` 与 `/health/ready` **不在 `/v1` 下**，因此不需要这个头——
+        它们的调用方是 Docker healthcheck、Caddy 与 Ansible（§14.2）。
+        那两个端点刻意不出现在本契约里。
+      schema:
+        type: string
+        pattern: '^[a-z]{1,16}/\d{1,4}\.\d{1,4}\.\d{1,4}\s*\(\d{1,9}\)$'
+      example: android/1.4.0 (26)
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        幂等键（UUID），Redis 存 24h（§6.1 / ADR-0003）。所有 `POST` 支持。
+
+        同一个 key 配**相同**请求体 → 回放此前的响应，并带上
+        `Idempotency-Replayed: true`。
+        同一个 key 配**不同**请求体 → `422 idempotency_key_reused`，
+        这是客户端 bug，**不要重试**，上报 Sentry。
+        前一次请求仍在处理中 → `409 idempotency_in_progress`，带 `Retry-After`，退避重试。
+
+        ⚠️ Redis 不可达时幂等是 **fail-OPEN**（照常执行，不保证幂等），
+        而限流是 fail-CLOSED。这个不对称是刻意的，理由见 ADR-0003。
+      schema:
+        type: string
+        format: uuid
+      example: 0192f3a1-b2c3-7d4e-8f01-fedcba987654
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        当前 `revision` 的字符串形式，带引号，如 `"7"`（§17.2）。
+        不匹配 → `409 revision_conflict`，problem body 的 `current` 带服务端当前状态。
+      schema:
+        type: string
+      example: '"7"'
+
+    CardId:
+      name: cardId
+      in: path
+      required: true
+      description: 卡 id（UUIDv7，客户端生成）
+      schema:
+        type: string
+        format: uuid
+      example: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        不透明游标，取自上一页响应的 `next_cursor`。**客户端不得解析它的内容。**
+        省略即取第一页。无法解码 → `400 validation_failed`
+        （`/sync` 例外，那里是 `409 full_resync_required`，见 §5.4.1）。
+      schema:
+        type: string
+      example: eyJ2IjoxLCJhZnRlciI6IjAxOTJmM2ExIn0
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: |
+        每页条数。默认 50，**上限 200**。
+
+        超过上限**静默夹取**到 200，不报错——这是合理的请求，而且夹取意味着将来
+        抬高上限仍然向后兼容（§13.6 允许放宽校验）。客户端总能靠 `has_more` 察觉。
+        但 `limit=abc` / `limit=0` / `limit=-1` 是客户端 bug，一律 `400`。
+
+        与后端 `App\Shared\Http\Pagination\CursorPaginator` 的
+        `DEFAULT_LIMIT` / `MAX_LIMIT` 一致。
+      schema:
+        type: integer
+        minimum: 1
+        default: 50
+      example: 50
+
+  # ==========================================================================
+  # 响应头
+  # ==========================================================================
+  # ⚠️ 这四个里有三个是本项目自定义的，标准里没有。T-010 的 OkHttp 拦截器
+  #    必须读它们，否则客户端无从区分「真的执行了」与「拿到了回放」，
+  #    也无从知道该等多久重试。
+  headers:
+    XRequestId:
+      description: |
+        本次请求的追踪 id，与错误响应 body 里的 `request_id` **同值**。
+        客户端可以在请求里自带一个，否则服务端生成。写入所有日志——
+        用户报障时报上来的就是这个。
+      required: true
+      schema:
+        type: string
+      example: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    IdempotencyReplayed:
+      description: |
+        **仅在幂等回放命中时出现**，值恒为 `true`。表示本次**没有**真正执行，
+        拿到的是此前那次的响应（ADR-0003）。标准里没有这个头。
+      required: false
+      schema:
+        type: string
+        const: "true"
+      example: "true"
+
+    RetryAfter:
+      description: |
+        **秒数，不是 HTTP-date**。出现在 `429`、`503` 与
+        `409 idempotency_in_progress` 上。多维度限流同时触发时，
+        取**更长的**那个（§7.5）。
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+      example: 42
+
+    XRateLimitRemaining:
+      description: |
+        剩余可用次数，多窗口取**最小值**。`429` 时恒为 `0`。
+
+        ⚠️ §7.5 明文要求限流响应**必须**同时带 `Retry-After` 与本头，
+        缺一不可。回归测试 `backend/tests/Api/RateLimitTest`。
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+      example: 0
+
+  # ==========================================================================
+  # 可复用的错误响应
+  # ==========================================================================
+  # 全部是 `application/problem+json`（RFC 9457，**不带** charset）。
+  # schema 一律指向 components/schemas/Problem，而它 $ref 到了 T-004 交付的
+  # docs/api/schemas/problem-details.schema.json —— 那份文件才是 code 枚举的真相源。
+  responses:
+    BadRequest:
+      description: |
+        `validation_failed`（字段校验失败，带 `errors[]`）或
+        `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。
+
+        缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的
+        分页参数（`offset` / `page` / `skip` / `per_page` / `start`，
+        `errors[].code = unsupported_parameter`）也都走这里。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/validation-failed
+            title: Validation failed
+            status: 400
+            code: validation_failed
+            detail: The request contains invalid fields.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+            errors:
+              - field: title
+                code: too_long
+                message: Title must be at most 100 characters.
+
+    Unauthorized:
+      description: |
+        `token_expired`（静默刷新后重试**一次**）或
+        `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/token-expired
+            title: Token expired
+            status: 401
+            code: token_expired
+            detail: The access token has expired.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    Forbidden:
+      description: |
+        `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**，
+        正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、
+        `username_required`（跳 username 设定页）、`not_friends`。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/insufficient-role
+            title: Insufficient role
+            status: 403
+            code: insufficient_role
+            detail: Only the card owner may modify this card.
+            instance: /v1/cards/0192f3a1-b2c3-7d4e-8f01-23456789abcd
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    NotFound:
+      description: |
+        `not_found`。
+
+        ⚠️ 对**非成员**访问一张存在的卡，服务端返回的是 `403 not_a_member` 还是
+        `404 not_found`，取决于该资源是否属于「存在性本身即信息」的一类。
+        卡走 `403`（成员关系是明确的授权概念）；含 username 的查找走 `404`。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/not-found
+            title: Not found
+            status: 404
+            code: not_found
+            detail: No such card.
+            instance: /v1/cards/0192f3a1-b2c3-7d4e-8f01-23456789abcd
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    Conflict:
+      description: |
+        `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、
+        `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、
+        `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、
+        `full_resync_required`（清库全量重同步）。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/revision-conflict
+            title: Revision conflict
+            status: 409
+            code: revision_conflict
+            detail: The card was modified by another member.
+            instance: /v1/cards/0192f3a1-b2c3-7d4e-8f01-23456789abcd
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+            current:
+              revision: 9
+              title: REWE Payback
+              updated_at: "2026-08-29T11:15:00Z"
+
+    PayloadTooLarge:
+      description: '`payload_too_large`。客户端 bug，上报 Sentry。'
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/payload-too-large
+            title: Payload too large
+            status: 413
+            code: payload_too_large
+            detail: The request body exceeds the maximum allowed size.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    UnsupportedMediaType:
+      description: '`unsupported_media_type`：`Content-Type` 不是 `application/json`。客户端 bug，上报 Sentry。'
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/unsupported-media-type
+            title: Unsupported media type
+            status: 415
+            code: unsupported_media_type
+            detail: The request Content-Type must be application/json.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    UnprocessableEntity:
+      description: |
+        `limit_exceeded`（**系统限额**，§7.5 的第一张表）、`username_invalid`、
+        `idempotency_key_reused`（**不要重试**，上报 Sentry）。
+
+        ⚠️ `422 limit_exceeded` 与限流（`429`）**完全是两回事**：前者是绝对的存量
+        上限，重试**永远**不会成功，UI 应该显示「额度已满」而不是「稍后重试」。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/limit-exceeded
+            title: Limit exceeded
+            status: 422
+            code: limit_exceeded
+            detail: You have reached the maximum of 500 cards.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    ClientTooOld:
+      description: '`client_too_old`：低于 `/v1/config` 下发的 `min_supported_client`。客户端显示强制升级墙。'
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/client-too-old
+            title: Client too old
+            status: 426
+            code: client_too_old
+            detail: This client version is no longer supported. Please update.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    TooManyRequests:
+      description: |
+        `rate_limited`：「我判定你超限了」，按 `Retry-After` 退避重试（§7.5）。
+
+        ⚠️ **必须**同时带 `Retry-After`（秒数）与 `X-RateLimit-Remaining`（恒为 0）。
+        与 `503 service_unavailable`（「我**无法判定**」——Redis 不可达且该策略
+        fail-closed）不是一回事，见 ADR-0005。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/XRateLimitRemaining' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/rate-limited
+            title: Rate limited
+            status: 429
+            code: rate_limited
+            detail: Too many requests. Retry after the indicated number of seconds.
+            instance: /v1/auth/otp/request
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    InternalError:
+      description: |
+        `internal_error`。`detail` 恒为固定文案，**绝不回显**原始异常消息
+        （那会泄露主机名、端口、SQL 片段）。客户端提示稍后重试并上报 Sentry。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/internal-error
+            title: Internal error
+            status: 500
+            code: internal_error
+            detail: An unexpected error occurred.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    ServiceUnavailable:
+      description: |
+        `service_unavailable`：维护中，或限流器**无法判定**（Redis 不可达 +
+        该策略 fail-closed，ADR-0005）。这是服务端故障，走 §5.4.3 的 outbox 重试策略。
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+          example:
+            type: https://api.ncards.de/problems/service-unavailable
+            title: Service unavailable
+            status: 503
+            code: service_unavailable
+            detail: The service is temporarily unavailable.
+            instance: /v1/cards
+            request_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+  # ==========================================================================
+  # Schema
+  # ==========================================================================
+  schemas:
+
+    # ------------------------------------------------------------------ 错误
+    Problem:
+      # ⚠️⚠️ 这里**只能**是一个 $ref。不要把 problem-details.schema.json 的内容
+      # 复制进来——两份 `code` 枚举必然会漂，而 Android 的 ApiError sealed class
+      # 是照它生成的。那份文件与 App\Shared\Domain\Error\ErrorCode 的逐项一致性
+      # 由 backend/tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest 断言，
+      # 「本 yaml 解析出来的枚举与 ErrorCode 一致」则由
+      # backend/tests/Api/OpenApiDocumentTest 断言。
+      $ref: './schemas/problem-details.schema.json'
+
+    # -------------------------------------------------------------- 分页信封
+    # ⚠️ 通用列表信封只在这里 schematise 一次。将来 §6.2 的七个列表端点各自
+    # 定义一个 `XxxPage`（items 换成自己的元素类型即可），**不要**把
+    # next_cursor / has_more 在每个端点里重写一遍。
+    CardPage:
+      type: object
+      additionalProperties: true
+      required: [items, next_cursor, has_more]
+      description: |
+        通用列表信封（§6.1）。`has_more` 为 `false` 时 `next_cursor` **恒为 `null`**。
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Card' }
+        next_cursor:
+          type: [string, "null"]
+          description: 下一页的不透明游标。`has_more` 为 `false` 时恒为 `null`。
+        has_more:
+          type: boolean
+      examples:
+        - items: []
+          next_cursor: null
+          has_more: false
+
+    # ------------------------------------------------------------------ 卡
+    Card:
+      type: object
+      additionalProperties: true
+      required: [id, title, color, barcode_format, barcode_value, revision, updated_at]
+      description: |
+        一张卡在**调用者视角**下的样子。`my_role` / `can_edit` / `sort_order` /
+        `is_pinned` / `member_count` 都随调用者而变——同一张卡，owner 与 viewer
+        拿到的不是同一个对象。
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, maxLength: 100 }
+        merchant_label:
+          type: [string, "null"]
+          maxLength: 100
+          description: 用户自填的商家名（一期无商家目录）
+        color:
+          type: string
+          description: 预设调色板的枚举值。色值本身待设计交付（开放问题 Q7 / T-153），故此处不收窄成 enum。
+          example: blue_600
+        barcode_format: { $ref: '#/components/schemas/BarcodeFormat' }
+        barcode_value:
+          type: string
+          maxLength: 1024
+          description: |
+            码值明文。**传输时是明文**（走 TLS），**落库时用 Vault Transit 加密**（§5.3）。
+            上限 1024 字节，覆盖 PDF417 / QR 的实际上限（§7.5）。
+        note:
+          type: [string, "null"]
+          maxLength: 2000
+        expires_on:
+          type: [string, "null"]
+          format: date
+        owner_id: { type: string, format: uuid }
+        owner_username:
+          $ref: '#/components/schemas/Username'
+        my_role: { $ref: '#/components/schemas/CardRole' }
+        can_edit:
+          type: boolean
+          description: '`my_role == owner` 的便利镜像。客户端**必须**用它来 gate 编辑 UI，不要自己比较角色字符串。'
+        member_count:
+          type: integer
+          minimum: 1
+          description: |
+            **仅 owner 可见**。`my_role == viewer` 时**整个成员不出现**——
+            有多少个共同 viewer 本身就是 viewer 不该知道的信息（§5.2 成员可见性 / C11）。
+            客户端在它缺失时**不得**推断任何默认值。
+        sort_order:
+          type: integer
+          description: '**每成员私有**（存在 `card_members` 上）。走 `PUT /cards/{cardId}/placement` 修改。'
+        is_pinned:
+          type: boolean
+          description: '**每成员私有**，同上。'
+        revision:
+          type: integer
+          format: int64
+          description: 乐观锁版本。`PATCH` 时放进 `If-Match`。`placement` 的修改**不会**递增它。
+        updated_at: { type: string, format: date-time }
+      examples:
+        - id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+          title: REWE Payback
+          merchant_label: REWE
+          color: blue_600
+          barcode_format: EAN_13
+          barcode_value: "4012345678901"
+          note: null
+          expires_on: null
+          owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+          owner_username: anna_b
+          my_role: owner
+          can_edit: true
+          member_count: 1
+          sort_order: 0
+          is_pinned: false
+          revision: 1
+          updated_at: "2026-08-29T10:30:12Z"
+
+    CardCreate:
+      type: object
+      additionalProperties: true
+      required: [id, title, color, barcode_format, barcode_value]
+      description: |
+        ⚠️ `id` 由**客户端**生成（UUIDv7）。离线加的卡本地就已经有最终 id，
+        联网后原样上行，不需要 id 重映射（§5.4.3）。
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 客户端生成的 UUIDv7。已属于他人 → `409 id_conflict`，重新生成后重试。
+        title: { type: string, minLength: 1, maxLength: 100 }
+        merchant_label: { type: [string, "null"], maxLength: 100 }
+        color: { type: string, example: blue_600 }
+        barcode_format: { $ref: '#/components/schemas/BarcodeFormat' }
+        barcode_value: { type: string, minLength: 1, maxLength: 1024 }
+        note: { type: [string, "null"], maxLength: 2000 }
+        expires_on: { type: [string, "null"], format: date }
+      examples:
+        - id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+          title: REWE Payback
+          merchant_label: REWE
+          color: blue_600
+          barcode_format: EAN_13
+          barcode_value: "4012345678901"
+          note: null
+          expires_on: null
+
+    CardUpdate:
+      type: object
+      additionalProperties: true
+      minProperties: 1
+      description: |
+        全部字段可选，只发要改的。**没有** `sort_order` / `is_pinned`——那是每成员
+        私有的，走 `PUT /cards/{cardId}/placement`。**没有** `id` / `owner_id` /
+        `revision`：前两个不可变，`revision` 由服务端递增。
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+        merchant_label: { type: [string, "null"], maxLength: 100 }
+        color: { type: string, example: blue_600 }
+        barcode_format: { $ref: '#/components/schemas/BarcodeFormat' }
+        barcode_value: { type: string, minLength: 1, maxLength: 1024 }
+        note: { type: [string, "null"], maxLength: 2000 }
+        expires_on: { type: [string, "null"], format: date }
+      examples:
+        - title: REWE Payback (Zweitkarte)
+          note: Rückseite abgenutzt
+
+    CardPlacement:
+      type: object
+      additionalProperties: true
+      required: [sort_order, is_pinned]
+      description: 调用者**自己**对该卡的摆放。owner 与 viewer 均可提交。
+      properties:
+        sort_order: { type: integer }
+        is_pinned: { type: boolean }
+      examples:
+        - sort_order: 0
+          is_pinned: true
+
+    CardRole:
+      type: string
+      enum: [owner, viewer]
+      description: |
+        v1.1 只有两种角色（`editor` 已移除，所有权不可转让）。
+
+        owner 是**唯一的写入者**；viewer 只有两项权利——看，和摆放自己钱包里的位置（§5.2）。
+
+        ⚠️ 客户端必须对未知值有 `UNKNOWN` 兜底分支（§13.6 允许新增枚举值），
+        这由 T-010 的生成器配置保证。
+      example: owner
+
+    BarcodeFormat:
+      type: string
+      enum: [EAN_13, EAN_8, UPC_A, UPC_E, CODE_128, CODE_39, CODE_93, ITF,
+             CODABAR, QR_CODE, AZTEC, PDF_417, DATA_MATRIX]
+      description: |
+        客户端**必须**把未知值当作 `UNKNOWN` 并渲染兜底样式——§13.6 明确允许
+        新增枚举值，老客户端不能因此崩。
+      example: EAN_13
+
+    # ------------------------------------------------------------------ 用户
+    Username:
+      type: string
+      pattern: '^[a-z0-9_]{3,20}$'
+      description: |
+        全局唯一、**不可变**、小写。是添加好友的**唯一**检索键（§3.8）。
+
+        客户端发送前必须做 `trim` + `lowercase(Locale.ROOT)` 归一化——
+        `Anna_B ` 与 `anna_b` 是同一个名字。
+
+        不可变是靠「**没有修改端点**」保证的：只有一次性的 `POST /me/username`，
+        没有 `PATCH` / `PUT` 对应端点。
+      example: anna_b
+
+    User:
+      type: object
+      additionalProperties: true
+      required: [id, username, locale, onboarding_complete, created_at]
+      description: 调用者自己的资料。**没有** `display_name`（v1.1 C10 移除）。
+      properties:
+        id: { type: string, format: uuid }
+        username:
+          description: |
+            **注册未完成时为 `null`**（§5.2）：`POST /auth/otp/verify` 成功即创建用户行，
+            但此刻还没设 username。客户端据 `onboarding_complete` 路由到设定页。
+          anyOf:
+            - $ref: '#/components/schemas/Username'
+            - type: "null"
+        locale:
+          type: string
+          enum: [de, en]
+          description: 德语是默认值（§11.1）。
+        onboarding_complete:
+          type: boolean
+          description: |
+            等价于 `username != null`。为 `false` 时用户处于 `onboarding_incomplete`
+            状态：除 `GET /me`、`POST /me/username`、`POST /auth/logout` 外，
+            **所有** `/v1` 端点返回 `403 username_required`。
+        created_at: { type: string, format: date-time }
+      examples:
+        - id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+          username: anna_b
+          locale: de
+          onboarding_complete: true
+          created_at: "2026-08-29T10:30:12Z"
+
+    # ⚠️ `PublicUser`（§17.2）**故意还没在这里**。它是 `GET /users/lookup` 的响应
+    # 形状，而那个端点属于 T-302 —— 契约优先的意思是「端点与它的 schema 同 PR 进来」，
+    # 不是「先把所有 schema 摆好等实现」。提前放进来只会得到一个 Spectral 的
+    # oas3-unused-component 告警和一份没人对照实现校对过的定义。
+    #
+    # 给 T-302 的提醒（§17.2 / §3.8 T18）：`PublicUser` 只能有 `user_id` 与
+    # `username` 两个字段。**永远不要往里加**邮箱、注册日期、好友数、卡数 ——
+    # 任何一个都会把「按 username 查一个人」从查找变成情报收集。
+    # v1.1 没有 `display_name`（C10）。
+
+    Device:
+      type: object
+      additionalProperties: true
+      required: [id, platform, model, os_version, app_version]
+      description: 安装级唯一——重装即新设备（§5.2）。
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 客户端生成，安装级唯一。
+        platform:
+          type: string
+          enum: [android]
+          description: 一期仅 Android（iOS 是二期）。
+        model: { type: string, maxLength: 100, example: Pixel 7a }
+        os_version: { type: string, maxLength: 32, example: "14" }
+        app_version: { type: string, maxLength: 32, example: 1.4.0 }
+      examples:
+        - id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+          platform: android
+          model: Pixel 7a
+          os_version: "14"
+          app_version: 1.4.0
+
+    # ------------------------------------------------------------------ 认证
+    OtpRequest:
+      type: object
+      additionalProperties: true
+      required: [email, locale]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: |
+            ⚠️ 服务端**不存明文邮箱**（§3.8）：只存 `HMAC-SHA256(lower(trim(email)), pepper)`
+            与 Vault Transit 密文。日志里也不得出现这个值——
+            `PiiRedactionProcessor` 会把它抹掉。
+        locale:
+          type: string
+          enum: [de, en]
+          description: 决定验证码邮件的语言。
+      examples:
+        - email: anna@example.de
+          locale: de
+
+    OtpChallenge:
+      type: object
+      additionalProperties: true
+      required: [challenge_id, expires_at, resend_after_seconds]
+      description: |
+        ⚠️ 无论邮箱是否存在，本对象的形状与耗时都**完全一致**（§3.8 防枚举）。
+        客户端不得据此推断账号是否存在。
+      properties:
+        challenge_id: { type: string, format: uuid }
+        expires_at:
+          type: string
+          format: date-time
+          description: 10 分钟后（§7.1）。
+        resend_after_seconds:
+          type: integer
+          minimum: 0
+          description: 重发间隔，60 秒（§7.1）。
+      examples:
+        - challenge_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+          expires_at: "2026-08-29T10:35:00Z"
+          resend_after_seconds: 60
+
+    OtpVerification:
+      type: object
+      additionalProperties: true
+      required: [challenge_id, code, device]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        code:
+          type: string
+          pattern: '^\d{6}$'
+          description: |
+            6 位数字（CSPRNG 生成）。最多 5 次尝试，超过即作废整个 challenge。
+            服务端只存 `HMAC-SHA256(code, pepper)`，比较用 `hash_equals()` 常量时间（§7.1）。
+        device: { $ref: '#/components/schemas/Device' }
+      examples:
+        - challenge_id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+          code: "418396"
+          device:
+            id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+            platform: android
+            model: Pixel 7a
+            os_version: "14"
+            app_version: 1.4.0
+
+    MagicLinkConsumption:
+      type: object
+      additionalProperties: true
+      required: [token, device]
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 512
+          description: 邮件里 Magic Link 携带的令牌。服务端只存它的哈希。
+        device: { $ref: '#/components/schemas/Device' }
+      examples:
+        - token: bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS49tK3zQ1sX7
+          device:
+            id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+            platform: android
+            model: Pixel 7a
+            os_version: "14"
+            app_version: 1.4.0
+
+    TokenRefresh:
+      type: object
+      additionalProperties: true
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 32
+          maxLength: 512
+      examples:
+        - refresh_token: 9tK3zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS4
+
+    Session:
+      type: object
+      additionalProperties: true
+      required: [access_token, expires_in, refresh_token, user]
+      properties:
+        access_token:
+          type: string
+          description: JWT，EdDSA (Ed25519)。**只存内存 + EncryptedSharedPreferences**（§7.3）。
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Access token 的剩余秒数（900 = 15 分钟）。
+          example: 900
+        refresh_token:
+          type: string
+          description: |
+            32 字节随机（Base64url），**不透明**，90 天滑动有效期。
+            仅存 EncryptedSharedPreferences，**绝不**明文写 SharedPreferences 或 Room（§7.3）。
+
+            ⚠️ 每次刷新都会轮换。重复使用一个已用过的 refresh token 会被判定为
+            令牌被窃，触发整个会话家族撤销（§7.1）。
+        user: { $ref: '#/components/schemas/User' }
+      examples:
+        - access_token: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkyZjNhMSJ9.c2ln
+          expires_in: 900
+          refresh_token: 9tK3zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS4
+          user:
+            id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+            username: anna_b
+            locale: de
+            onboarding_complete: true
+            created_at: "2026-08-29T10:30:12Z"

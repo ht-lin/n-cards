@@ -17,7 +17,8 @@ NCards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在�
 | [`android/`](android/) | Android 客户端（Kotlin / Compose / Gradle 多模块） | T-008 |
 | [`infra/`](infra/) | compose / ansible / caddy / vault / monitoring | T-003, T-012 |
 | [`scripts/`](scripts/) | 仓库运维脚本 | T-001 |
-| `.github/` | PR 与 issue 模板、CI 工作流 | T-001, T-011 |
+| `.github/` | PR 与 issue 模板、CI 工作流 | T-001, T-007, T-011 |
+| `.spectral.yaml` · [`.spectral/`](.spectral/) | 契约 lint 规则集（§13.1） | T-007 |
 
 ## 如何起本地栈
 
@@ -105,8 +106,9 @@ docker compose exec app composer test:coverage   # dev 镜像里装了 pcov
 **仓库级**（现在就能跑）：
 
 ```bash
-npm install                  # 安装 commitlint 与 husky 钩子
+npm install                  # 安装 commitlint、husky 钩子与 Spectral
 npx commitlint --from HEAD~1 # 校验最近一条 commit message
+npm run lint:api             # Spectral lint 契约（§13.1），期望 0 error / 0 warn
 ```
 
 完整质量门禁阈值见 §13.3。
