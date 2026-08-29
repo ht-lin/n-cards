@@ -9,11 +9,13 @@
   },
   "scripts": {
     "prepare": "husky",
-    "commitlint": "commitlint"
+    "commitlint": "commitlint",
+    "lint:api": "spectral lint docs/api/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.6.0",
     "@commitlint/config-conventional": "^19.6.0",
+    "@stoplight/spectral-cli": "^6.15.0",
     "husky": "^9.1.7"
   }
 }

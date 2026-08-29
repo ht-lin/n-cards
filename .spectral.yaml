@@ -1,0 +1,179 @@
+# NCards 契约 lint 规则集（§13.1 第 2 条）。
+#
+# 本地：`npm run lint:api`。CI：.github/workflows/contract.yml。
+#
+# ============================================================================
+# 两组规则，理由不同
+# ============================================================================
+# 「T-007 点名的四条」直接来自任务书与 §13.1 —— 它们保证契约本身是可用的：
+# 有 operationId 才能生成客户端方法名，有错误响应才能生成 ApiError 分支，
+# 有 example 才能被 review 和被契约测试当夹具，additionalProperties: true
+# 才能让老客户端不被新字段撞崩。
+#
+# 「守本仓库既有约定的四条」不在任务书里，但它们守的是**已经写死在代码里**的
+# 东西。契约与实现在这四点上不一致，不会在 lint 阶段被发现，而会在 T-010 的
+# Android 生成代码撞上运行时 400 的时候才被发现 —— 那时已经晚了两个任务。
+#
+# ⚠️ severity 一律 error。这个仓库只有一份契约，没有「先记个 warning 以后再说」
+# 的余地：warning 会一直在那儿，然后被下一个人当成背景噪音。
+# `npm run lint:api` 也带 --fail-severity=warn，把继承来的 warn 一并当错误。
+
+extends: ["spectral:oas"]
+
+functionsDir: ".spectral/functions"
+
+functions:
+  - hasErrorResponse
+  - additionalPropertiesTrue
+  - requiresHeaderParameter
+
+rules:
+  # ==========================================================================
+  # T-007 点名的四条
+  # ==========================================================================
+
+  # 1. 必须有 operationId。
+  #    spectral:oas 里这两条默认是 warning —— 提到 error。
+  #    T-010 用 operationId 生成 Retrofit 的方法名，缺了就只能靠路径瞎猜。
+  operation-operationId: error
+  operation-operationId-unique: error
+  operation-operationId-valid-in-url: error
+
+  # 2. 必须有错误响应。
+  ncards-operation-has-error-response:
+    description: 每个操作至少要声明一个 4xx 响应。
+    message: "{{error}}"
+    severity: error
+    given: "$.paths[*][get,put,post,delete,patch,options,head,trace]"
+    then:
+      function: hasErrorResponse
+
+  # 3. 必须有示例。
+  #    每个响应体与请求体都要能拿出一个具体的 JSON —— 它同时是 review 的锚点
+  #    和 backend/tests/Fixture/Contract/ 那批夹具的来源。
+  #    oas3-valid-media-example（继承自 spectral:oas）顺带保证示例本身合法。
+  ncards-response-content-has-example:
+    description: 每个响应的每种媒体类型都必须给 example。
+    message: "响应缺少 example：{{path}}"
+    severity: error
+    given: "$.paths[*][get,put,post,delete,patch].responses[*].content[*]"
+    then:
+      field: example
+      function: truthy
+
+  ncards-request-body-has-example:
+    description: 每个请求体的每种媒体类型都必须给 example。
+    message: "请求体缺少 example：{{path}}"
+    severity: error
+    given: "$.paths[*][put,post,patch].requestBody.content[*]"
+    then:
+      field: example
+      function: truthy
+
+  # `resolved: false` 是必需的：默认 Spectral 会先把 $ref 解开再跑规则，于是
+  # components/schemas/Problem 会变成 docs/api/schemas/problem-details.schema.json
+  # 的全文，这条规则就会去要求**那份文件**带 example —— 但那是 T-004 的产物，
+  # 由 ProblemDetailsSchemaTest 钉着，不该被本仓库的 lint 规则牵着改。
+  # 不解引用时它就还是一个 `{$ref: ...}` 节点，被 given 里的过滤器排除掉。
+  ncards-component-schema-has-example:
+    description: components/schemas 下**本文件定义**的每个 schema 都要有 example 或 examples。
+    message: "{{property}} 缺少 example/examples —— T-010 的生成器与契约测试夹具都要用它"
+    severity: error
+    resolved: false
+    given: "$.components.schemas[?(@ && !@['$ref'])]"
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          anyOf:
+            - required: [example]
+            - required: [examples]
+
+  # 4. 所有 schema 必须 additionalProperties: true（§13.1 第 5 条）。
+  #    前向兼容的地基：§13.6 允许随时新增响应字段，老客户端不能因此崩。
+  #    递归下钻，内联 schema 也查。
+  ncards-schema-additional-properties-true:
+    description: 每个 object schema 都必须显式写 `additionalProperties: true`。
+    message: "{{error}}"
+    severity: error
+    given:
+      - "$.components.schemas[*]"
+      - "$.paths[*][get,put,post,delete,patch].requestBody.content[*].schema"
+      - "$.paths[*][get,put,post,delete,patch].responses[*].content[*].schema"
+    then:
+      function: additionalPropertiesTrue
+
+  # ==========================================================================
+  # 守本仓库既有约定的四条
+  # ==========================================================================
+
+  # 5. 每个操作都必须要求 X-Client。
+  #    OpenAPI 没有「全局请求头」这个概念，只能逐操作声明。漏掉一个操作，
+  #    契约就说这个端点不需要 X-Client，而 ClientVersionListener 会在运行时
+  #    对它返回 400 —— 契约与实现当场不一致，且只有真跑起来才发现。
+  #    §6.1：X-Client 对**所有** /v1 请求必填。
+  ncards-operation-requires-x-client:
+    description: 每个操作都必须 $ref 到 components/parameters/XClient。
+    message: "{{error}}"
+    severity: error
+    given: "$.paths[*][get,put,post,delete,patch,options,head,trace]"
+    then:
+      function: requiresHeaderParameter
+      functionOptions:
+        ref: "#/components/parameters/XClient"
+        name: "X-Client"
+
+  # 6. 错误响应只能是 application/problem+json。
+  #    RFC 9457 规定的媒体类型，且**不带** charset 参数（JSON 按定义就是 UTF-8）。
+  #    写成 application/json 的话，Android 侧的错误分支会走到成功解析器上。
+  ncards-error-response-is-problem-json:
+    description: 4xx / 5xx 响应的媒体类型只能是 application/problem+json。
+    message: "错误响应的媒体类型必须是 application/problem+json，实际是 {{property}}"
+    severity: error
+    given: "$.paths[*][get,put,post,delete,patch].responses[?(@property.match(/^[45]/))].content"
+    then:
+      field: "@key"
+      function: pattern
+      functionOptions:
+        match: "^application/problem\\+json$"
+
+  # 7. 禁止 offset 风格的分页参数。
+  #    §6.1：「**不使用** offset」。这份清单逐字对齐后端的
+  #    App\Shared\Http\Pagination\CursorPaginator::FORBIDDEN_PARAMS ——
+  #    那边是运行时 400，这边是 lint 时红，两头堵住。
+  ncards-no-offset-pagination:
+    description: 分页一律游标式，禁止 offset / page / skip / per_page / start。
+    message: "禁止 offset 风格的分页参数「{{value}}」—— §6.1 要求游标分页，后端会对它返回 400 unsupported_parameter"
+    severity: error
+    given: "$..parameters[?(@.in == 'query')].name"
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "^(offset|page|skip|per_page|start)$"
+
+  # 8. v1.1 已从契约中移除的定义不得复活。
+  #    §17.2 的清单。这些不是「还没写」，是**决定不要**的：
+  #    邀请链接（C2）、邮箱加好友（C2）、所有权转让（C8）、改成员角色（只剩一种角色）。
+  #    §1.3 的范围纪律要求对它们一律拒绝，这条规则让「顺手加回来」当场变红。
+  ncards-no-removed-v11-definitions:
+    description: v1.1 已移除的定义不得出现（§17.2）。
+    message: "「{{property}}」在 v1.1 已从契约中移除（§17.2 / §1.3 范围纪律），不得复活"
+    severity: error
+    given: "$.components.schemas"
+    then:
+      field: "@key"
+      function: pattern
+      functionOptions:
+        notMatch: "^(FriendInviteLink|RedeemInviteLinkRequest|TransferOwnershipRequest|UpdateMemberRoleRequest|FriendRequestByEmail)$"
+
+  # 8b. 角色枚举恒为 [owner, viewer] —— `editor` 在 v1.1 已移除。
+  ncards-no-editor-role:
+    description: 角色只有 owner 与 viewer（v1.1 移除了 editor）。
+    message: "角色枚举里不得出现 editor —— v1.1 已移除该角色（§5.2）"
+    severity: error
+    given: "$..enum[*]"
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "^editor$"

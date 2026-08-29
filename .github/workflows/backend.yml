@@ -5,7 +5,11 @@
 # 并把 backend / android / shared 三条流水线并行编排。
 # （vault service 由 T-005 补上，见下方注释。）
 # （redis service 由 T-004 补上，见下方注释；契约测试由 T-004 起以
-#  tests/Api/ProblemDetailsContractTest 的形态存在，T-007 换成 openapi 全量校验。）
+#  tests/Api/ProblemDetailsContractTest 的形态存在，T-007 起补上了对整份
+#  docs/api/openapi.yaml 的校验：OpenApiDocumentTest 守文档本身与路由表的一致性，
+#  OpenApiContractHarnessTest 用正反夹具证明校验器真的会咬人。
+#  Problem 那部分**没有**换掉 —— openapi.yaml 的 Problem 是一个指向
+#  problem-details.schema.json 的 $ref，两条路径校验的是同一份 schema。）
 #
 # ⚠️ T-003 有意的越界：本文件原本写着「集成测试 services 由 T-011 补齐」，
 # 但 T-003 的核心验收标准是「PG 不可用时 /health/ready 返回 503」，
@@ -29,6 +33,12 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      # ⚠️ T-007 补：契约文件住在 docs/ 下，而校验它的契约测试
+      # （tests/Api/OpenApiDocumentTest、tests/Api/OpenApiContractHarnessTest）
+      # 住在 backend/ 下。没有这一行，「只改 openapi.yaml、不碰 backend/**」的 PR
+      # 根本不会触发本流水线 —— 契约与实现的漂移当场溜过去，
+      # 而那正是这两条测试唯一的存在理由。
+      - 'docs/api/**'
       - '.github/workflows/backend.yml'
 
 permissions:

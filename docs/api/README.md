@@ -1,15 +1,70 @@
 # API 契约
 
-`openapi.yaml`（OpenAPI **3.1**）是 API 的**唯一真相源**（§13.1）。**由 T-007 交付**，尚不存在。
+`openapi.yaml`（OpenAPI **3.1**）是 API 的**唯一真相源**（§13.1）。由 T-007 交付。
 
-## 已交付：`schemas/problem-details.schema.json`（T-004）
+```bash
+npm install
+npm run lint:api      # Spectral，见下方「CI 校验」
+```
+
+## 首版覆盖了什么（T-007）
+
+**Auth（5 个）+ Cards（6 个）+ 全套通用组件**。
+
+§6.2 的其余端点 —— Me/Devices、Sharing、Friends、Sync、`/v1/config` ——
+**故意还没在里面**。这不是遗漏，是「契约优先」的正常工作方式：端点与它的 schema
+由**拥有它的那个任务**在同一个 PR 里一并加进来（§13.1 第 1 条）。提前把 schema
+全摆好，只会得到一堆没人对照实现校对过的定义，和 Spectral 的
+`oas3-unused-component` 告警。
+
+通用组件已经全部就位，补端点时直接 `$ref` 即可：
+
+| 组件 | 内容 |
+|---|---|
+| `schemas/Problem` | `$ref` 到 `schemas/problem-details.schema.json`（见下） |
+| `schemas/CardPage` | 通用列表信封 `{items, next_cursor, has_more}` |
+| `parameters/` | `XClient`、`IdempotencyKey`、`IfMatch`、`CardId`、`Cursor`、`Limit` |
+| `headers/` | `XRequestId`、`IdempotencyReplayed`、`RetryAfter`、`XRateLimitRemaining` |
+| `responses/` | 12 个可复用错误响应：400 / 401 / 403 / 404 / 409 / 413 / 415 / 422 / 426 / 429 / 500 / 503 |
+| `securitySchemes/bearerAuth` | 全局默认；auth 组各自 `security: []` 覆盖 |
+
+## 三条测试守着这份契约（T-007）
+
+| 测试 | 守什么 |
+|---|---|
+| `backend/tests/Api/OpenApiDocumentTest` | 契约与**仓库里已经写死的东西**是否还对得上：路由表、`ErrorCode`、`ClientVersion`、`CursorPaginator` |
+| `backend/tests/Api/OpenApiContractHarnessTest` | 校验器**能不能咬人** —— 契约自己的 example 正向全过，改坏之后必须被拒 |
+| `.spectral.yaml`（`npm run lint:api`） | 契约本身写得对不对 |
+
+其中最要紧的一条是 `OpenApiDocumentTest::testEveryProductApiRouteIsDeclaredInTheContract()`
+—— **它是 §13.1「契约优先」在 CI 里的强制点**：路由表里每条 `/v1` 路由都必须在契约里
+找得到。今天 `/v1` 下只有 `when@test` 的探针，这条断言空过；从第一个真实端点（T-103）
+落地那天起，「先写 Controller、忘了改 openapi.yaml」的 PR 当场红。
+
+它是 `RouteInventoryTest` 的对偶：那条守「谁可以不在 `/v1` 下」，这条守
+「在 `/v1` 下的都必须在契约里」。
+
+> **给下一个改契约的人**：`docs/api/**` 同时触发 `contract` 与 `backend` 两条流水线
+> （`backend.yml` 的 `paths` 里加了 `docs/api/**`）。少了后者，只改契约不碰
+> `backend/**` 的 PR 就跑不到上面三条测试里的前两条。
+
+## `schemas/problem-details.schema.json`（T-004）
 
 RFC 9457 Problem Details 的 JSON Schema（draft 2020-12）—— §6.1 错误响应的形状。
 T-004 的验收标准要求「契约测试能对 Problem Details schema 校验通过」，而 T-007
-还没交付 `openapi.yaml`，所以这份 schema 先独立落地。
+当时还没交付 `openapi.yaml`，所以这份 schema 先独立落地。
 
-**⚠️ 给 T-007**：`components/schemas/Problem` 必须用 `$ref` **指向**这个文件，
-**不要复制一份** —— 两份 `code` 枚举必然会漂。
+**T-007 已照办**：`components/schemas/Problem` 是一个指向这个文件的 `$ref`，
+**没有复制一份**。两条测试钉着这一点：
+
+- `OpenApiDocumentTest::testProblemSchemaIsAReferenceToTheSharedFileNotACopy()`
+  看**未解引用**的 yaml —— 复制一份的话解引用后的结果一模一样，只有原始形态能分辨。
+- `OpenApiDocumentTest::testResolvedProblemCodeEnumMatchesErrorCode()`
+  看**解引用之后**的结果 —— `$ref` 指错文件、或路径变化让解引用悄悄退化成空 schema，
+  都会在这里红。
+
+因此「对着这份 JSON Schema 校验」与「对着契约里的 Problem 校验」是同一件事，
+`ProblemDetailsContractTest` 不需要再走一遍 yaml。
 
 三方一致由 CI 强制：
 
@@ -33,7 +88,9 @@ T-004 的验收标准要求「契约测试能对 Problem Details schema 校验�
 ```
 
 `has_more` 为 `false` 时 `next_cursor` 恒为 `null`。名字沿用 §5.4.2 的同步响应，
-唯一的新名字是 `items`。T-007 只需 schematise 一次，不必给七个列表端点各写一遍。
+唯一的新名字是 `items`。T-007 只 schematise 了一次（`components/schemas/CardPage`）。
+将来别的列表端点照抄它、只换 `items` 的元素类型，**不要**把
+`next_cursor` / `has_more` 在每个端点里重写一遍。
 
 ### 两个 Content-Type
 
@@ -47,9 +104,9 @@ T-004 的验收标准要求「契约测试能对 Problem Details schema 校验�
 
 ### 自定义响应头（T-004 / T-006）
 
-标准里没有这几个，但它们是契约的一部分。**T-007 必须把它们写进 `openapi.yaml`，
-T-010 的拦截器必须读它们** —— 否则客户端无从区分「真的执行了」与「拿到了回放」，
-也无从知道该等多久重试。
+标准里没有这几个，但它们是契约的一部分。**T-007 已经把它们写进 `openapi.yaml`
+（`components/parameters/*` 与 `components/headers/*`），T-010 的拦截器必须读它们**
+—— 否则客户端无从区分「真的执行了」与「拿到了回放」，也无从知道该等多久重试。
 
 | Header | 出现在 | 含义 | 交付 |
 |---|---|---|---|
@@ -80,9 +137,57 @@ T-010 的拦截器必须读它们** —— 否则客户端无从区分「真的�
 4. Android：`android/core/network/api` 由 `openapi-generator`（`kotlin` + `retrofit2` + `kotlinx-serialization`）生成，**提交入库但禁止手改** —— CI 重新生成并 diff，不一致即失败。
 5. 所有 schema 必须 `additionalProperties: true`（前向兼容）；客户端必须 `ignoreUnknownKeys = true`。
 
+> ⚠️ **第 5 条在「请求」方向上的含义**（T-007 补）：它的目的是让**客户端**前向兼容
+> —— 服务端将来加响应字段时，老客户端不能因为多了一个键就崩。
+>
+> 但后端对**请求体**里的未知字段是**主动拒绝**的（`400 validation_failed` +
+> `errors[].code = unknown_field`）。也就是说契约在请求方向上比实现**宽**：
+> 它描述的是「最大可接受形状」，不是「服务端保证接受任意字段」。
+>
+> 不要为了「让契约和实现一致」把请求 schema 改成 `additionalProperties: false`
+> —— 那会让 §13.6 明确允许的「新增可选请求字段」变成破坏性变更。
+
 ## CI 校验（T-007 起）
 
-Spectral 自定义规则集：必须有 `operationId`、必须有错误响应、必须有示例、所有 schema `additionalProperties: true`。
+`.spectral.yaml` + `.spectral/functions/`，本地 `npm run lint:api`，
+CI 跑在 `.github/workflows/contract.yml`（T-011 会并进 `shared` 流水线）。
+
+**任务书点名的四条**
+
+| 规则 | 为什么 |
+|---|---|
+| 必须有 `operationId` | T-010 用它生成 Retrofit 的方法名 |
+| 必须有错误响应（至少一个 4xx） | 没有的话生成的客户端对这个端点没有任何错误分支 |
+| 必须有示例 | 示例同时是 review 的锚点与 `OpenApiContractHarnessTest` 的夹具 |
+| 所有 object schema `additionalProperties: true` | 前向兼容的地基（递归下钻，内联 schema 也查） |
+
+**另加四条，守的是已经写死在代码里的东西**
+
+| 规则 | 守什么 |
+|---|---|
+| `ncards-operation-requires-x-client` | OpenAPI 没有「全局请求头」，只能逐操作声明。漏一个，契约就说该端点不需要 `X-Client`，而 `ClientVersionListener` 会在运行时 400 |
+| `ncards-error-response-is-problem-json` | 错误响应写成 `application/json` 会让 Android 把它喂给成功解析器 |
+| `ncards-no-offset-pagination` | 逐字对齐 `CursorPaginator::FORBIDDEN_PARAMS`。那边运行时 400，这边 lint 时红 |
+| `ncards-no-removed-v11-definitions` / `ncards-no-editor-role` | §17.2 的 v1.1 已删定义与 `editor` 角色不得复活（§1.3 范围纪律） |
+
+`npm run lint:api` 带 `--fail-severity=warn` 是刻意的：`spectral:oas` 里不少有价值
+的检查默认是 warning，而这个仓库只有一份契约，没有「先记个 warning 以后再说」的
+余地 —— warning 会一直在那儿，然后被下一个人当成背景噪音。
+
+## ⚠️ 给 T-010：外部 `$ref` 有三个消费者
+
+`components/schemas/Problem` 是 `$ref: './schemas/problem-details.schema.json'`
+—— 一个跨文件的相对引用。T-007 已经验证了其中两个消费者能解析它：
+
+- **Spectral**：能（`npm run lint:api` 绿）。
+- **`league/openapi-psr7-validator` 0.24**（底层 `devizzent/cebe-php-openapi`）：能。
+  `OpenApiDocumentTest::testResolvedProblemCodeEnumMatchesErrorCode()` 断言解引用后
+  真的拿到了那 26 个 `code`。
+
+第三个 —— **`openapi-generator`** —— 在 T-007 里验不了（Android 工程属于 T-008）。
+如果它解不开这个跨文件引用，出路是**加一个 bundle 步骤**（`npm run bundle:api`，
+产出内联版 `openapi.bundled.yaml` 只供生成器消费），**不要**把 schema 内联回
+`openapi.yaml` —— 那就等于放弃「只有一份 `code` 枚举」这个由三条测试守着的性质。
 
 ## 演进规则（§13.6）
 

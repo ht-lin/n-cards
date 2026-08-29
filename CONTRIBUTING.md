@@ -69,6 +69,23 @@ npm install
 3. Android 的 `core:network:api` 由 `openapi-generator` 生成，**提交入库但禁止手改**；CI 会重新生成并 diff，不一致即失败。
 4. 所有 schema 必须 `additionalProperties: true`；客户端反序列化必须 `ignoreUnknownKeys = true`。
 
+改完契约，**在提 PR 之前**跑这两条（T-007 起）：
+
+```bash
+npm run lint:api                                  # Spectral，0 error / 0 warn
+cd backend && vendor/bin/phpunit --testsuite Api  # 契约测试
+```
+
+`docs/api/**` 会同时触发 `contract` 与 `backend` 两条流水线 —— 契约文件在 `docs/` 下，
+但校验它的测试在 `backend/` 下，两条都得绿。
+
+⚠️ 加新端点时最容易漏的一条：每个操作都要 `$ref` 到
+`#/components/parameters/XClient`。OpenAPI 没有「全局请求头」，漏掉的话契约会说
+这个端点不需要 `X-Client`，而后端会在运行时返回 400。Spectral 的
+`ncards-operation-requires-x-client` 会拦下来。
+
+规则集与三条守护测试的完整说明见 [`docs/api/README.md`](docs/api/README.md)。
+
 API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚举值（前提是客户端有 `UNKNOWN` 兜底）；**禁止**在 `/v1` 内删除或重命名字段、改类型、把可选变必填、收紧校验、改变错误 `code` 的含义。破坏性变更 → 新增 `/v2`，`/v1` 至少并行 6 个月。
 
 ## 5. 数据库迁移（MUST，§13.5）
