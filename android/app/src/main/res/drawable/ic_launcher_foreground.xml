@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  占位图标：一张卡片的轮廓 + 条码线条。矢量而非 PNG —— 不占包体（§9.1 的
+  APK ≤ 20 MB），且不需要往仓库里塞二进制。正式图标由 T-454（Play 上架材料）交付。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,38h48a4,4 0,0 1,4 4v24a4,4 0,0 1,-4 4h-48a4,4 0,0 1,-4 -4v-24a4,4 0,0 1,4 -4z"
+        android:fillAlpha="0.28" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,44h3v20h-3zM40,44h2v20h-2zM45,44h4v20h-4zM52,44h2v20h-2zM57,44h3v20h-3zM63,44h2v20h-2zM68,44h4v20h-4z" />
+</vector>

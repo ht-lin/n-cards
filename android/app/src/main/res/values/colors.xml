@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<resources>
+    <!-- 启动窗口背景。与 core:designsystem 的 NcardsNeutral99 一致。 -->
+    <color name="ncards_window_background">#FDFCFF</color>
+    <!-- 自适应图标背景。与 NcardsBlue40 一致。 -->
+    <color name="ncards_launcher_background">#1B5E9C</color>
+</resources>

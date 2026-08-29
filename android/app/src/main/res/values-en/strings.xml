@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  English translations. The **default** locale is German and lives in values/ (§11.1).
+  Every string in values/strings.xml must have an entry here — MissingTranslation
+  is an error (§13.3).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
+
+    <string name="app_name">NCards</string>
+
+    <string name="skeleton_title">NCards</string>
+    <string name="skeleton_body">The app skeleton is in place. Card management follows shortly.</string>
+    <string name="skeleton_refresh_content_description">Refresh view</string>
+
+</resources>

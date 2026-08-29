@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/。
+  §11.1 原文：「默认资源目录放德语，因为主要市场是德国，且避免『英语兜底』
+  在德语环境下漏翻」。
+
+  **不要**把这份挪到 values-de/ 再把英语搬进来。那一刻起，德语环境下每一条
+  漏翻的文案都会静默显示英语，而 MissingTranslation 只查反方向、查不出来。
+  checkGermanIsDefaultLocale 任务会拦下这个改动（见 build-logic/…/GermanDefaultLocale.kt）。
+
+  tools:locale="de" 让 IDE 与 lint 按德语做拼写检查；不写的话会产出一堆假告警，
+  然后所有人开始忽略这一类告警。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <string name="app_name">NCards</string>
+
+    <!-- 骨架页面。由 T-151（Onboarding）与 T-153（钱包列表）替换。 -->
+    <string name="skeleton_title">NCards</string>
+    <string name="skeleton_body">Das Gerüst der App steht. Die Kartenverwaltung folgt in Kürze.</string>
+    <string name="skeleton_refresh_content_description">Ansicht aktualisieren</string>
+
+</resources>

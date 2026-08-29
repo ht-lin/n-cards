@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Compose 应用只需要一个「不带 ActionBar 的空壳主题」——真正的主题在
+  core:designsystem 的 NcardsTheme（§12.3）。这里的颜色只在 Compose 接管之前的
+  那几帧可见（启动窗口背景）。
+-->
+<resources>
+
+    <style name="Theme.NCards" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ncards_window_background</item>
+    </style>
+
+</resources>

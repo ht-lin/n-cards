@@ -1,0 +1,70 @@
+# detekt 配置（§13.3：0 weighted issues，配置文件纳入版本控制）。
+#
+# buildUponDefaultConfig = true（见 build-logic 的 NcardsQualityPlugin），
+# 所以本文件只写**与默认不同**的部分，不是一份完整规则集。
+# 完整默认见 https://detekt.dev/docs/introduction/configurations
+
+build:
+  # §13.3 原文「0 weighted issues」。这是那句话唯一的落点。
+  maxIssues: 0
+
+config:
+  # 本文件与 detekt 自带默认合并时，若出现已废弃/拼错的键就直接失败 ——
+  # 否则升级 detekt 之后，一条写错名字的规则会静默失效，而 CI 依旧全绿。
+  validation: true
+  warningsAsErrors: false
+
+complexity:
+  LongParameterList:
+    # Composable 的参数天然多（每个可配置项一个 lambda + 一个默认值），
+    # 12 是 Compose 代码里常见的健康上限。
+    functionThreshold: 12
+    constructorThreshold: 8
+    ignoreDefaultParameters: true
+  TooManyFunctions:
+    # 一个 designsystem 文件里放十几个小 Composable 是正常的组织方式。
+    thresholdInFiles: 30
+    thresholdInClasses: 20
+    ignorePrivate: true
+
+naming:
+  FunctionNaming:
+    # @Composable 函数按约定用 PascalCase，与 Kotlin 的函数命名规范冲突。
+    # 这是 Compose 项目的标准豁免。
+    ignoreAnnotated:
+      - 'Composable'
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][_A-Za-z0-9]*'
+
+style:
+  MagicNumber:
+    ignoreAnnotated:
+      - 'Composable'
+    # dp / sp 字面量在 designsystem 与 UI 代码里到处都是，把它们逼成常量
+    # 只会得到一堆 `private const val PADDING_16 = 16`。
+    ignoreNumbers:
+      - '-1'
+      - '0'
+      - '1'
+      - '2'
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+  MaxLineLength:
+    maxLineLength: 120
+    excludeCommentStatements: false
+  # §13.3 的「TODO 必须带 issue 编号」由 T-011 的通用扫描负责（后端 / Android 同一条规则），
+  # 这里不重复实现 —— 两处实现必然会漂。
+  ForbiddenComment:
+    active: false
+
+# §7.3：release 构建不得输出任何日志；Timber 只在 debug 种 DebugTree。
+# 这条规则挡的是直接用 android.util.Log 绕过 Timber。
+# T-011 的敏感日志扫描是另一层（禁止把实体对象插值进日志），两者不重叠。
+potential-bugs:
+  active: true
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: true
+  SwallowedException:
+    active: true
