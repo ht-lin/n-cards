@@ -1,0 +1,43 @@
+# ktlint 的配置源（§13.3）。仓库根的 .editorconfig 定的是缩进与换行，
+# 这里只补 ktlint 专有的键 —— 两份文件由 EditorConfig 的层叠机制合并。
+
+[*.{kt,kts}]
+ktlint_code_style = ktlint_official
+max_line_length = 120
+
+# Compose 的 @Composable 函数按约定用 PascalCase，与 Kotlin 函数命名规则冲突。
+# detekt.yml 里 FunctionNaming 也做了同样的豁免 —— 两个工具都要单独说一遍。
+ktlint_function_naming_ignore_when_annotated_with = Composable
+
+# ⚠️ 关掉 multiline-expression-wrapping（ktlint_official 独有的一条）。
+#
+# 它要求任何多行表达式在赋值号后另起一行，于是
+#
+#     internal val NcardsTypography = Typography(
+#         displaySmall = TextStyle(…),
+#     )
+#
+# 会被强制改写成
+#
+#     internal val NcardsTypography =
+#         Typography(
+#             displaySmall =
+#                 TextStyle(…),
+#         )
+#
+# 整份 Type.kt / Theme.kt 因此多缩进两级、多出一半行数，可读性净损失。
+# Compose 代码里到处是这种嵌套的具名参数构造，这条规则的代价会一直复利下去。
+# 其余 ktlint_official 规则全部保留。
+ktlint_standard_multiline-expression-wrapping = disabled
+
+ij_kotlin_allow_trailing_comma = true
+ij_kotlin_allow_trailing_comma_on_call_site = true
+
+[*.kts]
+# 构建脚本里 `libs.versions.compileSdk.get().toInt()` 是版本目录的标准用法，
+# 被 chain-method-continuation 拆成四行纯属噪音。只对 .kts 关，.kt 里仍然生效。
+ktlint_standard_chain-method-continuation = disabled
+
+# 生成代码不参与格式检查（core:network:api 是 openapi-generator 产物，禁止手改）。
+[**/generated/**.{kt,kts}]
+ktlint = disabled

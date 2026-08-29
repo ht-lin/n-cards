@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ §7.3 的三条客户端安全设置**不在本任务范围**，由 T-009 一并加入：
+  android:allowBackup="false"、android:dataExtractionRules（排除全部数据）、
+  networkSecurityConfig（cleartextTrafficPermitted="false"）。
+  它们与 Room + SQLCipher 是同一件事的两面 —— 本地库加密了但允许云备份，
+  等于把密文和 Keystore 包裹一起交出去。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:name=".NcardsApplication"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.NCards">
+
+        <!--
+          §7.3：所有 Activity 默认 exported="false"，仅必要的入口显式导出。
+          MainActivity 是启动入口，必须 exported="true"。
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.NCards">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

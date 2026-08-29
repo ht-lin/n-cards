@@ -17,7 +17,7 @@ NCards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在�
 | [`android/`](android/) | Android 客户端（Kotlin / Compose / Gradle 多模块） | T-008 |
 | [`infra/`](infra/) | compose / ansible / caddy / vault / monitoring | T-003, T-012 |
 | [`scripts/`](scripts/) | 仓库运维脚本 | T-001 |
-| `.github/` | PR 与 issue 模板、CI 工作流 | T-001, T-007, T-011 |
+| `.github/` | PR 与 issue 模板、CI 工作流 | T-001, T-007, T-008, T-011 |
 | `.spectral.yaml` · [`.spectral/`](.spectral/) | 契约 lint 规则集（§13.1） | T-007 |
 
 ## 如何起本地栈
@@ -93,15 +93,28 @@ docker compose exec app composer test:coverage   # dev 镜像里装了 pcov
 
 细则见 [`backend/README.md`](backend/README.md)。
 
-**Android**（在 `android/`）：
+**Android**（在 `android/`，T-008 已交付）：
 
-> ⏳ **尚未可用** —— Android 工程由 **T-008** 交付。届时：
+前置：JDK 17 + Android SDK platform 37.1。首次需要写一次 `local.properties`
+（不入库）：
 
 ```bash
-./gradlew ktlintCheck detekt lint
+cd android
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+./gradlew ktlintCheck detekt          # §13.3 的风格门禁
+./gradlew :app:lintDebug              # Android Lint，一遍覆盖全部模块
+./gradlew checkGermanIsDefaultLocale  # 德语必须是默认资源目录（§11.1）
 ./gradlew testDebugUnitTest
 ./gradlew assembleDebug
+
+./gradlew -p build-logic test         # 模块依赖规则表的单测
+tools/module-graph-selftest.sh        # 证明违规依赖真的会让构建失败
 ```
+
+§12.3 的四条模块依赖规则由 Gradle 在**配置期**强制（`feature:*` 之间互相依赖会
+直接构建失败），见 [ADR-0006](docs/adr/0006-android-module-graph-enforcement.md)。
+细则见 [`android/README.md`](android/README.md)。
 
 **仓库级**（现在就能跑）：
 

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Android Lint 配置（§13.3）。由 build-logic 的 AndroidCommon.kt 通过
+  `lint.lintConfig = rootProject.file("lint.xml")` 挂给每个 Android 模块。
+
+  §13.3 原文：「Android Lint 0 error 级；HardcodedText、MissingTranslation、
+  ContentDescription 提升为 error」。下面三条就是那句话。
+
+  ⚠️ 刻意**不开** warningsAsErrors。AGP 每次升级都会带来一批新 warning，
+  一刀切会让「升 AGP」变成一次无法预估工作量的重构。要新增哪条，在这里点名。
+-->
+<lint>
+
+    <!--
+      §11.1：所有用户可见字符串必须在 strings.xml。
+
+      ⚠️ **这条规则只查 XML 布局属性**（android:text="…"），而 §4.3 的选型是
+      「全 Compose，无 XML 布局」—— 对本项目它一次都不会触发。
+      T-008 实测：往 MainActivity 里塞一个 Text("hardcoded") 再跑 :app:lintDebug，
+      结果是 BUILD SUCCESSFUL。
+
+      保留它是因为 §13.3 点名要求，且 Glance widget（T-254）与将来可能出现的
+      RemoteViews 仍是 XML。**Compose 那一半由 `./gradlew checkComposeHardcodedText`
+      负责**（build-logic 的 ComposeHardcodedText.kt）—— 只配这一条等于没配。
+    -->
+    <issue id="HardcodedText" severity="error" />
+
+    <!--
+      §11.1：德语（values/）有的每一条，英语（values-en/）都必须有。
+      注意这条只查「默认语言有、翻译没有」这一个方向 —— 反方向由
+      checkGermanIsDefaultLocale 任务守（见 build-logic 的 GermanDefaultLocale.kt）。
+    -->
+    <issue id="MissingTranslation" severity="error" />
+
+    <!--
+      §11.2：全部图标按钮必须有 contentDescription；装饰性图片显式传 null。
+      目标用户含大量银发群体，TalkBack 可用性是产品竞争力而不是合规负担。
+
+      ⚠️ 与 HardcodedText 同一个局限：这条也是查 XML（ImageView）。Compose 侧
+      Material3 的 Icon/Image 把 contentDescription 做成了**必填参数**，由编译器保证
+      「有没有传」；「传的是不是硬编码字面量」由 checkComposeHardcodedText 保证。
+      真正查不到的是「该给说明的图标传了 null」—— 那需要人工评审，属 T-452。
+    -->
+    <issue id="ContentDescription" severity="error" />
+
+    <!--
+      骨架期的降噪：这两条在空模块上必然触发，且与本任务无关。
+      GradleDependency / NewerVersionAvailable：版本由 libs.versions.toml 统一管，
+      lint 在这里报「有新版本」只会与 §12.3 的唯一声明处打架。
+    -->
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+
+    <!--
+      generated 目录不参与 lint：core:network:api 是 openapi-generator 产物，
+      §13.1 第 3 条明写禁止手改。对它报问题只会逼人去改不该改的文件。
+    -->
+    <issue id="all">
+        <ignore path="**/generated/**" />
+        <ignore path="**/build/**" />
+    </issue>
+
+</lint>

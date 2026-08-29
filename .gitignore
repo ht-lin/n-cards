@@ -30,6 +30,10 @@ backend/config/reference.php
 
 # --- Android / Gradle（T-008 起） ---
 .gradle/
+# ⚠️ `build/` 匹配**任意层级**上名为 build 的目录，包括 Kotlin 的包目录。
+# T-008 的 convention plugin 因此用包名 `de.ncards.buildlogic` 而不是
+# `de.ncards.build` —— 后者的源码会被这一行静默吞掉，`git add -A` 之后
+# build-logic 里一个 .kt 都不会入库，而本地构建照样是绿的。
 build/
 android/local.properties
 android/captures/

@@ -1,0 +1,116 @@
+# Android 质量门禁（§13.3）。由 T-008 交付的最小版本。
+#
+# T-011 会在此基础上补齐：Gradle Managed Device 上的 instrumentation 测试
+# （api 26 + api 34）、`koverVerify` 覆盖率门禁、生成代码 diff
+# （core:network:api 与契约重新生成一致，需 T-010 先落地）、
+# assembleRelease 与 APK 大小回归（≤ +500 KB），
+# 并把 backend / android / shared 三条流水线并行编排。
+#
+# ⚠️ 本 workflow 带 paths 过滤，因此**不要**把它加进
+# scripts/setup-branch-protection.sh 的 required_status_checks ——
+# 不碰 android/** 的 PR 永远不会上报这个 context，配上
+# strict_required_status_checks_policy 会把那类 PR 永久卡死。
+# 与 backend.yml / contract.yml 顶部是同一个坑，同样留给 T-011 统一处理
+# （通常是加一个总是运行的 merge-gate job）。
+#
+# ⚠️ 覆盖率门禁（§13.3：core:* 与 data:* 行覆盖 ≥ 70%）**阈值已经配好**
+# （build-logic 的 Coverage.kt），但这里刻意不跑 `koverVerify`：
+# T-008 交付的 30 个模块里有 28 个是空壳，分母为 0，现在跑只会得到一个假绿，
+# 然后在第一个真正写代码的任务里突然变红。由 T-011 在 T-009/T-010 之后打开。
+
+name: android
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  quality-gates:
+    name: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17：AGP 9.3.2 的 Gradle module metadata 声明 org.gradle.jvm.version = 17，
+      # 且 build-logic 与全部模块都编到 JVM 17（见 AndroidCommon.kt 的 compileOptions）。
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # 这一步同时提供 Gradle 的构建缓存与配置缓存的落盘。
+      # wrapper 的 distributionSha256Sum 已经钉在 gradle-wrapper.properties 里，
+      # 所以这里不需要额外校验分发包。
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      # ① 规则表本身对不对（穷举正反例 + settings.gradle.kts 覆盖率断言）。
+      #    放在最前面：它是毫秒级的，且失败原因最容易读。
+      - name: 模块依赖规则单测（§12.3）
+        run: ./gradlew -p build-logic test --no-daemon
+
+      # ② 规则真的接在构建上（注入违规依赖，断言构建红）。
+      #    ① 全绿但 ② 红 = 规则表是对的，但插件没被应用到某处 —— 两条缺一不可，
+      #    理由见脚本头部。
+      - name: 模块依赖规则自检（§12.3 / T-008 验收标准）
+        run: tools/module-graph-selftest.sh
+
+      - name: ktlint（§13.3：0）
+        run: ./gradlew ktlintCheck
+
+      - name: detekt（§13.3：0 weighted issues）
+        run: ./gradlew detekt
+
+      # 德语必须是默认资源目录（§11.1 / T-008 验收标准第三条）。
+      # lint 的 MissingTranslation 只查「默认语言有、翻译没有」这一个方向，
+      # 查不出「有人把德语挪进了 values-de/」—— 那正是这一步守的东西。
+      - name: 德语为默认资源目录（§11.1）
+        run: ./gradlew checkGermanIsDefaultLocale
+
+      # ⚠️ Android Lint 的 HardcodedText 只查 **XML 布局属性**，而 §4.3 的选型是
+      # 「全 Compose，无 XML 布局」—— 它对本项目是空转的（T-008 实测：往 MainActivity
+      # 里塞一个 Text("hardcoded") 再跑 :app:lintDebug，结果是 BUILD SUCCESSFUL）。
+      # 这一步补上 Compose 那一半，见 build-logic 的 ComposeHardcodedText.kt。
+      - name: Compose 文案不得硬编码（§11.1）
+        run: ./gradlew checkComposeHardcodedText
+
+      # :app 的 lint 开了 checkDependencies = true，一遍覆盖全部依赖模块，
+      # 比 30 个模块各跑一遍快得多。
+      # HardcodedText / MissingTranslation / ContentDescription 在 android/lint.xml
+      # 里提升为 error（§13.3）。
+      - name: Android Lint（§13.3：0 error）
+        run: ./gradlew :app:lintDebug
+
+      - name: 单元测试（§13.4）
+        run: ./gradlew testDebugUnitTest
+
+      - name: assembleDebug（T-008 验收标准）
+        run: ./gradlew assembleDebug
+
+      - name: 上传失败报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            android/**/build/reports/
+            android/**/build/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

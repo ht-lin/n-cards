@@ -150,9 +150,25 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 
 后端门禁在 `backend/` 下用 `composer qa` 一键跑完，细则见 [`backend/README.md`](backend/README.md)。
 
-（完整 CI 流水线由 T-011 交付，当前仓库有 `commit-conventions` 与 `backend` 两条。
-后者带 `paths: backend/**` 过滤，因此**尚未**加进 required status checks —— 原因见
-[`.github/workflows/backend.yml`](.github/workflows/backend.yml) 头部注释。）
+（完整 CI 流水线由 T-011 交付。当前仓库有四条：`commit-conventions`、`backend`、
+`contract`、`android`。除 `commit-conventions` 外都带 `paths` 过滤，因此**都尚未**
+加进 required status checks —— 不碰对应目录的 PR 永远不会上报那个 context，配上
+strict 策略会把那类 PR 永久卡死。原因见
+[`.github/workflows/backend.yml`](.github/workflows/backend.yml) 头部注释，
+由 T-011 统一处理。）
+
+Android 侧的两条本地命令（提 PR 前跑一遍，CI 也跑）：
+
+```bash
+cd android
+./gradlew -p build-logic test     # §12.3 模块依赖规则表的单测
+tools/module-graph-selftest.sh    # 证明违规依赖真的会让构建失败
+```
+
+⚠️ **新建 Android 模块时**，除了 `settings.gradle.kts` 的 `include`，还必须让它匹配到
+`build-logic` 的 `ModuleGraph.kt` 里的一行规则 —— 匹配不到会直接构建失败。
+那是刻意的摩擦：静默放行一个不受依赖约束的模块，代价比多改一行大得多。
+见 [ADR-0006](docs/adr/0006-android-module-graph-enforcement.md)。
 
 ### `.env` 的两处例外
 
