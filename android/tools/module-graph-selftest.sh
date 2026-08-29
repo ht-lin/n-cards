@@ -29,11 +29,21 @@ cd "$(dirname "$0")/.."
 # 被注入的文件在脚本退出时一律还原 —— 包括断言失败与 Ctrl-C。
 declare -a TOUCHED=()
 
+# ⚠️ 结尾的 `return 0` 不是多余的。这是 EXIT trap，它的返回值**就是脚本的退出码**：
+# 循环体最后一次 `[ -f … ] && mv …` 求值为假时，cleanup 会带着 1 返回，
+# 于是四条断言全过、还打印了「全部通过」的脚本仍然以 exit 1 结束。
+# 这个 bug 真的发生过（CI 第一次跑 T-008 就红在这里），而本地当时没发现 ——
+# 因为验证时把脚本管道给了 `tail`，$? 拿到的是 tail 的退出码，不是脚本的。
+# 改这个函数时请用 `tools/module-graph-selftest.sh >/dev/null 2>&1; echo $?` 验证，
+# **不要**接管道。
 cleanup() {
     local file
-    for file in "${TOUCHED[@]:-}"; do
-        [ -n "$file" ] && [ -f "$file.selftest-backup" ] && mv "$file.selftest-backup" "$file"
+    for file in ${TOUCHED[@]+"${TOUCHED[@]}"}; do
+        if [ -n "$file" ] && [ -f "$file.selftest-backup" ]; then
+            mv -f "$file.selftest-backup" "$file"
+        fi
     done
+    return 0
 }
 trap cleanup EXIT
 
@@ -65,8 +75,15 @@ EOF
     exit_code=$?
     set -e
 
-    mv "$build_file.selftest-backup" "$build_file"
-    TOUCHED=("${TOUCHED[@]/$build_file}")
+    mv -f "$build_file.selftest-backup" "$build_file"
+
+    # 从待清理列表里摘掉。用重建而不是 `${TOUCHED[@]/$build_file}` ——
+    # 那是模式**替换**，会把元素置空而不是删掉，留下一串空字符串给 cleanup。
+    local remaining=() entry
+    for entry in ${TOUCHED[@]+"${TOUCHED[@]}"}; do
+        [ "$entry" = "$build_file" ] || remaining+=("$entry")
+    done
+    TOUCHED=(${remaining[@]+"${remaining[@]}"})
 
     if [ "$exit_code" -eq 0 ]; then
         echo "$output"
