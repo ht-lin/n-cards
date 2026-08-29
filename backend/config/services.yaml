@@ -101,6 +101,39 @@ services:
     # autowiring 会报一个指向 Shared 内核、根因却在 Identity 的费解错误。
     App\Shared\Application\Idempotency\IdempotencyScopeResolverInterface: '@App\Shared\Infrastructure\Http\AnonymousIdempotencyScopeResolver'
 
+    # ------------------------------------------------------------------ T-006
+    # §7.5 速率限制（config/packages/rate_limiter.yaml）。
+    App\Shared\Application\RateLimit\RateLimiterInterface: '@App\Shared\Infrastructure\RateLimit\RedisSlidingWindowRateLimiter'
+
+    # ⚠️ 与上面的 IdempotencyScopeResolverInterface 是**同一个待办**：T-1xx 落地后
+    # 两条 alias 一起指向各自的 Authenticated 版本。在那之前 RateLimitListener
+    # 回落到 IP 维度，于是 §7.5 的「全部写接口 300/min」实际按 IP 生效 ——
+    # 这依赖 framework.yaml 的 trusted_proxies（回归测试 tests/Api/TrustedProxyTest）。
+    App\Shared\Application\RateLimit\RateLimitSubjectResolverInterface: '@App\Shared\Infrastructure\Http\AnonymousRateLimitSubjectResolver'
+
+    # §7.5 系统限额（config/packages/ncards_limits.yaml）。
+    #
+    # ⚠️ 必须显式列参数：LimitEnforcer 在 Shared\Domain，而 deptrac 里
+    # `Shared.Domain` 的允许列表是**空的** —— `#[Autowire]` 属于 Framework.Core，
+    # 在那一层是 violation。类注释解释了为什么它非在 Domain 不可。
+    #
+    # 加一条限额 = 改三处：ncards_limits.yaml、SystemLimit 枚举、这里。
+    # 漏掉第三处的话，容器会因为 LimitEnforcer 少一个构造参数而拒绝编译
+    # （tests/Integration/ContainerCompilesTest 兜底），不会静默。
+    App\Shared\Domain\Limit\LimitEnforcer:
+        arguments:
+            $cardsPerUser: '%ncards.limits.cards_per_user%'
+            $membersPerCard: '%ncards.limits.members_per_card%'
+            $friendsPerUser: '%ncards.limits.friends_per_user%'
+            $friendRequestsPerDay: '%ncards.limits.friend_requests_per_day%'
+            $shareInvitesPerDay: '%ncards.limits.share_invites_per_day%'
+            $barcodePayloadBytes: '%ncards.limits.barcode_payload_bytes%'
+            $noteChars: '%ncards.limits.note_chars%'
+            $titleChars: '%ncards.limits.title_chars%'
+            $usernameMinChars: '%ncards.limits.username_min_chars%'
+            $usernameMaxChars: '%ncards.limits.username_max_chars%'
+            $usernamePattern: '%ncards.limits.username_pattern%'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 

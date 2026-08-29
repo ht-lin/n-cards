@@ -7,6 +7,7 @@ namespace App\Tests\Integration\Shared\Http;
 use App\Shared\Infrastructure\Http\ApiProblemExceptionListener;
 use App\Shared\Infrastructure\Http\ClientVersionListener;
 use App\Shared\Infrastructure\Http\IdempotencyMiddleware;
+use App\Shared\Infrastructure\Http\RateLimitListener;
 use App\Shared\Infrastructure\Http\RequestIdListener;
 use PHPUnit\Framework\Attributes\CoversNothing;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
@@ -136,7 +137,13 @@ final class ListenerOrderTest extends KernelTestCase
      */
     public function testRequestIdRunsBeforeOurOtherListeners(): void
     {
-        foreach ([ClientVersionListener::class.'::onRequest', IdempotencyMiddleware::class.'::onRequest'] as $later) {
+        $others = [
+            ClientVersionListener::class.'::onRequest',
+            RateLimitListener::class.'::onRequest',
+            IdempotencyMiddleware::class.'::onRequest',
+        ];
+
+        foreach ($others as $later) {
             self::assertRunsBefore(RequestIdListener::class.'::onRequest', $later, KernelEvents::REQUEST);
         }
     }
@@ -178,6 +185,51 @@ final class ListenerOrderTest extends KernelTestCase
         self::assertRunsBefore(
             ClientVersionListener::class.'::onRequest',
             IdempotencyMiddleware::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️ T-006：RateLimitListener 晚于路由。
+     *
+     * `POST /v1/typo` 应该直接 404，不该烧掉一次 §7.5 的写配额 ——
+     * 否则一个打错路径的客户端会把自己限死，而错误信息毫无指向性。
+     */
+    public function testRateLimitRunsAfterRouting(): void
+    {
+        self::assertRunsBefore(
+            'Symfony\Component\HttpKernel\EventListener\RouterListener::onKernelRequest',
+            RateLimitListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️⚠️ T-006：RateLimitListener **早于** IdempotencyMiddleware。
+     *
+     * 反过来的话，一个即将被限流的 POST 会先在 Redis 里占下 60 秒的在途幂等锁；
+     * 客户端按 `Retry-After` 重试时拿到的不是重放，而是
+     * `409 idempotency_in_progress` —— 排查方向直接被带偏，
+     * 而且那个键要等 60 秒才自然释放。
+     */
+    public function testRateLimitRunsBeforeIdempotency(): void
+    {
+        self::assertRunsBefore(
+            RateLimitListener::class.'::onRequest',
+            IdempotencyMiddleware::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * 也晚于 ClientVersionListener：一个即将因缺 X-Client 而 400 的请求
+     * 不该先花掉一次配额。
+     */
+    public function testRateLimitRunsAfterClientVersion(): void
+    {
+        self::assertRunsBefore(
+            ClientVersionListener::class.'::onRequest',
+            RateLimitListener::class.'::onRequest',
             KernelEvents::REQUEST,
         );
     }

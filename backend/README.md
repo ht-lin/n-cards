@@ -98,9 +98,9 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 控制器或命令 —— T-004 的 `RedisHealthCheck` 与 T-005 的 `VaultHealthCheck`
 都是这样零配置接进去的。
 
-## 跨切面契约（T-004）
+## 跨切面契约（T-004 / T-006）
 
-`/v1/*` 上的每个请求都会穿过四个监听器。优先级是承重的，由
+`/v1/*` 上的每个请求都会穿过五个监听器。优先级是承重的，由
 [`tests/Integration/Shared/Http/ListenerOrderTest`](tests/Integration/Shared/Http/ListenerOrderTest.php)
 钉死 —— 属性把优先级散在各个类文件里，那个测试是唯一能看到全貌、也是唯一能防止
 后来者随手改序的东西。
@@ -109,6 +109,7 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 |---|---:|---|---|
 | `kernel.request` | 512 | `RequestIdListener` | `X-Request-Id` 透传/生成。**必须最先** —— 后面谁抛异常都得有 id 可追 |
 | `kernel.request` | 40 | `ClientVersionListener` | 解析 `X-Client`，缺失即 400，过旧即 426。**早于路由**（32） |
+| `kernel.request` | 12 | `RateLimitListener` | §7.5「全部写接口 300/min」。**晚于路由**（打错路径不该烧配额）、**早于幂等**（被限流的请求不该抢占幂等键） |
 | `kernel.request` | 8 | `IdempotencyMiddleware` | `Idempotency-Key`。**晚于路由** —— `POST /v1/typo` 不该烧掉一个键 |
 | `kernel.response` | −256 | `IdempotencyMiddleware` | 落库（仅 2xx）或释放锁 |
 | `kernel.response` | −512 | `RequestIdListener` | 回显 `X-Request-Id` |
@@ -124,6 +125,64 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 > 每条路由要么在 `/v1/` 下，要么登记在一份显式清单里，否则 CI 红。
 > 另有 `tests/Api/ClientVersionEnforcementTest::testHealthEndpointsAreExempt`
 > 直接守着两个探活端点 —— 它红了就说明 compose 起栈与 §14.3 的部署健康检查要挂。
+
+## 限额与限流（T-006）
+
+§7.5 的两张表，**机制完全不同，不要混**：
+
+| | 超限响应 | 强制点 | 存储 |
+|---|---|---|---|
+| **系统限额** | `422 limit_exceeded` | `Shared\Domain\Limit\LimitEnforcer` | 配置常量 + 数据库计数 |
+| **速率限制** | `429 rate_limited` | `Shared\Application\RateLimit\RateLimiterInterface` | Redis 滑动窗口 |
+
+限额是绝对的存量上限（「你最多有 500 张卡」），重试永远不会成功；
+限流是频率（「你每分钟最多 30 次」），等一会儿就好。客户端的文案与重试策略都不同。
+
+**配置**：[`config/packages/ncards_limits.yaml`](config/packages/ncards_limits.yaml)（限额）、
+[`config/packages/rate_limiter.yaml`](config/packages/rate_limiter.yaml)（限流）。
+两者都由黄金对照表测试与 §7.5 逐行钉死（`LimitEnforcerTest`、`RateLimitPolicyCoverageTest`）——
+改数字而不改规格（或反过来）会红。
+
+**怎么用**
+
+```php
+// 系统限额：注入 LimitEnforcer（Shared\Domain，各模块 Application/Domain 都能用）
+$this->limits->enforceCanAdd(SystemLimit::CardsPerUser, $ownedCount);
+$this->limits->enforceLength(SystemLimit::TitleChars, $title);
+
+// 速率限制：注入 RateLimiterInterface（Shared\Application）
+$this->limiter->consumeAll([
+    new RateLimitCheck('otp_request_email', 'email:'.$emailHash),
+    new RateLimitCheck('otp_request_ip', 'ip:'.$request->getClientIp()),
+]);
+```
+
+**五条规矩**
+
+1. **主体必须带维度前缀**（`ip:` / `user:` / `email:`）。不带的话，一个 IP 字符串
+   与一个恰好相同的 device id 会共用同一个计数桶。
+2. **多维度用 `consumeAll()`，不要连着调 `consume()`。** 前者是「全过才扣」；
+   后者会让攻击者打爆共享 IP 配额后，远程烧掉任意受害者自己的 email 配额。
+3. **⚠️ 限流 fail-CLOSED，与 T-004 的幂等 fail-open 相反。** Redis 不可达 →
+   `503 service_unavailable`（不是 429：我们不是「判定超限」，是「无法判定」）。
+   唯一的例外是 `write_endpoints`（纯防 DoS，标了 `on_store_failure: allow`）。
+   两处方向相反看起来像 bug，**它不是** —— 理由见
+   [ADR-0003](../docs/adr/0003-problem-details-and-idempotency-semantics.md) §4 与
+   [ADR-0005](../docs/adr/0005-rate-limiting-topology.md)。
+4. **按 IP 限流依赖 `framework.trusted_proxies`**（T-004 已配）。
+   回归测试 [`tests/Api/TrustedProxyTest`](tests/Api/TrustedProxyTest.php) ——
+   那条没了的话，§7.5 的 IP 20/h 会把全世界算作一个 IP，而且看起来完全像是「限流生效了」。
+5. **`LimitEnforcer` 在 `Shared\Domain\Limit`，不是任务书写的 `Shared\Infrastructure\RateLimit`。**
+   deptrac 里各模块 Application 的允许列表不含 `Shared.Infrastructure` ——
+   放那儿的话 T-111 在 Wallet 层根本无法调用它。与 `ErrorCode` 同一条论证。
+
+**§7.5 里两条「总计」不在配置里**：challenge 的 5 次总计归 `otp_challenges.attempts`（T-104），
+username 的 10 次总计归 users 行（T-107）。它们是生命周期计数而不是滑动窗口，
+而 §8.2 的 ROPA 规定限流计数只保留 24 小时。
+
+**待接入（T-1xx）**：`RateLimitSubjectResolverInterface` 现在是匿名实现（回落到 IP），
+认证落地后把 `config/services.yaml` 里的 alias 指向 Authenticated 版本 ——
+与 `IdempotencyScopeResolverInterface` 是同一个待办，最好一起改。
 
 ## 加密门面（T-005）
 
