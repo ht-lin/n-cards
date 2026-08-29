@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Tests\Fixture\Http;
 
+use App\Shared\Application\RateLimit\RateLimiterInterface;
 use App\Shared\Domain\Client\ClientVersion;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
+use App\Shared\Domain\RateLimit\RateLimitCheck;
 use App\Shared\Http\Controller\AbstractApiController;
 use App\Shared\Http\Pagination\CursorPaginator;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -37,8 +39,10 @@ use Symfony\Component\Routing\Attribute\Route;
  */
 final class ProbeApiController extends AbstractApiController
 {
-    public function __construct(private readonly CursorPaginator $paginator)
-    {
+    public function __construct(
+        private readonly CursorPaginator $paginator,
+        private readonly RateLimiterInterface $limiter,
+    ) {
     }
 
     /**
@@ -140,5 +144,43 @@ final class ProbeApiController extends AbstractApiController
         }
 
         return $this->json(['status' => $status, 'nonce' => uniqid('', true)], $status);
+    }
+
+    /**
+     * 显式限流探针 —— 驱动 tests/Api/RateLimitTest。
+     *
+     * ⚠️ 主体来自 `?subject=`，由调用方每个用例传一串随机值。用固定主体的话，
+     * 同一分钟内重跑套件会因为 Redis 里的残留计数而假红 —— 而滑动窗口最短
+     * 也有 60 秒，「等一分钟再跑」不是一个可接受的开发循环。
+     *
+     * `_probe` 与 `_probe_fail_open` 两条策略只在 `when@test` 下存在
+     * （config/packages/rate_limiter.yaml），生产容器里连策略名都不存在。
+     */
+    #[Route('/v1/_probe/limited', name: 'probe_limited', methods: ['GET'])]
+    public function limited(Request $request): JsonResponse
+    {
+        $this->limiter->consume(
+            \is_string($request->query->get('policy')) ? (string) $request->query->get('policy') : '_probe',
+            'probe:'.(string) $request->query->get('subject', 'default'),
+        );
+
+        return $this->json(['allowed' => true]);
+    }
+
+    /**
+     * 多维度限流探针：两条策略同时检查，验证「全过才扣」与
+     * 「取更长的 Retry-After / 更小的 remaining」（§7.5）。
+     */
+    #[Route('/v1/_probe/limited-multi', name: 'probe_limited_multi', methods: ['GET'])]
+    public function limitedMulti(Request $request): JsonResponse
+    {
+        $subject = (string) $request->query->get('subject', 'default');
+
+        $this->limiter->consumeAll([
+            new RateLimitCheck('_probe', 'a:'.$subject),
+            new RateLimitCheck('_probe_fail_open', 'b:'.$subject),
+        ]);
+
+        return $this->json(['allowed' => true]);
     }
 }

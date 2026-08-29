@@ -1,0 +1,157 @@
+# §7.5 速率限制（T-006）。
+#
+# ============================================================================
+# 为什么不是 framework.rate_limiter
+# ============================================================================
+# 完整论证见 `docs/adr/0005-rate-limiting-topology.md`，摘要三条：
+#
+#   1. Symfony RateLimiter 的 `CacheStorage` 建在 `symfony/cache` 的 RedisAdapter 上，
+#      而那个适配器**静默吞掉** Redis 异常当作 cache miss —— 于是 Redis 一挂，
+#      限流器认为每个人都是第一次来，**静默 fail-open**。§7.5 的 OTP 与 username
+#      枚举防线在故障期间凭空消失，而且日志里只有一行 "Failed to fetch key"。
+#      这不是配置能关掉的行为。
+#   2. 它需要 `framework.cache` 起一个 Redis pool，等于开出**第二个 Redis 连接构造点**，
+#      与 `Shared\Infrastructure\Redis\RedisConnectionFactory`「全仓库唯一」的定位冲突
+#      （超时策略、客户端选型都在那一个类里）。
+#   3. `sliding_window` 的 `fetch → 计算 → save` 不加锁有竞态；加锁又要引入
+#      `symfony/lock` 与每次检查两次额外往返。
+#
+# 取而代之：`Shared\Infrastructure\RateLimit\RedisSlidingWindowRateLimiter`，
+# 一条 Lua 脚本完成清理 + 全窗口检查 + 写入，天然原子，Predis 异常直接冒泡。
+#
+# ============================================================================
+# ⚠️ 降级方向：默认 fail-CLOSED，与 T-004 的幂等**相反**
+# ============================================================================
+# ADR-0003 §4。限流 fail-open 等于在 Redis 故障期间关掉 §7.5 的 OTP 与
+# username 枚举防线 —— 那是**安全控制**，不是便利功能。
+# 这个不对称是刻意的；在代码里也有注释引用，否则 reviewer 会当成不一致顺手「修」掉。
+#
+# 唯一的例外是 `write_endpoints`，理由写在它自己那条上。
+#
+# ============================================================================
+# schema
+# ============================================================================
+#   dimension          限流主体的语义维度（只用于文档与日志，不参与计算）
+#   windows            滑动窗口列表，`limit` 次 / `window` 秒。**全部窗口同时生效**，
+#                      任一超限即拒绝，`Retry-After` 取被违反窗口里最长的那个
+#   on_store_failure   Redis 不可达时：`deny`（默认，省略即此）或 `allow`
+#
+# `tests/Unit/Shared/Infrastructure/RateLimit/RateLimitPolicyCoverageTest`
+# 拿本文件与 §7.5 的速率表逐行对照 —— 漏配一行或改一个数字都会红。
+
+parameters:
+    ncards.rate_limits:
+        # ------------------------------------------------------------ §7.1 OTP
+        # 一个键上挂三个窗口：1/min、5/h、10/day。
+        # 三个窗口共用**同一个** Redis 键（ZSET 保留到最长窗口，各窗口按 score
+        # 区间各自计数），所以三重限速的成本与单重完全相同。
+        otp_request_email:
+            dimension: email_hash
+            windows:
+                - {limit: 1, window: 60}
+                - {limit: 5, window: 3600}
+                - {limit: 10, window: 86400}
+
+        # 第二道闸：注册成本只是一个邮箱，单靠 email 维度挡不住批量注册后的轮换。
+        # ⚠️ 依赖 framework.trusted_proxies（T-004 已配）。回归测试
+        # tests/Api/TrustedProxyTest —— 那条没了的话，这里会把全世界算作一个 IP，
+        # 等于对登录端点的拒绝服务，而且看起来完全像是「限流生效了」。
+        otp_request_ip:
+            dimension: ip
+            windows:
+                - {limit: 20, window: 3600}
+
+        otp_verify_ip:
+            dimension: ip
+            windows:
+                - {limit: 60, window: 3600}
+
+        token_refresh:
+            dimension: session
+            windows:
+                - {limit: 60, window: 3600}
+
+        # ------------------------------------------------------------ §5.4 同步
+        sync_device:
+            dimension: device
+            windows:
+                - {limit: 60, window: 60}
+
+        # ------------------------------------------------------------ §3.8 枚举
+        # username 精确查找。§7.5 的旁注说明了为什么要同时按 user 和 IP：
+        # 单账号 300/day 看似很紧，但注册成本仅为一个邮箱；IP 维度是对
+        # 「批量注册 + 分摊枚举」的第二道闸。两者都触发时取更长的 Retry-After。
+        user_lookup_user:
+            dimension: user
+            windows:
+                - {limit: 30, window: 60}
+                - {limit: 300, window: 86400}
+
+        user_lookup_ip:
+            dimension: ip
+            windows:
+                - {limit: 100, window: 3600}
+
+        # ------------------------------------------------------------ 通用写接口
+        # ⚠️⚠️ 全仓库唯一的 `on_store_failure: allow`。
+        #
+        # 这一条是纯**防 DoS**，不是安全控制 —— 它挡的是「一个客户端把写接口打爆」，
+        # 而不是「攻击者枚举 username / 轰炸 OTP」。对它 fail-closed 的话，
+        # §14.2 的 Redis（单容器、无 HA）一次重启就等于全站写入 503，
+        # 正是 ADR-0003 为幂等**否决**掉的那个后果（99.5% 可用性在 30 天里
+        # 只有 3.6 小时预算）。
+        #
+        # 反过来说，上面每一条都**没有**这一行，因为它们保护的是安全边界：
+        # 关掉它们的代价不是「慢一点」，是防线消失。
+        #
+        # 副作用（刻意）：裸机无 Redis 的 `composer test` 上，本策略放行，
+        # 于是既有的 tests/Api 用例行为完全不变。
+        write_endpoints:
+            dimension: user
+            on_store_failure: allow
+            windows:
+                - {limit: 300, window: 60}
+
+    # ------------------------------------------------------------------------
+    # 仅测试环境追加的策略。生产为空 —— 见下方 `when@test`。
+    #
+    # 用一个独立参数而不是在 `when@test` 里重定义整张 `ncards.rate_limits`：
+    # 后者会**整体替换**而不是合并，于是每次改一条生产策略都要记得同步测试副本，
+    # 而忘了同步的症状是「测试全绿但生产限流没生效」。
+    # ------------------------------------------------------------------------
+    ncards.rate_limits.test_only: []
+
+# ============================================================================
+# ⚠️ §7.5 里的两条「总计」**刻意不在本文件里**
+# ============================================================================
+#   `POST /auth/otp/verify` challenge_id → 5 次总计
+#   `POST /v1/me/username`  user         → 10 次总计
+#
+# 它们不是滑动窗口，是**生命周期计数**，归持久层：
+#   - challenge 的 attempts 是 `otp_challenges` 上的一列（T-104 实现，
+#     「attempts++，> 5 或过期 → 401」）
+#   - username 的 10 次挂在 users 行上（T-107 实现，成功一次后该端点永久 409）
+#
+# 除了语义之外还有一条硬约束：§8.2 的 ROPA 规定「限流计数保留 **24 小时**」。
+# 把一个需要跨越账号生命周期的计数放进 Redis 会直接违反那条保留期 ——
+# 而 RedisSlidingWindowRateLimiter 的 TTL 正是照那条钉死在 86400 秒的。
+#
+# 登记在此是为了让「§7.5 有 11 行，这里只有 9 条」不被当成漏配。
+# RateLimitPolicyCoverageTest 里有对应的显式豁免项。
+
+when@test:
+    parameters:
+        ncards.rate_limits.test_only:
+            # tests/Fixture/Http/ProbeApiController 的 /v1/_probe/limited 用。
+            # 上限刻意取 3：既能在几次 curl 内触发 429，又足够看出「第 4 次才拒」。
+            _probe:
+                dimension: ip
+                windows:
+                    - {limit: 3, window: 60}
+
+            # 同上，但 on_store_failure: allow —— 用来验证降级分支的两个方向。
+            _probe_fail_open:
+                dimension: ip
+                on_store_failure: allow
+                windows:
+                    - {limit: 3, window: 60}

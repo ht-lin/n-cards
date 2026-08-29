@@ -45,6 +45,33 @@ T-004 的验收标准要求「契约测试能对 Problem Details schema 校验�
 `errors` 与 `current` 为空时**不出现**，不会发成 `[]` / `{}`。
 所以 schema 里不能把它们标成 `required`，T-010 的 Kotlin 模型必须给默认值。
 
+### 自定义响应头（T-004 / T-006）
+
+标准里没有这几个，但它们是契约的一部分。**T-007 必须把它们写进 `openapi.yaml`，
+T-010 的拦截器必须读它们** —— 否则客户端无从区分「真的执行了」与「拿到了回放」，
+也无从知道该等多久重试。
+
+| Header | 出现在 | 含义 | 交付 |
+|---|---|---|---|
+| `Idempotency-Key` | 请求（任意 POST，可选） | 幂等键，Redis 存 24h（§6.1） | T-004 |
+| `Idempotency-Replayed: true` | 回放命中的响应 | 本次是回放，**没有**真正执行 | T-004 |
+| `X-Client` | 所有 `/v1/*` 请求（**必填**） | `android/1.4.0 (26)`（§6.1） | T-004 |
+| `X-Request-Id` | 所有响应 | 追踪 id，与 problem body 的 `request_id` 同值 | T-004 |
+| `Retry-After` | `429` / `503` / `409 idempotency_in_progress` | **秒数**（不是 HTTP-date）。多维度限流时是**更长的**那个（§7.5） | T-006 |
+| `X-RateLimit-Remaining` | `429` | 剩余次数，多窗口取最小值。超限时恒为 `0` | T-006 |
+
+⚠️ §7.5 明文要求限流响应**必须**同时带 `Retry-After` 与 `X-RateLimit-Remaining`。
+回归测试 `backend/tests/Api/RateLimitTest`。
+
+⚠️ 限流的两种失败要分开看：
+- `429 rate_limited` —— 「我判定你超限了」，按 `Retry-After` 退避。
+- `503 service_unavailable` —— 「我**无法判定**」（Redis 不可达 + 该策略 fail-closed，
+  见 [ADR-0005](../adr/0005-rate-limiting-topology.md)）。这是服务端故障，
+  走 §5.4.3 的 outbox 重试策略。
+
+而 `422 limit_exceeded`（系统限额，§7.5 的第一张表）与限流**完全是两回事**：
+它是一个绝对的存量上限，重试永远不会成功，客户端应该展示「额度已满」而不是「稍后重试」。
+
 ## 契约优先（MUST）
 
 1. 任何接口变更**必须先改 `openapi.yaml`**，并在**同一个 PR** 内一并修改后端实现、契约测试与 Android 生成代码。

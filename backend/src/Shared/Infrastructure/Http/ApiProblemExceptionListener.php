@@ -6,6 +6,7 @@ namespace App\Shared\Infrastructure\Http;
 
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
+use App\Shared\Domain\Error\RateLimitExceeded;
 use Psr\Log\LoggerInterface;
 use Symfony\Component\EventDispatcher\Attribute\AsEventListener;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -116,7 +117,7 @@ final readonly class ApiProblemExceptionListener
                 $throwable->fieldErrors(),
                 $throwable->current(),
                 $throwable,
-                self::headersFor($code),
+                self::headersFor($code, $throwable),
             );
         }
 
@@ -194,15 +195,34 @@ final readonly class ApiProblemExceptionListener
      * §6.1：429 与 503 的响应**必须**带 `Retry-After`；
      * 409 idempotency_in_progress 也带（客户端马上重试就能拿到回放）。
      *
+     * §7.5 对限流额外要求 `X-RateLimit-Remaining`。
+     *
+     * ============================================================================
+     * 两层：精确值优先，静态默认兜底
+     * ============================================================================
+     * T-006 的 {@see RateLimitExceeded} 带着 Lua 脚本算出的**精确**等待秒数与剩余次数
+     * （多维度时已经合并过：`Retry-After` 取更长的、`remaining` 取更小的）。
+     *
+     * 但 `rate_limited` 不是只有限流器会抛 —— 上游代理返回的 429（经
+     * `mapHttpStatus()` 落到同一个 code）就没有这两个数。所以 match 的
+     * `ErrorCode::RateLimited` 分支必须留着：**这两个 header 是 §7.5 的 MUST，
+     * 缺失比给一个保守值更糟**（客户端会直接放弃退避）。
+     *
      * @return array<string, string>
      */
-    private static function headersFor(ErrorCode $code): array
+    private static function headersFor(ErrorCode $code, \Throwable $throwable): array
     {
-        // T-006 会在限流场景里显式带上更精确的 Retry-After 与 X-RateLimit-*；
-        // 这里只保证「该有的 header 一定有」，值取一个保守的默认。
+        if ($throwable instanceof RateLimitExceeded) {
+            return [
+                'Retry-After' => (string) $throwable->retryAfterSeconds(),
+                'X-RateLimit-Remaining' => (string) $throwable->remaining(),
+            ];
+        }
+
         return match ($code) {
             ErrorCode::IdempotencyInProgress => ['Retry-After' => '1'],
-            ErrorCode::RateLimited, ErrorCode::ServiceUnavailable => ['Retry-After' => '5'],
+            ErrorCode::RateLimited => ['Retry-After' => '5', 'X-RateLimit-Remaining' => '0'],
+            ErrorCode::ServiceUnavailable => ['Retry-After' => '5'],
             default => [],
         };
     }
