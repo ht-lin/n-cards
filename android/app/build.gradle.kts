@@ -23,6 +23,11 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(project(":core:ui"))
 
+    // DI 根要看得见这两个模块的 Hilt Module 才能把数据库装配起来（T-009）。
+    // 它们本身不被 UI 直接使用 —— feature 一律经 data:* 的 Repository（§12.3）。
+    implementation(project(":core:crypto"))
+    implementation(project(":core:database"))
+
     // DI 根要看得见各 data 模块的 Hilt Module 才能装配它们。
     implementation(project(":data:auth"))
     implementation(project(":data:card"))

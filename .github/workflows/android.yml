@@ -15,8 +15,13 @@
 #
 # ⚠️ 覆盖率门禁（§13.3：core:* 与 data:* 行覆盖 ≥ 70%）**阈值已经配好**
 # （build-logic 的 Coverage.kt），但这里刻意不跑 `koverVerify`：
-# T-008 交付的 30 个模块里有 28 个是空壳，分母为 0，现在跑只会得到一个假绿，
+# 30 个模块里大部分仍是空壳，分母为 0，现在跑只会得到一个假绿，
 # 然后在第一个真正写代码的任务里突然变红。由 T-011 在 T-009/T-010 之后打开。
+#
+# T-009 落地后多了一条**必须先决策**的：core:database 有意义的测试全在
+# androidTest（SQLCipher 是 JNI，Robolectric 加载不了），而 Kover 默认只统计单测。
+# 打开 koverVerify 前要选一个：把仪器测试的覆盖率并进来，还是给该模块记一条
+# 有理由的豁免。详见 android/README.md 的「已知事项」。
 
 name: android
 

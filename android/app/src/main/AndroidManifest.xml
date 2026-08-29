@@ -1,17 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ⚠️ §7.3 的三条客户端安全设置**不在本任务范围**，由 T-009 一并加入：
-  android:allowBackup="false"、android:dataExtractionRules（排除全部数据）、
-  networkSecurityConfig（cleartextTrafficPermitted="false"）。
-  它们与 Room + SQLCipher 是同一件事的两面 —— 本地库加密了但允许云备份，
-  等于把密文和 Keystore 包裹一起交出去。
+  §7.3 的三条客户端安全设置由 T-009 与 Room + SQLCipher 一并加入 ——
+  它们是同一件事的两面：本地库加密了但允许云备份，等于把密文和 Keystore
+  包裹一起交出去。
+
+  allowBackup + dataExtractionRules 两条**都要**，不是二选一：前者管备份，
+  后者还管 Android 12+ 的设备间直传（D2D），而 D2D 不看 allowBackup。
+  详见 res/xml/data_extraction_rules.xml 的注释。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
         android:name=".NcardsApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.NCards">

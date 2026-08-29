@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  §7.3：禁止明文流量。
+
+  targetSdk 28 起 cleartext 默认就是关的，显式写出来是因为「默认值」会随
+  targetSdk 变，而这条要求不会。配置文件在版本控制里，改动看得见（§13.3）。
+
+  **这里没有 <debug-overrides>。** 目前还没有网络层（T-010 才有），也就没有
+  「连本机后端」的需求。将来真要连 http://10.0.2.2 时，加的应该是 src/debug/
+  下的一份独立配置，而不是在这个文件里开一个 release 也吃得到的口子。
+
+  证书固定（§7.2 的 T15）**不在这里**：Q4 的默认结论是一期不做、记为已接受风险，
+  真要做也是 OkHttp 的 CertificatePinner（T-451），不是 network security config ——
+  后者的 pin 过期后无法远程修复。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

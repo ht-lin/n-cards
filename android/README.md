@@ -41,8 +41,8 @@ build-logic/convention/  ← ncards.android.{application,library,feature,hilt,ro
 gradle/libs.versions.toml ← 唯一依赖声明处
 ```
 
-30 个模块里目前只有 `app` 与 `core:designsystem` 有实质内容，其余是空壳，
-由各自的任务填充（每个 `build.gradle.kts` 顶部写了归属任务）。
+30 个模块里目前只有 `app`、`core:designsystem`、`core:crypto`、`core:database`
+有实质内容，其余是空壳，由各自的任务填充（每个 `build.gradle.kts` 顶部写了归属任务）。
 
 ## Convention plugins
 
@@ -114,7 +114,9 @@ tools/module-graph-selftest.sh     # 规则真的接在构建上（注入 4 条�
   而本项目是全 Compose 无 XML 布局，那条规则**一次都不会触发**（T-008 实测：
   塞一个 `Text("hardcoded")` 进 `MainActivity`，`:app:lintDebug` 依然 BUILD SUCCESSFUL）。
   §13.3 点名的三条 lint 规则**照配了**，但 Compose 那一半必须由这个任务补上。
-- **本地库加密**：Room + SQLCipher，passphrase 经 Android Keystore 包裹（T-009）。
+- **本地库加密**：Room + SQLCipher，passphrase 经 Android Keystore 包裹
+  （T-009 已交付，见下方「本地库加密」）。**永远不要**给 `NcardsDatabase` 加
+  `fallbackToDestructiveMigration()` —— 离线优先意味着本地攒着还没推上去的写入。
 - **release 不输出任何日志**：Timber 只在 debug 种 `DebugTree`（§7.3，见 `NcardsApplication`）。
 - `core:network:api` 是 openapi-generator 产物，**禁止手改**（T-010）。
 
@@ -134,6 +136,65 @@ CI 见 [`.github/workflows/android.yml`](../.github/workflows/android.yml)（T-0
 > 同样待 T-011 补的还有：instrumentation 测试（Gradle Managed Device，api 26 + 34）、
 > `assembleRelease` 与 APK 大小回归、生成代码 diff（需 T-010 先落地）。
 
+## 本地库加密（T-009）
+
+```
+core:crypto    KeyWrapper ──► KeystoreAesGcmKeyWrapper   AndroidKeyStore 里一把 AES-256-GCM
+               SecretStore ─► KeystoreSecretStore        密文写普通 SharedPreferences
+               DbPassphraseProvider                      32B SecureRandom，首次生成/复用/恢复
+core:database  SqlCipher.openHelperFactory(passphrase) ──► Room
+```
+
+**为什么落盘容器是普通 `SharedPreferences` 而不是 `EncryptedSharedPreferences`**：
+后者已被 Google 停止维护，且在这个设计里只是「Keystore 包裹」之外的第二层容器 ——
+两层都锚在同一个 Keystore 上，不提升防护强度。完整理由见
+[ADR-0007](../docs/adr/0007-android-secret-storage-without-jetpack-security.md)。
+`SecretStore` 也是 §7.3「令牌只存加密存储」的落地点，T-150 复用它。
+
+**三条不要顺手改的**
+
+| 位置 | 别改成 | 为什么 |
+|---|---|---|
+| `KeystoreAesGcmKeyWrapper` 的 `setUserAuthenticationRequired(false)` | `true` | Widget（T-254）与 FCM 后台同步（T-250）要在无用户交互时读写数据库。改了只在**真机锁屏**时复现，本地功能测试完全看不出来。这是 §3.4 的取舍，威胁模型 T08 已记录边界 |
+| `DatabaseModule` 里没有 `fallbackToDestructiveMigration()` | 加上它 | 会把 `sync_outbox` 里还没推上去的写入连同用户手输的码值一起静默抹掉 |
+| `SqlCipher.openHelperFactory` 里的 `passphrase.copyOf()` | 直接传原数组 | 工厂一直持有它。调用方 wipe 之后**第二次**开库会拿到一串 0 —— 首次安装是好的，bug 只在用户第二次打开应用时出现 |
+
+**验证方式**
+
+三条验收标准由 31 个仪器测试覆盖，已在 API 34 模拟器上跑绿：
+
+```bash
+./gradlew :core:crypto:connectedDebugAndroidTest    # 14 个：真 Keystore 上的加解包与 passphrase 持久化
+./gradlew :core:database:connectedDebugAndroidTest  # 17 个：加密落盘 + 四张表的 DAO 行为
+```
+
+| 验收标准 | 测试 |
+|---|---|
+| 外部工具打开 db 文件读不出明文 | `EncryptedDatabaseTest`：框架 `SQLiteDatabase` 打不开、文件头不是 SQLite 魔数、`.db`/`-wal`/`-shm` 三个文件里都找不到哨兵串 |
+| 进程重启后能用 Keystore 解出 passphrase | `DbPassphrasePersistenceTest.survivesSimulatedProcessRestart` |
+| 卸载重装后为全新空库 | `DbPassphrasePersistenceTest.freshInstallYieldsANewPassphrase` |
+
+⚠️ **后两条只做到「重建全部对象」这一步。** 测试自己也活在被杀的进程里，
+真·重启与真·卸载重装是仪器测试原理上做不到的。补齐它们要靠下面的手工步骤 ——
+
+⚠️ **但手工步骤现在还跑不了**：`:app` 里**没有任何人注入 `NcardsDatabase`**，
+所以运行时根本不建库（实测：安装并启动后 `databases/` 与 `shared_prefs/` 都不存在）。
+`:app` 依赖这两个模块只是为了让 Hilt 在 DI 根上看见它们的 `@Module`。
+第一个真实消费者是 **T-153 的钱包列表**，从那时起下面这段才有意义：
+
+```bash
+./gradlew :app:installDebug
+# 在应用里做一次会写库的操作（T-153 起：新建一张卡）之后：
+adb shell run-as de.ncards.debug ls -l databases/
+adb exec-out run-as de.ncards.debug cat databases/ncards.db > /tmp/ncards.db
+sqlite3 /tmp/ncards.db .tables          # 期望：Error: file is not a database
+
+adb shell am force-stop de.ncards.debug # 重启后仍能开库（Keystore 解出同一份 passphrase）
+adb shell monkey -p de.ncards.debug -c android.intent.category.LAUNCHER 1
+
+adb uninstall de.ncards.debug && ./gradlew :app:installDebug   # 重装后是全新空库
+```
+
 ## 两个自建门禁（lint 覆盖不到的地方）
 
 | 任务 | 守什么 | 为什么 lint 不行 |
@@ -147,6 +208,29 @@ CI 见 [`.github/workflows/android.yml`](../.github/workflows/android.yml)（T-0
 
 ## 已知事项
 
+- **Kover 的 70% 门禁对 `core:database` 会失真（留给 T-011 决策）。** `Coverage.kt`
+  让 `:core:*` 都吃 70% 行覆盖，但 SQLCipher 是 JNI，Robolectric 里加载不了 ——
+  这个模块有意义的测试**全在 `androidTest`**，而 Kover 默认只统计单测。
+  T-011 打开 `koverVerify` 前必须先选一个：把仪器测试的覆盖率并进来，
+  还是给 `core:database` 记一条有理由的豁免。`core:crypto` 没有这个问题
+  （逻辑分支拆到了接口后面，单测覆盖得到）。
+- **debug APK 从 11.3 MiB 涨到 30.2 MiB（+18.9 MiB），全部是 `libsqlcipher.so`。**
+  四个 ABI 各一份（arm64 5.2 MB / armeabi-v7a 3.6 MB / x86 4.9 MB / x86_64 5.7 MB）。
+  §13.3 的「APK 大小回归 ≤ +500 KB」门禁由 T-011 建立，**基线取 T-009 之后的值**。
+  发布走 AAB，Play 按 ABI 分发，用户实际下载增量约 3.5–5.7 MB，不是 18.9 MB ——
+  别拿 APK 的数字去对上架体积。
+- **`assembleRelease` 的 R8 尚未进 CI（T-011）。** SQLCipher 走 JNI 反射，是 R8 的
+  经典断裂点。好消息是 AAR 自带 consumer proguard 规则（keep 了 native 方法、
+  构造函数与 `mNativeHandle`），所以 `app/proguard-rules.pro` **不需要**额外条目 ——
+  这一条是记下来的结论，别再去加一遍。
+- **第一次改数据库 schema 的任务要先解决一个 AGP 9 的坑。** `MigrationTestHelper`
+  需要把 `schemas/*.json` 放进 androidTest 的 assets，而常见写法
+  `android { sourceSets.getByName("androidTest").assets.srcDir(...) }` 在 AGP 9 上
+  **配置期崩**（`DefaultAndroidLibrarySourceSet_Decorated cannot be cast to
+  com.android.build.gradle.api.AndroidLibrarySourceSet`）—— Kotlin DSL 的访问器
+  指向旧类型，`getByName` 与 `named { }` 都一样。细节写在
+  `core/database/build.gradle.kts` 的注释里。现在 `version = 1` 没有可迁移的东西，
+  所以没有预先埋一段没人跑过的构建配置。
 - `:app:lintDebug` 会打印一行 `Lint will treat :core:model as an external dependency
   and not analyze it` —— `core:model` 是纯 Kotlin 模块，Android Lint 本来就不分析它。
   它的约束由 Kotlin 编译器保证（那里根本没有 `android.*` 可 import）。
