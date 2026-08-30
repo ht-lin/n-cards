@@ -1,4 +1,4 @@
-# NCards 契约 lint 规则集（§13.1 第 2 条）。
+# N-Cards 契约 lint 规则集（§13.1 第 2 条）。
 #
 # 本地：`npm run lint:api`。CI：.github/workflows/contract.yml。
 #

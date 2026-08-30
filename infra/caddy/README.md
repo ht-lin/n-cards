@@ -26,4 +26,4 @@ Caddy 反向代理配置。**T-003 交付最小可用版，T-012 完善。**
   - `Content-Security-Policy: default-src 'none'`
 - 禁用 `X-Powered-By` / `Server` 版本回显
 
-验收：`curl -I https://api.staging.ncards.de` 能看到全部安全头，且无版本回显。
+验收：`curl -I https://api.staging.n-cards.de` 能看到全部安全头，且无版本回显。

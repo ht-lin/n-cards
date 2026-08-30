@@ -83,7 +83,7 @@ class ApiErrorMapperTest {
         val body =
             """
             {
-              "type": "https://api.ncards.de/problems/validation-failed",
+              "type": "https://api.n-cards.de/problems/validation-failed",
               "title": "Validation failed",
               "status": 400,
               "code": "validation_failed",
@@ -122,7 +122,7 @@ class ApiErrorMapperTest {
         val body =
             """
             {
-              "type": "https://api.ncards.de/problems/revision-conflict",
+              "type": "https://api.n-cards.de/problems/revision-conflict",
               "title": "Revision conflict",
               "status": 409,
               "code": "revision_conflict",
@@ -209,7 +209,7 @@ class ApiErrorMapperTest {
         status: Int,
         code: String,
     ) = """
-        {"type":"https://api.ncards.de/problems/x","title":"T","status":$status,
+        {"type":"https://api.n-cards.de/problems/x","title":"T","status":$status,
          "code":"$code","detail":"d","instance":"/v1/cards","request_id":"$REQUEST_ID"}
         """.trimIndent()
 

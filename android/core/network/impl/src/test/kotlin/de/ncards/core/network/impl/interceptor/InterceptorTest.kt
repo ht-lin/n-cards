@@ -83,7 +83,7 @@ class InterceptorTest {
         assertEquals(explicit, recorded.headers["X-Request-Id"])
     }
 
-    private fun config(baseUrl: String = "https://api.ncards.de/v1/") =
+    private fun config(baseUrl: String = "https://api.n-cards.de/v1/") =
         NetworkConfig(
             baseUrl = baseUrl.toHttpUrl(),
             clientHeader = CLIENT_HEADER,

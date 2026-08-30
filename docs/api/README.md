@@ -228,7 +228,7 @@ CI 跑在 `.github/workflows/contract.yml`（T-011 会并进 `shared` 流水线�
 OAS 3.1 里 `identifier` 是**可选**的，但 `openapi-generator` 的 spec 校验器把它当
 必填，不写就 `Error count: 1` 直接中止生成。另一条出路是给生成器加
 `--skip-validate-spec`，但那会连同「`$ref` 指不到」「响应少了 `content`」这类真问题
-一起关掉。所以补了 `identifier: LicenseRef-NCards-Proprietary`（SPDX 给非标准许可证
+一起关掉。所以补了 `identifier: LicenseRef-N-Cards-Proprietary`（SPDX 给非标准许可证
 留的合法形态），它是纯元数据，不碰任何 API 表面。
 
 ## 演进规则（§13.6）

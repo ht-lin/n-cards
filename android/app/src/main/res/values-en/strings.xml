@@ -6,9 +6,9 @@
 -->
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
 
-    <string name="app_name">NCards</string>
+    <string name="app_name">N-Cards</string>
 
-    <string name="skeleton_title">NCards</string>
+    <string name="skeleton_title">N-Cards</string>
     <string name="skeleton_body">The app skeleton is in place. Card management follows shortly.</string>
     <string name="skeleton_refresh_content_description">Refresh view</string>
 

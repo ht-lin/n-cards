@@ -23,7 +23,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(ApiProblemFactory::class)]
 final class ApiProblemFactoryTest extends TestCase
 {
-    private const TYPE_BASE = 'https://api.ncards.de/problems';
+    private const TYPE_BASE = 'https://api.n-cards.de/problems';
     private const INSTANCE = '/v1/cards/01941f29-7c00-70ab-8000-000000000000';
     private const REQUEST_ID = '01941f29-7c00-70ab-8000-0000000000ff';
 
@@ -198,7 +198,7 @@ final class ApiProblemFactoryTest extends TestCase
             ['revision' => 7],
         );
 
-        self::assertSame('https://api.ncards.de/problems/revision-conflict', $problem['type']);
+        self::assertSame('https://api.n-cards.de/problems/revision-conflict', $problem['type']);
         self::assertSame('Revision conflict', $problem['title']);
         self::assertSame(409, $problem['status']);
         self::assertSame('revision_conflict', $problem['code']);
@@ -214,7 +214,7 @@ final class ApiProblemFactoryTest extends TestCase
     {
         $response = self::factory()->toResponse(ErrorCode::NotFound, null, self::INSTANCE, self::REQUEST_ID);
 
-        self::assertStringContainsString('"https://api.ncards.de/problems/not-found"', (string) $response->getContent());
+        self::assertStringContainsString('"https://api.n-cards.de/problems/not-found"', (string) $response->getContent());
         self::assertStringNotContainsString('\\/', (string) $response->getContent());
     }
 

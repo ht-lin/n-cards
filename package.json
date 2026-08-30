@@ -1,9 +1,9 @@
 {
-  "name": "ncards-monorepo",
+  "name": "n-cards-monorepo",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "NCards 仓库级工具链：Conventional Commits 校验；后续承载 OpenAPI lint (T-007) 与代码生成 (T-010)",
+  "description": "N-Cards 仓库级工具链：Conventional Commits 校验；后续承载 OpenAPI lint (T-007) 与代码生成 (T-010)",
   "engines": {
     "node": ">=20"
   },

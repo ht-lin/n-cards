@@ -92,7 +92,7 @@ class ApiErrorCoverageTest {
 
     private fun problem(code: Problem.Code) =
         Problem(
-            type = URI.create("https://api.ncards.de/problems/x"),
+            type = URI.create("https://api.n-cards.de/problems/x"),
             title = "Title",
             status = 400,
             code = code,

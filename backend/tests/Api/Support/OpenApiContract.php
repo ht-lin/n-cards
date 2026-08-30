@@ -31,7 +31,7 @@ use Symfony\Component\HttpFoundation\Response;
  * ============================================================================
  * ⚠️ 契约里的路径**不带** `/v1`
  * ============================================================================
- * `servers[].url` 是 `https://api.ncards.de/v1`，所以契约里写的是 `/cards`，
+ * `servers[].url` 是 `https://api.n-cards.de/v1`，所以契约里写的是 `/cards`，
  * 而后端路由是 `/v1/cards`。这个落差由 {@see PathFinder} 消化 —— 它会拿
  * servers 的 base path 去试着剥前缀（这正是它存在的理由）。
  *

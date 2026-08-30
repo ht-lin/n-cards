@@ -152,7 +152,7 @@ docker compose exec vault vault status -address=http://127.0.0.1:8200
 #    期望：Initialized: true · Sealed: false
 
 # 2) 应用的就绪探针
-curl -o /dev/null -w '%{http_code}\n' https://api.ncards.de/health/ready
+curl -o /dev/null -w '%{http_code}\n' https://api.n-cards.de/health/ready
 #    期望：200
 #    仍然 503 → Vault 好了但别的依赖没好（PG / Redis），看应用日志
 

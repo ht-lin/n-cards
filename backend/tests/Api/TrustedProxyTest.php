@@ -110,7 +110,7 @@ final class TrustedProxyTest extends WebTestCase
             // REMOTE_ADDR 是**受信**的代理 —— 这正是这条测试的要害：
             // 即便转发链本身可信，Host 这一项依然由外部客户端说了算。
             'REMOTE_ADDR' => '127.0.0.1',
-            'HTTP_HOST' => 'api.ncards.de',
+            'HTTP_HOST' => 'api.n-cards.de',
             'HTTP_X_FORWARDED_HOST' => 'evil.example',
         ]);
 
@@ -118,7 +118,7 @@ final class TrustedProxyTest extends WebTestCase
         $body = json_decode((string) $client->getResponse()->getContent(), true, 512, \JSON_THROW_ON_ERROR);
 
         self::assertSame(
-            'api.ncards.de',
+            'api.n-cards.de',
             $body['host'],
             'X-Forwarded-Host 被信任了 —— 攻击者可以控制 Request::getHost()，'
             .'进而控制 §7.1 Magic Link 邮件里的绝对 URL。'

@@ -1,6 +1,6 @@
 {
-    "name": "ncards/backend",
-    "description": "NCards 后端：Symfony 模块化单体（§4.2 / §12.2）",
+    "name": "n-cards/backend",
+    "description": "N-Cards 后端：Symfony 模块化单体（§4.2 / §12.2）",
     "type": "project",
     "license": "proprietary",
     "minimum-stability": "stable",

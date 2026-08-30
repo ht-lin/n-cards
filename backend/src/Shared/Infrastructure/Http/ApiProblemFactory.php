@@ -145,7 +145,7 @@ final readonly class ApiProblemFactory
         $response = new JsonResponse($problem, $status, $headers);
 
         $response->setEncodingOptions(
-            // UNESCAPED_SLASHES：不然 type URI 会变成 https:\/\/api.ncards.de\/...，
+            // UNESCAPED_SLASHES：不然 type URI 会变成 https:\/\/api.n-cards.de\/...，
             // 和 §6.1 的例子对不上，客户端做字符串比较也会踩坑。
             // UNESCAPED_UNICODE：detail 是 ASCII，但 errors[].message 将来可能带用户
             // 提供的字段名，转义成 \uXXXX 只会让日志难读。
