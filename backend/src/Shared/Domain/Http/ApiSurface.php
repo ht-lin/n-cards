@@ -33,7 +33,7 @@ namespace App\Shared\Domain\Http;
 final class ApiSurface
 {
     /**
-     * 产品 API 的路径前缀（§6.1：基址 `https://api.ncards.de/v1`）。
+     * 产品 API 的路径前缀（§6.1：基址 `https://api.n-cards.de/v1`）。
      *
      * 带尾斜杠是刻意的：裸 `/v1` 本身不是端点，而 `/v1foo` 不该被当成产品 API。
      */

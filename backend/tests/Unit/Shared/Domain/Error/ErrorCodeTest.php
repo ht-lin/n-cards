@@ -125,21 +125,21 @@ final class ErrorCodeTest extends TestCase
     }
 
     /**
-     * §6.1 的例子就是这个形状：`https://api.ncards.de/problems/revision-conflict`。
+     * §6.1 的例子就是这个形状：`https://api.n-cards.de/problems/revision-conflict`。
      */
     public function testTypeUriMatchesTheSpecExample(): void
     {
         self::assertSame(
-            'https://api.ncards.de/problems/revision-conflict',
-            ErrorCode::RevisionConflict->typeUri('https://api.ncards.de/problems'),
+            'https://api.n-cards.de/problems/revision-conflict',
+            ErrorCode::RevisionConflict->typeUri('https://api.n-cards.de/problems'),
         );
     }
 
     public function testTypeUriToleratesATrailingSlashInTheBase(): void
     {
         self::assertSame(
-            'https://api.ncards.de/problems/not-found',
-            ErrorCode::NotFound->typeUri('https://api.ncards.de/problems/'),
+            'https://api.n-cards.de/problems/not-found',
+            ErrorCode::NotFound->typeUri('https://api.n-cards.de/problems/'),
         );
     }
 

@@ -1,4 +1,4 @@
-// NCards Android 构建根。模块树严格对应 §12.3。
+// N-Cards Android 构建根。模块树严格对应 §12.3。
 //
 // Gradle 根落在 android/ 而不是仓库根：仓库根是 monorepo 顶层，已经被 npm 工具链
 // 占着（package.json / .spectral.yaml / commitlint）。后端是 composer，Android 是 Gradle，

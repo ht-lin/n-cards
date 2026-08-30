@@ -19,7 +19,7 @@ class NetworkConfigTest {
     fun rejectsBaseUrlWithoutTrailingSlash() {
         assertThrows(IllegalArgumentException::class.java) {
             NetworkConfig(
-                baseUrl = "https://api.ncards.de/v1".toHttpUrl(),
+                baseUrl = "https://api.n-cards.de/v1".toHttpUrl(),
                 clientHeader = VALID_CLIENT,
             )
         }
@@ -57,7 +57,7 @@ class NetworkConfigTest {
     }
 
     private companion object {
-        const val BASE_URL = "https://api.ncards.de/v1/"
+        const val BASE_URL = "https://api.n-cards.de/v1/"
         const val VALID_CLIENT = "android/1.4.0 (26)"
     }
 }

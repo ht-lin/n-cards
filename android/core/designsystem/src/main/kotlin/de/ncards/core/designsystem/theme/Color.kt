@@ -3,7 +3,7 @@ package de.ncards.core.designsystem.theme
 import androidx.compose.ui.graphics.Color
 
 /*
- * NCards 的颜色 token（§12.3 的 core:designsystem 交付物）。
+ * N-Cards 的颜色 token（§12.3 的 core:designsystem 交付物）。
  *
  * 这里只有**应用外壳**的配色。卡片调色板（用户给每张卡选的颜色）是 **Q7**，
  * 由设计交付、阻塞 T-153，**不要在这里先编几个色值顶上** —— §11.2 要求每个

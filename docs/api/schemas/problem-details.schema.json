@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://api.ncards.de/schemas/problem-details.json",
+  "$id": "https://api.n-cards.de/schemas/problem-details.json",
   "title": "Problem Details",
-  "description": "RFC 9457 Problem Details as returned by every NCards API error response (spec §6.1). Delivered by T-004.",
+  "description": "RFC 9457 Problem Details as returned by every N-Cards API error response (spec §6.1). Delivered by T-004.",
 
   "$comment": "给 T-007：openapi.yaml 的 components/schemas/Problem 必须用 $ref 指向本文件，**不要复制一份** —— 两份 code 枚举必然会漂。本文件的 properties.code.enum 与 App\\Shared\\Domain\\Error\\ErrorCode 的一致性由 tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest 逐项断言，少一个多一个都会让 CI 变红。同理 properties.errors.items.properties.code.enum 对应 App\\Shared\\Domain\\Error\\FieldErrorCode。",
 

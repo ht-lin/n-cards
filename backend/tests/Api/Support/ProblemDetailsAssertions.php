@@ -71,7 +71,7 @@ trait ProblemDetailsAssertions
         // 三方一致 —— body 里的 status 不能和状态行说两套话。
         Assert::assertSame($expected->httpStatus(), $body['status']);
         Assert::assertSame(
-            'https://api.ncards.de/problems/'.$expected->slug(),
+            'https://api.n-cards.de/problems/'.$expected->slug(),
             $body['type'],
             'type URI 必须由 code 派生',
         );

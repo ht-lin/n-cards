@@ -26,12 +26,12 @@ android {
         // benchmark 变体由 ncards.android.application 里的 initWith(release) 建出来，
         // 那一步发生在本脚本之前 —— 所以默认值放 defaultConfig 而不是 release，
         // 否则 benchmark 会拿不到这个字段（AGP 会报 "Unknown field"）。
-        buildConfigField("String", "API_BASE_URL", "\"https://api.ncards.de/v1/\"")
+        buildConfigField("String", "API_BASE_URL", "\"https://api.n-cards.de/v1/\"")
     }
 
     buildTypes {
         getByName("debug") {
-            buildConfigField("String", "API_BASE_URL", "\"https://api.staging.ncards.de/v1/\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://api.staging.n-cards.de/v1/\"")
         }
     }
 }

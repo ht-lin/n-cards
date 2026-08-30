@@ -1,4 +1,4 @@
-# NCards 任务拆分总览（基于 TECHNICAL_SPEC.md v1.1）
+# N-Cards 任务拆分总览（基于 TECHNICAL_SPEC.md v1.1）
 
 本目录把技术规格书拆成 **72 个可独立开工、可独立验收的任务**，按里程碑（§15）分文件：
 

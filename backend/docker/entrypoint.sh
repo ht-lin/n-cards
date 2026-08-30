@@ -1,5 +1,5 @@
 #!/bin/sh
-# NCards app 容器入口。
+# N-Cards app 容器入口。
 #
 # 为什么要在这里预热缓存：
 # §7.4 要求 app 容器 `read_only: true`，唯一可写的地方是 compose 挂上来的 tmpfs

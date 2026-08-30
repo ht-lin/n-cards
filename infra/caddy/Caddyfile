@@ -1,9 +1,9 @@
-# NCards 边缘反向代理（§4.1 / §7.4）。
+# N-Cards 边缘反向代理（§4.1 / §7.4）。
 #
 # 一份文件同时服务本地与生产，靠 CADDY_SITE_ADDRESS 参数化：
 #   本地      http://localhost          明文，Caddy 不申请证书
-#   staging   api.staging.ncards.de     Caddy 自动 TLS（ACME）
-#   prod      api.ncards.de             同上
+#   staging   api.staging.n-cards.de     Caddy 自动 TLS（ACME）
+#   prod      api.n-cards.de             同上
 #
 # ⚠️ 交付归属：infra/README.md 把 infra/caddy/ 挂在 T-012 名下，但 T-003 起
 # caddy 服务就要真跑起来，没有配置文件起不来。所以这里是**最小可用版**：

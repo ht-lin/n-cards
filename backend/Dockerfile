@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# NCards 后端镜像（FrankenPHP + Symfony，§4.1 / §14.2）。
+# N-Cards 后端镜像（FrankenPHP + Symfony，§4.1 / §14.2）。
 #
 # 两个 target：
 #   dev   本地 compose 用。装 dev 依赖，APP_ENV=dev。源码由 compose 以 :ro 绑定挂载

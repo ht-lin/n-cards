@@ -61,7 +61,7 @@
 | # | 标题 | Status |
 |---|---|---|
 | [0001](0001-record-architecture-decisions.md) | 采用 ADR 记录架构决策 | Accepted |
-| [0002](0002-brand-name-and-domain.md) | 品牌名与域名采用 NCards / ncards.de | Proposed |
+| [0002](0002-brand-name-and-domain.md) | 品牌名与域名采用 N-Cards / n-cards.de | Accepted |
 | [0003](0003-problem-details-and-idempotency-semantics.md) | Problem Details 错误码扩展、幂等语义与 Redis 降级策略 | Proposed |
 | [0004](0004-manual-vault-unseal.md) | Vault 采用人工 unseal（Shamir 3-of-5），auto-unseal 关闭 | Accepted |
 | [0005](0005-rate-limiting-topology.md) | 限流用自研 Redis 滑动窗口，默认 fail-closed，只对通用写限流开一个 allow 例外 | Accepted |

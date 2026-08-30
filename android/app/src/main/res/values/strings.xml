@@ -13,10 +13,10 @@
 -->
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
 
-    <string name="app_name">NCards</string>
+    <string name="app_name">N-Cards</string>
 
     <!-- 骨架页面。由 T-151（Onboarding）与 T-153（钱包列表）替换。 -->
-    <string name="skeleton_title">NCards</string>
+    <string name="skeleton_title">N-Cards</string>
     <string name="skeleton_body">Das Gerüst der App steht. Die Kartenverwaltung folgt in Kürze.</string>
     <string name="skeleton_refresh_content_description">Ansicht aktualisieren</string>
 

@@ -1,6 +1,6 @@
-# NCards
+# N-Cards
 
-NCards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在实体钱包里的会员卡、积分卡、优惠券的条码/二维码统一收纳，在收银台前用最少的操作调出屏幕，并可与家人朋友**持续共享同一张卡**。
+N-Cards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在实体钱包里的会员卡、积分卡、优惠券的条码/二维码统一收纳，在收银台前用最少的操作调出屏幕，并可与家人朋友**持续共享同一张卡**。
 
 > **North Star 场景**：用户在 REWE 收银台，队伍在后面排着，手机在裤兜里。从掏出手机到收银员的扫码枪读出条码，**必须 ≤ 5 秒**，且在超市地下层无网络时**必须同样可用**。
 
@@ -137,7 +137,9 @@ npm run lint:api             # Spectral lint 契约（§13.1），期望 0 error
 
 ## 开放问题
 
-品牌名与域名（Q1）暂定为 **NCards** / `ncards.de`，见 [ADR-0002](docs/adr/0002-brand-name-and-domain.md)（Status: Proposed）。
+品牌名与域名（Q1）已决：品牌显示名 **N-Cards**，域名 `n-cards.de`，见 [ADR-0002](docs/adr/0002-brand-name-and-domain.md)（Status: Accepted）。
+
+命名分两层，判据是**谁在读**：人读的地方写 `N-Cards`（显示文本、域名、法律文件标题），机器读的地方写 `ncards`（包名 `de.ncards`、Gradle 插件 id `ncards.*`、Vault key `ncards-*`、资源名 `Theme.NCards`、postgres 角色 `ncards`）。判据**不是**"语法允不允许连字符"—— 插件 id 与 Vault key 其实都允许，仍写 `ncards`。新增带品牌名的标识符前请先看 ADR-0002 的分层表。
 
 Vault unseal 方案（Q6）已决：人工 Shamir 3-of-5，auto-unseal 关闭，见 [ADR-0004](docs/adr/0004-manual-vault-unseal.md)（Status: Accepted）。
 

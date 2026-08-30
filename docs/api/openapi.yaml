@@ -1,4 +1,4 @@
-# NCards API — 唯一真相源（§13.1 第 1 条）。
+# N-Cards API — 唯一真相源（§13.1 第 1 条）。
 #
 # ============================================================================
 # 改这个文件之前先读这一段
@@ -43,7 +43,7 @@
 openapi: 3.1.0
 
 info:
-  title: NCards API
+  title: N-Cards API
   version: "1.0.0"
   summary: 面向德国及欧盟市场的移动卡券钱包
   description: |
@@ -62,7 +62,7 @@ info:
       `skip` / `per_page` / `start` 任一出现即 `400 validation_failed`
       （`errors[].code = unsupported_parameter`）。
   contact:
-    name: NCards Engineering
+    name: N-Cards Engineering
     url: https://github.com/ht-lin/n-cards
   license:
     name: Proprietary
@@ -72,12 +72,12 @@ info:
     # 前者会连同「$ref 指不到」「响应少了 content」这类真问题一起关掉，
     # 而这一行本身是 3.1 鼓励写的元数据，不影响任何 API 表面（§13.6 的禁止项一条不沾）。
     # `LicenseRef-` 前缀是 SPDX 给非标准许可证留的合法形态。
-    identifier: LicenseRef-NCards-Proprietary
+    identifier: LicenseRef-N-Cards-Proprietary
 
 servers:
-  - url: https://api.ncards.de/v1
+  - url: https://api.n-cards.de/v1
     description: production
-  - url: https://api.staging.ncards.de/v1
+  - url: https://api.staging.n-cards.de/v1
     description: staging（合成数据，禁止生产数据副本 —— §14.1）
 
 tags:
@@ -843,7 +843,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/validation-failed
+            type: https://api.n-cards.de/problems/validation-failed
             title: Validation failed
             status: 400
             code: validation_failed
@@ -865,7 +865,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/token-expired
+            type: https://api.n-cards.de/problems/token-expired
             title: Token expired
             status: 401
             code: token_expired
@@ -884,7 +884,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/insufficient-role
+            type: https://api.n-cards.de/problems/insufficient-role
             title: Insufficient role
             status: 403
             code: insufficient_role
@@ -905,7 +905,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/not-found
+            type: https://api.n-cards.de/problems/not-found
             title: Not found
             status: 404
             code: not_found
@@ -926,7 +926,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/revision-conflict
+            type: https://api.n-cards.de/problems/revision-conflict
             title: Revision conflict
             status: 409
             code: revision_conflict
@@ -946,7 +946,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/payload-too-large
+            type: https://api.n-cards.de/problems/payload-too-large
             title: Payload too large
             status: 413
             code: payload_too_large
@@ -962,7 +962,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/unsupported-media-type
+            type: https://api.n-cards.de/problems/unsupported-media-type
             title: Unsupported media type
             status: 415
             code: unsupported_media_type
@@ -983,7 +983,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/limit-exceeded
+            type: https://api.n-cards.de/problems/limit-exceeded
             title: Limit exceeded
             status: 422
             code: limit_exceeded
@@ -999,7 +999,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/client-too-old
+            type: https://api.n-cards.de/problems/client-too-old
             title: Client too old
             status: 426
             code: client_too_old
@@ -1022,7 +1022,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/rate-limited
+            type: https://api.n-cards.de/problems/rate-limited
             title: Rate limited
             status: 429
             code: rate_limited
@@ -1040,7 +1040,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/internal-error
+            type: https://api.n-cards.de/problems/internal-error
             title: Internal error
             status: 500
             code: internal_error
@@ -1059,7 +1059,7 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
           example:
-            type: https://api.ncards.de/problems/service-unavailable
+            type: https://api.n-cards.de/problems/service-unavailable
             title: Service unavailable
             status: 503
             code: service_unavailable

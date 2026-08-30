@@ -57,7 +57,7 @@ private val DarkColors = darkColorScheme(
 )
 
 /**
- * NCards 的 Material 3 主题（§12.3 的 core:designsystem 交付物）。
+ * N-Cards 的 Material 3 主题（§12.3 的 core:designsystem 交付物）。
  *
  * ⚠️ **全屏条码页不得使用本主题的深色配色。** §10.1 / T-152：条码必须强制
  * 白底黑码，无论 App 主题深浅 —— 深色模式下的条码是扫码失败的经典原因，

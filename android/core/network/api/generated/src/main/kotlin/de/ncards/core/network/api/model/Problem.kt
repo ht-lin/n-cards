@@ -35,7 +35,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
 /**
- * RFC 9457 Problem Details as returned by every NCards API error response (spec §6.1). Delivered by T-004.
+ * RFC 9457 Problem Details as returned by every N-Cards API error response (spec §6.1). Delivered by T-004.
  *
  * @param type 问题类型的稳定标识符。**所有环境同值**（含 staging）—— RFC 9457 把它首先当作标识符，其次才是可解引用的 URL。
  * @param title 该问题类型的简短英文概括，不随具体出现而变。

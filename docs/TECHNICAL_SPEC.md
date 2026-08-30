@@ -1,6 +1,6 @@
-# NCards — 技术规格书 v1.1
+# N-Cards — 技术规格书 v1.1
 
-> **产品代号**：NCards（工作名，最终品牌名待定）
+> **品牌名**：N-Cards（Q1 已定案，见 [ADR-0002](adr/0002-brand-name-and-domain.md)）。命名分两层，判据是谁在读：人读的地方写 `N-Cards`（显示文本、域名 `n-cards.de`、法律文件标题），机器读的地方写 `ncards`（包名 `de.ncards`、Gradle 插件 id `ncards.*`、Vault key `ncards-*`、资源名 `Theme.NCards`）。
 > **文档状态**：一期（Android + 后端）开发基线，已通过 Staff Engineer / CTO 复审
 > **目标读者**：未参与前期讨论的高级工程师。读完本文应能独立启动开发，无需口头补充。
 > **最后更新**：2026-08-24
@@ -56,7 +56,7 @@
 
 ### 1.1 一句话定义
 
-NCards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在实体钱包里的会员卡、积分卡、优惠券的条码/二维码统一收纳，在收银台前用最少的操作调出屏幕，并可与家人朋友**持续共享同一张卡**。
+N-Cards 是一款面向德国及欧盟市场的移动卡券钱包：把散落在实体钱包里的会员卡、积分卡、优惠券的条码/二维码统一收纳，在收银台前用最少的操作调出屏幕，并可与家人朋友**持续共享同一张卡**。
 
 ### 1.2 目标用户与场景
 
@@ -380,7 +380,7 @@ J5 删号
 
 | | 邮箱枚举 | username 枚举 |
 |---|---|---|
-| 泄露了什么 | 「这个**真实邮箱**注册了 NCards」——邮箱是跨服务的强身份标识，可直接用于钓鱼/撞库 | 「`anna_b` 这个**伪名**存在」——伪名是用户为本服务自选的，与真实身份无关联（前提是 UI 已提示勿用真名） |
+| 泄露了什么 | 「这个**真实邮箱**注册了 N-Cards」——邮箱是跨服务的强身份标识，可直接用于钓鱼/撞库 | 「`anna_b` 这个**伪名**存在」——伪名是用户为本服务自选的，与真实身份无关联（前提是 UI 已提示勿用真名） |
 | 字典成本 | 极低（可购买亿级真实邮箱表） | 需猜测用户自选的 3–20 字符串 |
 | 能否消除 | 能（decoy challenge，功能不受损） | **不能**——"搜不到就是不存在"是搜索功能的固有语义，返回假的"找到了"会让功能不可用 |
 | 结论 | 必须防护 | **接受，以限速 + 精确匹配 + 伪名化控制风险**（记为 §7.2 T18） |
@@ -1090,7 +1090,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 
 | 项目 | 约定 |
 |---|---|
-| 基址 | `https://api.ncards.de/v1`（staging：`https://api.staging.ncards.de/v1`） |
+| 基址 | `https://api.n-cards.de/v1`（staging：`https://api.staging.n-cards.de/v1`） |
 | 传输 | 仅 HTTPS/TLS 1.3（TLS 1.2 作为最低回退），HSTS `max-age=63072000; includeSubDomains; preload` |
 | 编码 | `application/json; charset=utf-8`，字段名 `snake_case` |
 | 认证 | `Authorization: Bearer <access_jwt>` |
@@ -1106,7 +1106,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 
 ```json
 {
-  "type": "https://api.ncards.de/problems/revision-conflict",
+  "type": "https://api.n-cards.de/problems/revision-conflict",
   "title": "Revision conflict",
   "status": 409,
   "code": "revision_conflict",
@@ -1280,7 +1280,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 | `POST /v1/friends/invite-links/{code}/redeem` | 同上 |
 | `POST /v1/friends/requests`（`{email}` 形态） | C2：邮箱退出社交路径，改为 `{user_id}` |
 
-> 连带影响：`https://app.ncards.de/l/*` 的 App Links **只剩 Magic Link 一种用途**（`/l/magic/*`），好友邀请落地页与其兑换流程整体删除。`assetlinks.json` 仍需保留（§7.1）。
+> 连带影响：`https://app.n-cards.de/l/*` 的 App Links **只剩 Magic Link 一种用途**（`/l/magic/*`），好友邀请落地页与其兑换流程整体删除。`assetlinks.json` 仍需保留（§7.1）。
 
 #### 同步
 
@@ -1405,7 +1405,7 @@ Bob:  【选择接受或拒绝】
 1. 邮件中的链接指向一个 **App Link / 落地页**，`GET` 只渲染"点击继续登录"按钮，**不消费令牌**。
 2. 实际消费走 `POST /v1/auth/magic/consume`。
 3. 落地页对 `HEAD`、预取（`Purpose: prefetch`）请求不做任何状态变更。
-4. Android 端注册 App Links（`https://app.ncards.de/l/*`，配合 `assetlinks.json`），已安装 App 直接拉起。
+4. Android 端注册 App Links（`https://app.n-cards.de/l/*`，配合 `assetlinks.json`），已安装 App 直接拉起。
 
 **令牌**
 
@@ -1640,7 +1640,7 @@ App 在设备上存储的全部数据（Room 库、令牌、偏好）均为**提
 | AGB / Nutzungsbedingungen | 合同基础 | 注册页链接 |
 | 开源许可 | 各依赖许可 | 设置 → 关于 → 开源许可 |
 
-Google Play 需额外提交：Data Safety 表单（**必须**与上述 ROPA 一致）、隐私政策 URL、账号删除 URL（Play 政策要求提供**站外**的账号删除入口 → 需一个最小 Web 页面 `https://ncards.de/delete-account`）。
+Google Play 需额外提交：Data Safety 表单（**必须**与上述 ROPA 一致）、隐私政策 URL、账号删除 URL（Play 政策要求提供**站外**的账号删除入口 → 需一个最小 Web 页面 `https://n-cards.de/delete-account`）。
 
 ### 8.7 DPIA（数据保护影响评估）
 
@@ -2152,8 +2152,8 @@ ADR 模板：`Context / Decision / Consequences / Alternatives considered / Stat
 | 环境 | 域名 | 数据 | 部署 |
 |---|---|---|---|
 | local | `localhost` | 种子数据（`bin/console app:seed`） | `docker compose up` |
-| staging | `api.staging.ncards.de` | **合成数据**（禁止生产数据副本） | `main` 合入自动部署 |
-| production | `api.ncards.de` | 真实 | 手动 approve 后部署 |
+| staging | `api.staging.n-cards.de` | **合成数据**（禁止生产数据副本） | `main` 合入自动部署 |
+| production | `api.n-cards.de` | 真实 | 手动 approve 后部署 |
 
 **严禁**将生产数据（哪怕脱敏）复制到 staging 或开发机。需要真实规模测试时用生成器造数。
 
@@ -2457,8 +2457,8 @@ CREATE UNIQUE INDEX uq_pending_invitation
 
 ```yaml
 openapi: 3.1.0
-info: { title: NCards API, version: "1.0.0" }
-servers: [ { url: https://api.ncards.de/v1 } ]
+info: { title: N-Cards API, version: "1.0.0" }
+servers: [ { url: https://api.n-cards.de/v1 } ]
 
 paths:
   /cards/{cardId}:
@@ -2584,7 +2584,7 @@ path "auth/token/renew-self"         { capabilities = ["update"] }
 
 | # | 问题 | 建议默认值 | 决策人 | 截止 |
 |---|---|---|---|---|
-| Q1 | 最终品牌名与域名 | — | 创始人 | M0 结束 |
+| ~~Q1~~ | ~~最终品牌名与域名~~ | **已决（2026-08-30）：品牌显示名 `N-Cards`，域名 `n-cards.de`。命名按「谁在读」分两层——人读写 `N-Cards`，机器读写 `ncards`（包名 `de.ncards`、插件 id `ncards.*`、Vault key `ncards-*`、资源名 `Theme.NCards`）；判据不是语法能否带连字符，插件 id 与 Vault key 允许带仍不带。见 [ADR-0002](adr/0002-brand-name-and-domain.md)** | 创始人 | ✅ M0 |
 | Q2 | 运营主体（GmbH / UG / 个人）与 Impressum 内容 | — | 创始人 | M1 结束 |
 | Q3 | 邮件服务商最终选型 | **单一**商业邮件服务，要求：EU/EEA 处理 + 可签 DPA + 支持 SPF/DKIM 自定义域（候选 Brevo FR / Mailjet FR / Postmark EU）。**不做双活**（§3.2） | 后端负责人 | M0 结束 |
 | Q4 | 一期是否启用证书固定 | **不启用**，记为已接受风险，上线后 30 天内加 | 技术负责人 | M3 |
