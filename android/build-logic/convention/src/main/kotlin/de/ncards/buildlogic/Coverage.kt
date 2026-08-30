@@ -25,6 +25,7 @@ import org.gradle.kotlin.dsl.configure
 internal fun Project.configureKoverThreshold() {
     val underCoverageGate = path.startsWith(":core:") || path.startsWith(":data:")
     if (!underCoverageGate) return
+    if (path in COVERAGE_EXEMPT) return
 
     extensions.configure<KoverProjectExtension> {
         reports {
@@ -39,3 +40,19 @@ internal fun Project.configureKoverThreshold() {
 
 /** §13.3：`core:*` 与 `data:*` 行覆盖 ≥ 70%。 */
 private const val COVERAGE_MIN_PERCENT = 70
+
+/**
+ * 有理由的豁免。**加一条就要在这里写清为什么**，否则这张表会变成绕开门禁的后门。
+ *
+ * - `:core:network:api`（T-010）：整个模块是 `openapi-generator` 的产物，
+ *   §13.1 第 4 条明令禁止手改。为它写测试等于在测 openapi-generator ——
+ *   而真正该被测的是**契约与产物是否一致**，那由
+ *   `:core:network:api:checkApiClientUpToDate` 守着，比行覆盖率精确得多。
+ *   它的 36 个文件若计入分母，只会逼人写一批没有意义的测试来把比例凑上去。
+ *   消费这些类型的行为覆盖在 `:core:network:impl`（那个模块不豁免）。
+ *
+ * ⚠️ `:core:database` 也有一个待决的豁免问题（SQLCipher 是 JNI，有意义的测试全在
+ * androidTest 而 Kover 默认只统计单测），但那个要先在「并入仪器测试覆盖率」与
+ * 「记一条豁免」之间做选择，归 T-011。见 android/README.md 的「已知事项」。
+ */
+private val COVERAGE_EXEMPT = setOf(":core:network:api")

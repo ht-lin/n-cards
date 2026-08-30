@@ -1,0 +1,58 @@
+# openapi-generator 的配置（T-010）。任务书点名的组合：kotlin + retrofit2 + kotlinx-serialization。
+#
+# 谁读这个文件：build-logic 的 NcardsOpenApiPlugin，经 `-c` 传给 CLI。
+# outputDir 与 templateDir **不在这里**，由那个插件用 `-o` / `-t` 传 ——
+# 两个生成任务（提交入库的 generated/ 与 build/ 里的对照组）只差输出目录，
+# 写死在配置文件里就没法共用同一份配置了。
+#
+# ⚠️ 这里**没有** inputSpec：实际喂给生成器的是 build/openapi-input/openapi.json，
+# 一份由 prepareOpenApiGeneratorInput 从真契约派生出来的、剥掉了
+# `additionalProperties: true` 的副本（不剥的话 15 个模型全部生成不合法的 Kotlin）。
+# 路径由那个任务经 `-i` 传进来，理由写在 NcardsOpenApiPlugin 的类注释里。
+#
+# 真相源仍然只有 docs/api/openapi.yaml 一份 —— 派生产物在 build/ 里，不入库。
+# 跨文件 $ref（components/schemas/Problem → ./schemas/problem-details.schema.json）
+# **实测能解**（openapi-generator 7.25.0），派生时保持相对结构，$ref 原样不动。
+
+generatorName: kotlin
+
+packageName: de.ncards.core.network.api
+apiPackage: de.ncards.core.network.api
+modelPackage: de.ncards.core.network.api.model
+
+additionalProperties:
+  library: jvm-retrofit2
+  serializationLibrary: kotlinx_serialization
+  # 生成 `suspend fun`。协程是 §4.3 分层图里 Repository 之下唯一的异步形态。
+  useCoroutines: "true"
+  # §13.6 的硬要求：「新增枚举值」要向后兼容，前提是客户端对未知值有兜底分支，
+  # 且**必须在生成器配置中保证**。这一条开了之后，每个枚举会多一个
+  # `unknown_default_open_api` 成员 + 一个自定义 KSerializer，反序列化遇到不认识的
+  # 值时落到它而不是抛异常。实测有效（见 Problem.Code 的 CodeSerializer）。
+  enumUnknownDefaultCase: "true"
+  sourceFolder: src/main/kotlin
+
+globalProperties:
+  # 文档与生成的测试一概不要：前者 review 时没人看（真相源是 openapi.yaml），
+  # 后者是在测 openapi-generator 自己。有意义的测试全在 core:network:impl。
+  apiDocs: "false"
+  modelDocs: "false"
+  apiTests: "false"
+  modelTests: "false"
+
+# Problem 的 errors[] 是内联 schema，生成器默认命名为 ProblemErrorsInner。
+# 改成 ProblemFieldError —— 这个类型 core:network:impl 要天天映射（§6.1 的
+# errors[].code 词表），名字读得懂比跟着生成器的默认约定重要。
+inlineSchemaNameMappings:
+  Problem_errors_inner: ProblemFieldError
+
+# 自由形态对象（Problem 的 current / debug）的元素类型。
+#
+# 默认是 `kotlin.Any`，而 kotlinx.serialization 对 Any 没有序列化器 —— 编译期直接
+# 崩在「Serializer for element of type kotlin.Any has not been found」。
+# 换成 JsonElement：它本来就是「一段还没有解释的 JSON」的准确类型，
+# 而 §5.4.3 的三路合并要的正是这个（拿到 revision_conflict 的 current 后逐字段比）。
+typeMappings:
+  AnyType: JsonElement
+importMappings:
+  JsonElement: kotlinx.serialization.json.JsonElement

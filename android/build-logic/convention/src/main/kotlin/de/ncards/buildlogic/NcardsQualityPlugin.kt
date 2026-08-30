@@ -45,6 +45,12 @@ class NcardsQualityPlugin : Plugin<Project> {
             }
 
             tasks.withType<Detekt>().configureEach {
+                // 与上面 ktlint 的 filter 是同一条规则，只是 API 不同（T-010 补）：
+                // detekt 的源集来自 Gradle 的 sourceSets，而 core:network:api 把
+                // generated/src/main/kotlin 挂了进去。不排除的话，第一个跑到的
+                // 生成文件就会因为「函数太长」「参数太多」一类的规则让 detekt 变红，
+                // 而那些文件按 §13.1 第 4 条是禁止手改的 —— 无解的红。
+                exclude("**/generated/**")
                 // §13.3 原文是「0 weighted issues」。detekt.yml 里 build.maxIssues = 0，
                 // 这里只把报告收窄成 CI 读得懂的两种。
                 reports.html.required.set(true)

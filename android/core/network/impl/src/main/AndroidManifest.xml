@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  INTERNET 权限声明在这里，而不是 :app 的 manifest 里。
+
+  理由是「谁需要，谁声明」：本模块是全仓库唯一发起网络请求的地方，权限跟着它走，
+  manifest merger 会把它合进任何依赖到本模块的 APK。反过来写（声明在 :app）意味着
+  一个和网络无关的模块被删掉时，没人知道那条权限还需不需要。
+
+  ⚠️ 明文流量由 app/src/main/res/xml/network_security_config.xml 禁掉
+  （cleartextTrafficPermitted="false"，T-009 交付）。要连本机后端调试，按那个文件
+  里的注释在 src/debug/ 下新建独立配置，**不要**改主配置。
+  证书固定（CertificatePinner）是 T-451。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

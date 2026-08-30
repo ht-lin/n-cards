@@ -64,6 +64,25 @@ sqlcipher = "4.9.0"
 kotlinxSerialization = "1.11.0"
 kotlinxCoroutines = "1.11.0"
 
+# ---- 网络（§4.3 的选型：Retrofit + OkHttp + kotlinx.serialization）--------
+#
+# 这三个版本**不是自由选择**，是 openapi-generator 产物的约束（T-010）：
+# 7.25.0 的 `kotlin` 生成器 + `jvm-retrofit2` 库生成的代码 import 的就是
+# Retrofit 3 与 OkHttp 5（它自己吐的 build.gradle 里写着 retrofitVersion = '3.0.0'）。
+# 换大版本前先跑一次生成，看产物还编不编得过。
+okhttp = "5.5.0"        # 用 BOM 统一 okhttp / logging-interceptor / mockwebserver3
+retrofit = "3.0.0"      # 3.0 起 converter-kotlinx-serialization 是 Square 官方 artifact
+
+# build-logic 里读 docs/api/openapi.yaml、剥掉 additionalProperties 再写成生成器输入
+# 的那一步用（T-010，见 NcardsOpenApiPlugin）。它**只**活在构建里，不进任何 APK。
+jackson = "2.22.2"
+
+# openapi-generator 本身（T-010）。**必须钉死**：
+# core/network/api/templates/ 下那份 data_class.mustache 是从**这个版本**的 jar 里
+# 取出来改一行的（理由见该目录的 README）。升版本 = 重新取模板、重做那处改动、
+# 重新生成并 review diff。不要顺手 bump。
+openapiGenerator = "7.25.0"
+
 # ---- 日志（§7.3：release 构建不得输出任何日志） --------------------------
 timber = "5.0.1"
 
@@ -88,6 +107,10 @@ ksp-gradlePlugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-
 kover-gradlePlugin = { module = "org.jetbrains.kotlinx:kover-gradle-plugin", version.ref = "kover" }
 ktlint-gradlePlugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint" }
 detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+# ⚠️ 这两条是 build-logic 里**唯一**的 `implementation` 依赖，不是 compileOnly ——
+# 上面那些是插件，运行期由消费方提供；Jackson 没人提供，ncards.openapi 自己要用。
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-dataformat-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml", version.ref = "jackson" }
 
 # ---- AndroidX 基础 -------------------------------------------------------
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
@@ -124,6 +147,22 @@ sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+
+# ---- 网络（T-010） -------------------------------------------------------
+# BOM 统一 okhttp 家族的版本，所以下面三条**故意不带** version.ref ——
+# 带了就绕过 BOM，等于又有了第二个真相源。
+okhttp-bom = { module = "com.squareup.okhttp3:okhttp-bom", version.ref = "okhttp" }
+okhttp = { module = "com.squareup.okhttp3:okhttp" }
+# 只给 debug 变体用（§7.3：release 构建不得输出任何日志）。
+okhttp-logging-interceptor = { module = "com.squareup.okhttp3:logging-interceptor" }
+# mockwebserver3（**不是** okhttp3.mockwebserver 那个旧包）。生命周期由测试自己
+# 用 @BeforeEach / @AfterEach 管 —— 官方还有个 mockwebserver3-junit5 扩展，
+# 但为省下的三行代码多一个依赖不划算，而且它的 @StartStop 语义还在动。
+okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver3" }
+retrofit = { module = "com.squareup.retrofit2:retrofit", version.ref = "retrofit" }
+retrofit-kotlinx-serialization = { module = "com.squareup.retrofit2:converter-kotlinx-serialization", version.ref = "retrofit" }
+# 只被 build-logic 的 ncards.openapi 当 JavaExec 的 classpath 用，不进任何 APK。
+openapi-generator-cli = { module = "org.openapitools:openapi-generator-cli", version.ref = "openapiGenerator" }
 
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 

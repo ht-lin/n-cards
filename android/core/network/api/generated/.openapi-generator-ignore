@@ -1,0 +1,35 @@
+# 生成器**不要**写这些文件。
+#
+# 这份是手写并提交入库的 —— 生成器只在目标目录没有 .openapi-generator-ignore 时
+# 才会写一份默认的，所以它存在本身就是「别覆盖我」。
+#
+# 判据只有一条：这个模块是 android/ 主构建里的一个 Gradle 子模块，
+# 不是一个独立发布的 Kotlin 库。生成器默认按后者吐一整套工程脚手架。
+
+# ---- 独立工程的脚手架。本模块的构建由 core/network/api/build.gradle.kts 定义 ----
+build.gradle
+build.gradle.kts
+settings.gradle
+settings.gradle.kts
+gradle/**
+gradlew
+gradlew.bat
+.travis.yml
+README.md
+# R8 规则归 :app（app/proguard-rules.pro）。library 模块要带规则得用
+# consumer-rules.pro，而 Retrofit / OkHttp / kotlinx.serialization 的 AAR 本身
+# 就自带 consumer 规则，这里没有需要补的条目。
+proguard-rules.pro
+
+# ---- 自建 Retrofit 的那一套。我们不用它 ----
+#
+# ApiClient 自己 new 一个 OkHttpClient + Retrofit，还要拖进 converter-scalars 与
+# logging-interceptor 两个依赖。而 §6.1 的横切语义（X-Client / X-Request-Id /
+# Retry-After / 错误映射）全在 core:network:impl 的拦截器里，Retrofit 实例必须由
+# 那边的 Hilt module 组装 —— 留着 ApiClient 只会给人「原来还能这么用」的错觉。
+# HttpBearerAuth 同理：Bearer 与 401 静默刷新是 T-150 的 OkHttp Authenticator。
+# 两者只互相引用，没有别的地方用到，删掉不影响其余产物编译。
+src/main/kotlin/de/ncards/core/network/api/infrastructure/ApiClient.kt
+src/main/kotlin/de/ncards/core/network/api/auth/HttpBearerAuth.kt
+# 生成出来只有一行 import，没有任何声明。
+src/main/kotlin/de/ncards/core/network/api/infrastructure/ResponseExt.kt

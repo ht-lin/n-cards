@@ -66,6 +66,13 @@ info:
     url: https://github.com/ht-lin/n-cards
   license:
     name: Proprietary
+    # SPDX 表达式。OAS 3.1 里 `identifier` 是**可选**的，但 openapi-generator 的
+    # spec 校验器把它当必填（T-010 实测：不写就是 `Error count: 1`，生成直接中止）。
+    # 出路有两条 —— 给生成器加 `--skip-validate-spec`，或者把这一行补上。选后者：
+    # 前者会连同「$ref 指不到」「响应少了 content」这类真问题一起关掉，
+    # 而这一行本身是 3.1 鼓励写的元数据，不影响任何 API 表面（§13.6 的禁止项一条不沾）。
+    # `LicenseRef-` 前缀是 SPDX 给非标准许可证留的合法形态。
+    identifier: LicenseRef-NCards-Proprietary
 
 servers:
   - url: https://api.ncards.de/v1

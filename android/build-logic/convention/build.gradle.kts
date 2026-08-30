@@ -44,6 +44,12 @@ dependencies {
     compileOnly(libs.ktlint.gradlePlugin)
     compileOnly(libs.detekt.gradlePlugin)
 
+    // 唯一的两条 implementation。ncards.openapi 要在构建里读契约（YAML）并写出
+    // 生成器输入（JSON），而 Gradle 不向插件 classpath 暴露它自带的 Jackson。
+    // 理由见 NcardsOpenApiPlugin 的「为什么要派生一份生成器输入」。
+    implementation(libs.jackson.databind)
+    implementation(libs.jackson.dataformat.yaml)
+
     testImplementation(kotlin("test"))
 }
 
@@ -102,6 +108,11 @@ gradlePlugin {
         register("ncardsQuality") {
             id = "ncards.quality"
             implementationClass = "de.ncards.buildlogic.NcardsQualityPlugin"
+        }
+        // 只给 :core:network:api —— §13.1 第 4 条的「生成、提交入库、CI 重新生成并 diff」。
+        register("ncardsOpenApi") {
+            id = "ncards.openapi"
+            implementationClass = "de.ncards.buildlogic.NcardsOpenApiPlugin"
         }
     }
 }

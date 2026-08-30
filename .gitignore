@@ -38,6 +38,9 @@ build/
 android/local.properties
 android/captures/
 android/.cxx/
+# Kotlin 2.x 的构建期缓存（session 文件、错误日志）。Gradle 根下自动生成，
+# 与 .gradle/ 同类，只是不在那个目录里。
+android/.kotlin/
 *.apk
 *.aab
 *.keystore
