@@ -1,10 +1,13 @@
 # Android 质量门禁（§13.3）。由 T-008 交付的最小版本。
 #
 # T-011 会在此基础上补齐：Gradle Managed Device 上的 instrumentation 测试
-# （api 26 + api 34）、`koverVerify` 覆盖率门禁、生成代码 diff
-# （core:network:api 与契约重新生成一致，需 T-010 先落地）、
+# （api 26 + api 34）、`koverVerify` 覆盖率门禁、
 # assembleRelease 与 APK 大小回归（≤ +500 KB），
 # 并把 backend / android / shared 三条流水线并行编排。
+#
+# 「生成代码 diff」已由 T-010 落地（见下面的 checkApiClientUpToDate 一步）。
+# T-011 把它并进 §14.3 的 shared 流水线时，注意它需要 JDK + Android SDK，
+# 搬过去要连着环境一起搬。
 #
 # ⚠️ 本 workflow 带 paths 过滤，因此**不要**把它加进
 # scripts/setup-branch-protection.sh 的 required_status_checks ——
@@ -22,6 +25,10 @@
 # androidTest（SQLCipher 是 JNI，Robolectric 加载不了），而 Kover 默认只统计单测。
 # 打开 koverVerify 前要选一个：把仪器测试的覆盖率并进来，还是给该模块记一条
 # 有理由的豁免。详见 android/README.md 的「已知事项」。
+#
+# T-010 落地后 core:network:api **已经**记了一条豁免（Coverage.kt 的
+# COVERAGE_EXEMPT）：整个模块是生成产物，为它写测试等于在测 openapi-generator。
+# 那一条不需要 T-011 再做决定，core:database 那一条仍然需要。
 
 name: android
 
@@ -29,6 +36,12 @@ on:
   pull_request:
     paths:
       - 'android/**'
+      # ⚠️ 契约也要触发这条流水线（T-010 起）：core:network:api 是
+      # docs/api/openapi.yaml 的生成产物，「改了契约却没重新生成」这条门禁
+      # （checkApiClientUpToDate）只在这里跑。少了这一行，只改契约不碰 android/**
+      # 的 PR 根本不会跑到它，验收标准就成了摆设。
+      # backend.yml 出于同样的理由已经把 docs/api/** 加进了它的 paths。
+      - 'docs/api/**'
       - '.github/workflows/android.yml'
 
 permissions:
@@ -102,6 +115,15 @@ jobs:
       # 里提升为 error（§13.3）。
       - name: Android Lint（§13.3：0 error）
         run: ./gradlew :app:lintDebug
+
+      # §13.1 第 4 条：core:network:api 是 openapi-generator 的产物，提交入库但
+      # 禁止手改 —— CI 重新生成并 diff，不一致即失败（T-010 验收标准第 1 条）。
+      #
+      # 它重新跑一遍生成器（约 20 s），产物落 build/，不碰工作区；比对的是两棵目录树
+      # 而不是 git diff，所以「工作区本来就脏」不会被误判成「产物过期」。
+      # 失败信息会直接给出该跑哪条命令。
+      - name: 生成代码与契约一致（§13.1 第 4 条）
+        run: ./gradlew :core:network:api:checkApiClientUpToDate
 
       - name: 单元测试（§13.4）
         run: ./gradlew testDebugUnitTest

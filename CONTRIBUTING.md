@@ -69,15 +69,23 @@ npm install
 3. Android 的 `core:network:api` 由 `openapi-generator` 生成，**提交入库但禁止手改**；CI 会重新生成并 diff，不一致即失败。
 4. 所有 schema 必须 `additionalProperties: true`；客户端反序列化必须 `ignoreUnknownKeys = true`。
 
-改完契约，**在提 PR 之前**跑这两条（T-007 起）：
+改完契约，**在提 PR 之前**跑这三条（第三条 T-010 起）：
 
 ```bash
 npm run lint:api                                  # Spectral，0 error / 0 warn
 cd backend && vendor/bin/phpunit --testsuite Api  # 契约测试
+
+# Android 的生成代码，**产物要一起提交**
+cd android && ./gradlew :core:network:api:generateApiClient
 ```
 
-`docs/api/**` 会同时触发 `contract` 与 `backend` 两条流水线 —— 契约文件在 `docs/` 下，
-但校验它的测试在 `backend/` 下，两条都得绿。
+漏掉第三条，CI 的 `checkApiClientUpToDate` 会红并直接告诉你跑哪条命令。
+**不要**手改 `android/core/network/api/generated/` 下的任何文件 ——
+下一次生成会原样覆盖掉。
+
+`docs/api/**` 会同时触发 `contract`、`backend` 与 `android` 三条流水线 ——
+契约文件在 `docs/` 下，但校验它的测试在 `backend/` 下、消费它的生成代码在
+`android/` 下，三条都得绿。
 
 ⚠️ 加新端点时最容易漏的一条：每个操作都要 `$ref` 到
 `#/components/parameters/XClient`。OpenAPI 没有「全局请求头」，漏掉的话契约会说
@@ -139,8 +147,8 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 |---|---|
 | `ktlintCheck` / `detekt` | 0 |
 | Android Lint | 0 error；`HardcodedText`、`MissingTranslation`、`ContentDescription` 提升为 error |
-| 单元测试覆盖 | `core:*` 与 `data:*` ≥ 70% |
-| 生成代码 diff | 与契约重新生成结果一致 |
+| 单元测试覆盖 | `core:*` 与 `data:*` ≥ 70%（`core:network:api` 有记录在案的豁免：整个模块是生成产物） |
+| 生成代码 diff | 与契约重新生成结果一致 —— `./gradlew :core:network:api:checkApiClientUpToDate` |
 
 | 通用 | 说明 |
 |---|---|
@@ -157,12 +165,13 @@ strict 策略会把那类 PR 永久卡死。原因见
 [`.github/workflows/backend.yml`](.github/workflows/backend.yml) 头部注释，
 由 T-011 统一处理。）
 
-Android 侧的两条本地命令（提 PR 前跑一遍，CI 也跑）：
+Android 侧的三条本地命令（提 PR 前跑一遍，CI 也跑）：
 
 ```bash
 cd android
 ./gradlew -p build-logic test     # §12.3 模块依赖规则表的单测
 tools/module-graph-selftest.sh    # 证明违规依赖真的会让构建失败
+./gradlew :core:network:api:checkApiClientUpToDate   # 契约与生成代码是否还对得上
 ```
 
 ⚠️ **新建 Android 模块时**，除了 `settings.gradle.kts` 的 `include`，还必须让它匹配到

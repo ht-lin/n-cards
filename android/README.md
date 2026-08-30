@@ -59,10 +59,11 @@ gradle/libs.versions.toml ← 唯一依赖声明处
 | `ncards.android.room` | KSP + Room，`schemaLocation` 指向模块内 `schemas/`（T-009 用） |
 | `ncards.kotlin.serialization` | kotlinx.serialization |
 
-**另有四个内部插件**，任务书没点名，理由写在各自实现类的头部注释里：
+**另有五个内部插件**，任务书没点名，理由写在各自实现类的头部注释里：
 `ncards.module.graph`（依赖规则强制点）、`ncards.quality`（ktlint + detekt）、
 `ncards.android.compose`（只给真的有 UI 的模块）、`ncards.jvm.library`（只给
-`core:model` —— 它是纯 Kotlin，连 `android.*` 都 import 不到）。
+`core:model` —— 它是纯 Kotlin，连 `android.*` 都 import 不到）、
+`ncards.openapi`（只给 `core:network:api`，见下方「契约代码生成」）。
 
 > ⚠️ 它们是 `Plugin<Project>` 类而不是 `*.gradle.kts` 预编译脚本插件。
 > 理由（AGP 会与根 `build.gradle.kts` 的版本声明打架）写在
@@ -118,7 +119,11 @@ tools/module-graph-selftest.sh     # 规则真的接在构建上（注入 4 条�
   （T-009 已交付，见下方「本地库加密」）。**永远不要**给 `NcardsDatabase` 加
   `fallbackToDestructiveMigration()` —— 离线优先意味着本地攒着还没推上去的写入。
 - **release 不输出任何日志**：Timber 只在 debug 种 `DebugTree`（§7.3，见 `NcardsApplication`）。
-- `core:network:api` 是 openapi-generator 产物，**禁止手改**（T-010）。
+- `core:network:api` 是 openapi-generator 产物，**禁止手改**（T-010）。改接口先改
+  `docs/api/openapi.yaml`，然后 `./gradlew :core:network:api:generateApiClient`。
+- **网络层的 `Json` 必须 `ignoreUnknownKeys = true`**（§3.10 / §13.6）。离线优先意味着
+  旧客户端长期存在，服务端加一个响应字段是**允许**的。落点在
+  `core:network:impl` 的 `NetworkModule.provideJson()`。
 
 ## 质量门禁（§13.3）
 
@@ -133,8 +138,13 @@ CI 见 [`.github/workflows/android.yml`](../.github/workflows/android.yml)（T-0
 > 只作用于 `core:*` 与 `data:*`。现在不跑 `koverVerify` 是因为 28 个模块还是空壳、
 > 分母为 0，跑了只会得到假绿。由 **T-011** 在 T-009 / T-010 之后打开。
 >
+> `:core:network:api` 已经有一条记好理由的豁免（`Coverage.kt` 的 `COVERAGE_EXEMPT`）：
+> 整个模块是生成产物，为它写测试等于在测 openapi-generator。`core:database` 那一条
+> 仍待 T-011 决策。
+>
 > 同样待 T-011 补的还有：instrumentation 测试（Gradle Managed Device，api 26 + 34）、
-> `assembleRelease` 与 APK 大小回归、生成代码 diff（需 T-010 先落地）。
+> `assembleRelease` 与 APK 大小回归。**生成代码 diff 已由 T-010 落地**
+> （`checkApiClientUpToDate`，见下方「契约代码生成」）。
 
 ## 本地库加密（T-009）
 
@@ -195,6 +205,56 @@ adb shell monkey -p de.ncards.debug -c android.intent.category.LAUNCHER 1
 adb uninstall de.ncards.debug && ./gradlew :app:installDebug   # 重装后是全新空库
 ```
 
+## 契约代码生成（T-010）
+
+`core/network/` 一分为二：
+
+| 模块 | 内容 |
+|---|---|
+| `core:network:api` | `openapi-generator` 的产物，**全部**在 `generated/` 下，禁止手改 |
+| `core:network:impl` | 唯一手写的地方：OkHttp 配置、拦截器、错误映射、重试 |
+
+### 改了契约之后要跑什么
+
+```bash
+# 1. 先改契约（唯一真相源）
+$EDITOR docs/api/openapi.yaml
+npm run lint:api                                        # 仓库根
+
+# 2. 重新生成，然后**提交产物**
+cd android
+./gradlew :core:network:api:generateApiClient
+
+# 3. 确认与契约一致（CI 跑的就是这一条）
+./gradlew :core:network:api:checkApiClientUpToDate
+```
+
+`generateApiClient` 每次都真的跑（不做 up-to-date 判断），因为它**刻意没有**声明
+`generated/` 为输出 —— 声明了，Gradle 会要求 `compileDebugKotlin` / ktlint / detekt
+显式依赖它，而那条依赖正是不该建立的：编译自动触发生成，会让「产物提交入库」
+变成一句空话（本地每次构建静默改写工作区，diff 检查在本机永远是绿的）。
+形态与 `ktlintFormat` 改源码却不声明源码为输出相同。
+
+### 三处偏离「开箱即用」的地方，都有理由
+
+1. **生成器吃的不是 `openapi.yaml` 本体**，是 `build/openapi-input/openapi.json`
+   —— 一份剥掉了 `additionalProperties: true` 的派生副本。不剥的话 15 个模型全部
+   继承一个语法非法的 `HashMap<String, Any>()()`。契约本身一个字没动。
+   细节见 `NcardsOpenApiPlugin` 的类注释与 `docs/api/README.md`。
+2. **覆写了两个 mustache 模板各一行**（`{{^isEnumRef}}`），否则 `$ref` 出去的枚举
+   会被打上 `@Contextual` 而在运行时找不到序列化器。未改动的上游原文一并入库，
+   `diff` 应当只有一行差异 —— 见 `core/network/api/templates/README.md`。
+3. **`.openapi-generator-ignore` 挡掉了生成器自带的 `ApiClient` / `HttpBearerAuth`
+   与整套 Gradle 脚手架。** 前两个自己 new 一个 OkHttp + Retrofit，而横切语义全在
+   `core:network:impl` 的拦截器里 —— 留着只会给人「原来还能这么用」的错觉。
+   T-150 做认证时**不要**去捡 `HttpBearerAuth`。
+
+### 升级 `openapi-generator` 是一次有工作量的操作
+
+`libs.versions.toml` 里 `openapiGenerator` 是钉死的。升级步骤（含退出条件：
+上游修了模板缺陷就把 `templates/` 整个删掉）写在
+[`core/network/api/templates/README.md`](core/network/api/templates/README.md)。
+
 ## 两个自建门禁（lint 覆盖不到的地方）
 
 | 任务 | 守什么 | 为什么 lint 不行 |
@@ -237,3 +297,16 @@ adb uninstall de.ncards.debug && ./gradlew :app:installDebug   # 重装后是全
 - ktlint 关掉了 `multiline-expression-wrapping`（`.kt`）与 `chain-method-continuation`
   （仅 `.kts`），理由写在 [`.editorconfig`](.editorconfig) 里。其余 `ktlint_official`
   规则全部保留。
+- **AGP 9 的 lint 会在 `fun interface` 的 SAM 转换上崩（T-010 踩到）。**
+  `androidx.annotation.experimental.lint.ExperimentalDetector` 抛
+  `NoSuchElementException: Array contains no element matching the predicate`
+  （`ExperimentalDetector.kt:890`），整个 `lintAnalyzeDebug` 失败，
+  而报错只说文件名、不说行号 —— 定位靠二分注释。
+  出路是把那一处写成 `object : Foo { ... }`，或者在 `lint.xml` 里关掉
+  `UnsafeOptInUsage`（会连带失去一条真有用的检查）。
+  现在只有 `NetworkModule.provideSleeper` 一处，写成了 `object :`，注释里有线索。
+  **测试源集不受影响**，lint 不分析它。
+- **`core:network:api` 不参与 Kover 门禁**（`Coverage.kt` 的 `COVERAGE_EXEMPT`）。
+  整个模块是生成产物、禁止手改，为它写测试等于在测 openapi-generator ——
+  该被测的是「契约与产物是否一致」，那由 `checkApiClientUpToDate` 守着。
+  消费这些类型的行为覆盖在 `core:network:impl`（那个模块不豁免）。

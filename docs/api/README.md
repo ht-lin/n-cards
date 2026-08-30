@@ -66,18 +66,24 @@ T-004 的验收标准要求「契约测试能对 Problem Details schema 校验�
 因此「对着这份 JSON Schema 校验」与「对着契约里的 Problem 校验」是同一件事，
 `ProblemDetailsContractTest` 不需要再走一遍 yaml。
 
-三方一致由 CI 强制：
+四方一致由 CI 强制（第四方是 T-010 补的）：
 
 | 位置 | 角色 |
 |---|---|
-| `docs/TECHNICAL_SPEC.md` §6.1 的错误码表 | 规格，Android T-010 生成 `ApiError` 的输入 |
+| `docs/TECHNICAL_SPEC.md` §6.1 的错误码表 | 规格，Android `ApiError` 的输入 |
 | `backend/src/Shared/Domain/Error/ErrorCode.php` | 后端实现，无 `default` 分支的 `match` |
 | `docs/api/schemas/problem-details.schema.json` | 契约 schema |
+| `android/core/network/impl/.../error/ApiError.kt` | Android 实现，无 `else` 分支的 `when` |
 
-`backend/tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest` 断言后两者的
+`backend/tests/Unit/Shared/Domain/Error/ProblemDetailsSchemaTest` 断言中间两者的
 枚举**逐项相等**；`ErrorCodeTest` 的黄金对照表守着状态码与 title；
 `backend/tests/Api/ProblemDetailsContractTest` 对**每一个** code 做真实 HTTP 往返
-并校验 schema。改一处不改另两处，CI 立刻红。
+并校验 schema。改一处不改另三处，CI 立刻红。
+
+Android 那一侧的钉法不一样，比测试更早：`Problem.toApiError` 是一个**没有 `else`
+的 `when`**，直接 `when` 生成的 `Problem.Code`。契约加一个 code、重新生成之后，
+那个 `when` 不再穷举，**编译**就失败。`ApiErrorCoverageTest` 再补一层，
+抓「两个 code 被复制粘贴到同一个类型上」这种编译器看不出来的错。
 
 ### 通用列表信封（T-004 补进 §6.1）
 
@@ -100,7 +106,12 @@ T-004 的验收标准要求「契约测试能对 Problem Details schema 校验�
 ### 可选成员会被**省略**
 
 `errors` 与 `current` 为空时**不出现**，不会发成 `[]` / `{}`。
-所以 schema 里不能把它们标成 `required`，T-010 的 Kotlin 模型必须给默认值。
+所以 schema 里不能把它们标成 `required`，Kotlin 模型必须给默认值。
+
+T-010 已照办：生成的 `Problem` 里这两个成员都是 `= null`，而
+`core:network:impl` 的 `Json` 配了 `explicitNulls = false`，
+让「缺席」与「显式 `null`」在解码时表现一致。`ApiError.ValidationFailed.fieldErrors`
+对外是一个空列表而不是 `null` —— 调用方不需要为「有 errors 但是空的」写分支。
 
 ### 自定义响应头（T-004 / T-006）
 
@@ -174,20 +185,51 @@ CI 跑在 `.github/workflows/contract.yml`（T-011 会并进 `shared` 流水线�
 的检查默认是 warning，而这个仓库只有一份契约，没有「先记个 warning 以后再说」的
 余地 —— warning 会一直在那儿，然后被下一个人当成背景噪音。
 
-## ⚠️ 给 T-010：外部 `$ref` 有三个消费者
+## 外部 `$ref` 的三个消费者（T-010 已全部验过）
 
 `components/schemas/Problem` 是 `$ref: './schemas/problem-details.schema.json'`
-—— 一个跨文件的相对引用。T-007 已经验证了其中两个消费者能解析它：
+—— 一个跨文件的相对引用。三个消费者都能解析它：
 
 - **Spectral**：能（`npm run lint:api` 绿）。
 - **`league/openapi-psr7-validator` 0.24**（底层 `devizzent/cebe-php-openapi`）：能。
   `OpenApiDocumentTest::testResolvedProblemCodeEnumMatchesErrorCode()` 断言解引用后
   真的拿到了那 26 个 `code`。
+- **`openapi-generator` 7.25.0**：能（T-010 实测）。生成的 `Problem.Code`
+  就是那 26 项，`ProblemFieldError.Code` 是 9 项。
 
-第三个 —— **`openapi-generator`** —— 在 T-007 里验不了（Android 工程属于 T-008）。
-如果它解不开这个跨文件引用，出路是**加一个 bundle 步骤**（`npm run bundle:api`，
-产出内联版 `openapi.bundled.yaml` 只供生成器消费），**不要**把 schema 内联回
-`openapi.yaml` —— 那就等于放弃「只有一份 `code` 枚举」这个由三条测试守着的性质。
+所以 T-007 预留的 `npm run bundle:api` **没有用上**，也不需要加 —— 契约保持一份，
+`code` 枚举也保持一份。
+
+### 但生成器仍然需要一份**派生**的输入（T-010）
+
+不是因为 `$ref`，是因为**第 5 条**（所有 schema `additionalProperties: true`）。
+`openapi-generator` 把「有 `properties` **又**有 `additionalProperties`」的 schema
+当成 Map，于是 15 个模型全部继承一个语法非法的
+`kotlin.collections.HashMap<String, kotlin.Any>()()`，一个都编译不过；嵌套模型
+（`Card` / `User` / `Device` / `ProblemFieldError`）还会被额外打上 `@Contextual`。
+生成器侧没有开关（`config-help -g kotlin` 与 `--openapi-normalizer` 都没有）。
+
+`android/build-logic` 的 `ncards.openapi` 因此在生成前派生一份剥掉
+`additionalProperties: true` 的副本到 `android/core/network/api/build/openapi-input/`，
+**只喂给生成器**，不入库。这对客户端**没有任何语义损失**：前向兼容来自
+`core:network:impl` 的 `Json { ignoreUnknownKeys = true }`（§3.10），
+从来不来自 schema 上的那个布尔。
+
+⚠️ 只剥**同时声明了 `properties`** 的那些。`Problem.current` / `Problem.debug`
+是真的自由形态对象（只有 `type: object`），剥了它们会让生成的类型从
+`Map<String, JsonElement>` 退化成裸 `Any` —— 那才是真的丢信息。
+
+⚠️ 契约本身**一个字都没动**。要改生成行为，改
+`android/core/network/api/openapi-generator-config.yaml` 或 build-logic 的派生逻辑，
+**不要**为了迁就生成器去改 `openapi.yaml`。
+
+### `info.license.identifier`（T-010 补）
+
+OAS 3.1 里 `identifier` 是**可选**的，但 `openapi-generator` 的 spec 校验器把它当
+必填，不写就 `Error count: 1` 直接中止生成。另一条出路是给生成器加
+`--skip-validate-spec`，但那会连同「`$ref` 指不到」「响应少了 `content`」这类真问题
+一起关掉。所以补了 `identifier: LicenseRef-NCards-Proprietary`（SPDX 给非标准许可证
+留的合法形态），它是纯元数据，不碰任何 API 表面。
 
 ## 演进规则（§13.6）
 
