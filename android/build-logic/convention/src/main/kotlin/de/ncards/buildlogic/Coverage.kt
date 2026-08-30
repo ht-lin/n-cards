@@ -7,16 +7,16 @@ import org.gradle.kotlin.dsl.configure
 /**
  * §13.3 的 Android 覆盖率门禁：`core:*` 与 `data:*` 行覆盖 ≥ **70%**。
  *
- * ⚠️ **阈值现在就配上，但 CI 里暂不跑 `koverVerify`** —— 照 T-002 对后端覆盖率
- * 「此刻还没代码，配置先就位」的同一个做法。
+ * **T-011 已在 CI 里打开 `koverVerify`**（.github/workflows/android.yml）。
  *
- * 为什么不现在就开：T-008 交付的 30 个模块里有 28 个是空壳，分母为 0。
- * 这时候跑 verify 只会得到一个**假绿**（0/0 视作通过），然后在第一个真正写代码的
- * 任务里突然变红，而那个任务的作者会以为是自己写的代码有问题。
+ * T-008 当初留的判断有一处是错的：它以为空壳模块「分母为 0 → 0/0 视作通过 → 假绿」。
+ * T-011 实测**空壳模块确实通过**（main 里没有 .kt 的 12 个模块全绿），但有源码、
+ * 没单测的模块会**红**在 `0.000000`，而不是被当成 0/0。所以打开这个门禁的成本不是
+ * 「假绿变真红」，而是要为每个有源码的模块给出一个答案 —— 见下面的 [COVERAGE_EXEMPT]。
  *
- * 谁来打开：**T-011**（CI 流水线），在 T-009 / T-010 让 core:* 与 data:* 有了真实
- * 代码之后，把 `koverVerify` 加进 .github/workflows/android.yml 的步骤里。
- * 本函数已经把阈值与作用范围定好，届时不需要再改 build-logic。
+ * 另一处是分母：Dagger/Hilt 的生成代码原本整个计进来，实测让 `:core:network:impl`
+ * 停在 64.5%（手写的 RetryInterceptor 其实是 32/33）。排除生成代码之后它自然过线。
+ * 这一条比任何豁免都重要 —— 分母错了，阈值调多少都没有意义。
  *
  * feature:* 与 app 不在门禁内 —— §13.3 的表格只点了 `core:*` 与 `data:*`。
  * UI 层的覆盖率由 §13.4 的 Compose UI Test（J1/J2/J3 三条旅程）保证，
@@ -29,6 +29,44 @@ internal fun Project.configureKoverThreshold() {
 
     extensions.configure<KoverProjectExtension> {
         reports {
+            filters {
+                excludes {
+                    // 生成代码不进分母。T-011 实测：不排除的话 :core:network:impl 是
+                    // 64.5%，而缺的那 35% 几乎全是 Dagger/Hilt 的 *_Factory 与
+                    // HiltWrapper_*（手写的 RetryInterceptor 是 32/33）。
+                    // 那不是「测试不够」，是分母算错了 —— 为生成的工厂类写测试
+                    // 等于在测 Dagger，与 :core:network:api 豁免的理由同构。
+                    //
+                    // 按注解排除是主力（Hilt/Dagger 的产物都带这两个之一，
+                    // 且不依赖类名约定）；名字模式兜住 Room 与 Compose 的产物，
+                    // 它们不带 @Generated。
+                    annotatedBy(
+                        "dagger.internal.DaggerGenerated",
+                        "javax.annotation.processing.Generated",
+                    )
+                    classes(
+                        "*_Factory",
+                        "*_Factory\$*",
+                        "*_MembersInjector",
+                        "Hilt_*",
+                        "*HiltWrapper_*",
+                        "*_HiltModules",
+                        "*_HiltModules\$*",
+                        "*_GeneratedInjector",
+                        // Room 的 DAO / Database 实现（T-009 起）
+                        "*_Impl",
+                        "*_Impl\$*",
+                        // Compose 编译器为无参 lambda 生成的持有类
+                        "*ComposableSingletons*",
+                    )
+
+                    // Hilt 的 @Module 本身是手写的，但它装的是**装配**而不是行为：
+                    // 一个 @Provides 写错了，Hilt 在编译期就报 missing binding
+                    // （app/build.gradle.kts 的注释记的正是这件事），轮不到行覆盖率来发现。
+                    // 把它计进分母，只会逼人写一批「调用 provideX() 断言非 null」的测试。
+                    annotatedBy("dagger.Module")
+                }
+            }
             verify {
                 rule {
                     minBound(COVERAGE_MIN_PERCENT)
@@ -51,8 +89,29 @@ private const val COVERAGE_MIN_PERCENT = 70
  *   它的 36 个文件若计入分母，只会逼人写一批没有意义的测试来把比例凑上去。
  *   消费这些类型的行为覆盖在 `:core:network:impl`（那个模块不豁免）。
  *
- * ⚠️ `:core:database` 也有一个待决的豁免问题（SQLCipher 是 JNI，有意义的测试全在
- * androidTest 而 Kover 默认只统计单测），但那个要先在「并入仪器测试覆盖率」与
- * 「记一条豁免」之间做选择，归 T-011。见 android/README.md 的「已知事项」。
+ * - `:core:database` 与 `:core:crypto`（T-011 决定）：**Kover 只统计单元测试**，
+ *   而这两个模块有意义的测试全在 `androidTest` —— SQLCipher 是 JNI，Robolectric
+ *   加载不了；`KeystoreAesGcmKeyWrapper` / `KeystoreSecretStore` 要的是真的
+ *   AndroidKeyStore，没有替身能证明「篡改密文必须失败」这类断言。
+ *   实测 `:core:database` 0%、`:core:crypto` 27.2%（过线的是
+ *   `KeystoreDbPassphraseProvider`，它的分支藏在接口后面，单测够得着）。
+ *
+ *   ⚠️ android/README.md 曾写「core:crypto 没有这个问题（单测覆盖得到）」——
+ *   **那句话是错的**，T-011 用数字纠正了它。两个模块是同一个问题，同一条理由。
+ *
+ *   它们不是「没人管」：31 个仪器测试（crypto 14 / database 17）在 main 流水线的
+ *   Gradle Managed Device 上跑，api 26 + api 34 两档。选豁免而不是把仪器测试的
+ *   覆盖率并进来，是因为后者要求 PR 流水线里起模拟器，会把 §14.3 的 12 分钟预算
+ *   直接冲掉。**这个取舍在第一个真正做 UI 的里程碑（M1）应当重新评估。**
+ *
+ * - `:core:designsystem`（T-011）：整个模块是 Compose 的主题声明
+ *   （Theme.kt / Color.kt / Type.kt，206 行，没有一个分支）。它的正确性由
+ *   「看起来对不对」定义，而那是 §13.4 的 Compose UI Test 的事 —— 与下面那段
+ *   「UI 层的覆盖率是另一种度量」是同一条理由，只是那段当初只想到了 feature:*。
  */
-private val COVERAGE_EXEMPT = setOf(":core:network:api")
+private val COVERAGE_EXEMPT = setOf(
+    ":core:network:api",
+    ":core:database",
+    ":core:crypto",
+    ":core:designsystem",
+)

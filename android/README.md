@@ -131,20 +131,16 @@ tools/module-graph-selftest.sh     # 规则真的接在构建上（注入 4 条�
 `ContentDescription` 提升为 error）· `core:*` 与 `data:*` 覆盖率 ≥ 70% ·
 APK 大小回归 ≤ +500 KB。
 
-CI 见 [`.github/workflows/android.yml`](../.github/workflows/android.yml)（T-008 的最小版本）。
+CI 见 [`.github/workflows/android.yml`](../.github/workflows/android.yml)（质量门禁，
+由 `pr.yml` 与 `main.yml` 调用）与
+[`android-release.yml`](../.github/workflows/android-release.yml)（`assembleRelease`
++ APK 大小回归）。仪器测试（GMD，api 26 + 34）只在 `main` 合入后跑，见 `main.yml`。
 
-> ⚠️ **覆盖率阈值已配好但 CI 里还没开。** Kover 的 70% 门禁写在
-> [`Coverage.kt`](build-logic/convention/src/main/kotlin/de/ncards/buildlogic/Coverage.kt)，
-> 只作用于 `core:*` 与 `data:*`。现在不跑 `koverVerify` 是因为 28 个模块还是空壳、
-> 分母为 0，跑了只会得到假绿。由 **T-011** 在 T-009 / T-010 之后打开。
->
-> `:core:network:api` 已经有一条记好理由的豁免（`Coverage.kt` 的 `COVERAGE_EXEMPT`）：
-> 整个模块是生成产物，为它写测试等于在测 openapi-generator。`core:database` 那一条
-> 仍待 T-011 决策。
->
-> 同样待 T-011 补的还有：instrumentation 测试（Gradle Managed Device，api 26 + 34）、
-> `assembleRelease` 与 APK 大小回归。**生成代码 diff 已由 T-010 落地**
-> （`checkApiClientUpToDate`，见下方「契约代码生成」）。
+> **覆盖率门禁自 T-011 起在 CI 里跑**（`./gradlew koverVerify`）。阈值、四条豁免与
+> 「Dagger/Hilt 生成代码不进分母」的过滤器都在
+> [`Coverage.kt`](build-logic/convention/src/main/kotlin/de/ncards/buildlogic/Coverage.kt)。
+> **加第五条豁免之前先读那段注释** —— 每一条都写了为什么，那张表一旦松了就是后门。
+> 实测数字与两处纠正见下方「已知事项」。
 
 ## 本地库加密（T-009）
 
@@ -268,21 +264,60 @@ cd android
 
 ## 已知事项
 
-- **Kover 的 70% 门禁对 `core:database` 会失真（留给 T-011 决策）。** `Coverage.kt`
-  让 `:core:*` 都吃 70% 行覆盖，但 SQLCipher 是 JNI，Robolectric 里加载不了 ——
-  这个模块有意义的测试**全在 `androidTest`**，而 Kover 默认只统计单测。
-  T-011 打开 `koverVerify` 前必须先选一个：把仪器测试的覆盖率并进来，
-  还是给 `core:database` 记一条有理由的豁免。`core:crypto` 没有这个问题
-  （逻辑分支拆到了接口后面，单测覆盖得到）。
+- **`koverVerify` 已由 T-011 打开，四个模块记了豁免。** 理由逐条写在
+  `build-logic` 的 [`Coverage.kt`](build-logic/convention/src/main/kotlin/de/ncards/buildlogic/Coverage.kt)，
+  加第五条之前先读那段。两处纠正了此前的记载：
+  - **T-008 说「空壳模块分母为 0 会假绿」—— 反了。** 实测 `main` 里没有 `.kt` 的
+    模块直接通过，而**有源码、没单测**的模块会红在 `0.000000`。
+  - **本文件此前说「`core:crypto` 没有这个问题（单测覆盖得到）」—— 那句话是错的。**
+    实测 `:core:crypto` 只有 27.2%：`KeystoreAesGcmKeyWrapper` 与 `KeystoreSecretStore`
+    要的是真的 AndroidKeyStore，它们的 14 个测试全在 `androidTest`。
+    它与 `:core:database`（0%）是同一个问题，因此拿到同一条豁免。
+  - 更要紧的是分母：**Dagger/Hilt 的生成代码原本整个计进来**，把
+    `:core:network:impl` 摁在 64.5%（手写的 `RetryInterceptor` 其实是 32/33）。
+    `Coverage.kt` 现在按 `@DaggerGenerated` / `@Generated` / `@Module` 与几条名字模式
+    排除生成代码，该模块随即过线。分母错了，阈值调多少都没意义。
 - **debug APK 从 11.3 MiB 涨到 30.2 MiB（+18.9 MiB），全部是 `libsqlcipher.so`。**
   四个 ABI 各一份（arm64 5.2 MB / armeabi-v7a 3.6 MB / x86 4.9 MB / x86_64 5.7 MB）。
-  §13.3 的「APK 大小回归 ≤ +500 KB」门禁由 T-011 建立，**基线取 T-009 之后的值**。
+  §13.3 的「APK 大小回归 ≤ +500 KB」门禁由 T-011 建立：基线在
+  [`app/apk-size-baseline.txt`](app/apk-size-baseline.txt)，取 T-009 之后的
+  **release** APK = 20,352,900 字节（19.41 MiB，R8 + 资源压缩之后）。
   发布走 AAB，Play 按 ABI 分发，用户实际下载增量约 3.5–5.7 MB，不是 18.9 MB ——
   别拿 APK 的数字去对上架体积。
-- **`assembleRelease` 的 R8 尚未进 CI（T-011）。** SQLCipher 走 JNI 反射，是 R8 的
-  经典断裂点。好消息是 AAR 自带 consumer proguard 规则（keep 了 native 方法、
-  构造函数与 `mNativeHandle`），所以 `app/proguard-rules.pro` **不需要**额外条目 ——
-  这一条是记下来的结论，别再去加一遍。
+- **`assembleRelease` 已进 CI（T-011），R8 一次通过。** SQLCipher 走 JNI 反射，是 R8 的
+  经典断裂点，但 AAR 自带 consumer proguard 规则（keep 了 native 方法、构造函数与
+  `mNativeHandle`），`app/proguard-rules.pro` **不需要**额外条目 —— T-009 记下的这条
+  结论已被实测证实，别再去加一遍。
+- **Gradle Managed Device 有三个坑，都已配好，别当成多余的配置删掉**（见
+  [`ManagedDevices.kt`](build-logic/convention/src/main/kotlin/de/ncards/buildlogic/ManagedDevices.kt)
+  与 [`gradle.properties`](gradle.properties)）：
+  - AGP **默认拒绝 API ≤ 26** 的 GMD，要
+    `android.experimental.testOptions.managedDevices.allowOldApiLevelDevices=true`。
+    而 api 26 正是 §14.3 点名的一档，也是 `minSdk`。
+  - **`testedAbi` 必须显式写 `x86_64`。** AGP 9 默认就是它，但会警告 AGP 10 要改成
+    `arm64-v8a` —— 而这两个 system image 不支持 NDK translation，到那时
+    `:core:database` 的 17 个 SQLCipher 测试会整组跑不起来。
+    ⚠️ 设了之后**那条警告照样打**（已确认 setter 真的被调用，是 AGP 9.3.2 的警告
+    没读 DSL 值）。别因为警告还在就把那行删掉。
+- **T-011 实测：31 个仪器测试在 api 26 与 api 34 上全绿**（crypto 14 + database 17，
+  两档共 62 次）。这是 T-009 之后第一次在 `minSdk` 那一档上验证 —— Keystore 与
+  SQLCipher 在 Android 8.0 上的行为与 api 34 没有差异。
+  api 26 上会打一句 `additionalTestOutput is not supported on ... API level < 29`，
+  无害（那是测试产物收集的一个可选功能）。
+  - **一次只能跑一台模拟器**（`maxConcurrentDevices=1`）。两个模块 × 两档设备会起
+    **四台**模拟器，在 16 GB 机器上把 Gradle daemon 挤死，报错是
+    `Gradle build daemon disappeared unexpectedly`，一个字都不提内存。
+    GitHub 的标准 runner 也是 16 GB。
+- **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
+  而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
+  构建被杀时不回滚。出路：
+
+  ```bash
+  pkill -f qemu-system-x86_64-headless
+  ./gradlew cleanManagedDevices
+  ```
+
+  CI 上不会遇到（每个 job 是全新 runner）。
 - **第一次改数据库 schema 的任务要先解决一个 AGP 9 的坑。** `MigrationTestHelper`
   需要把 `schemas/*.json` 放进 androidTest 的 assets，而常见写法
   `android { sourceSets.getByName("androidTest").assets.srcDir(...) }` 在 AGP 9 上

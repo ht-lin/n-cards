@@ -1,0 +1,21 @@
+# release APK 大小基线（字节）。§13.3：回归 ≤ +500 KB，超出需 PR 说明。
+#
+# 门禁：scripts/ci/check-apk-size.sh，在 PR 流水线的 android-release job 里跑。
+# 涨了就在**同一个 PR 里**改这个数字，并在 PR 说明写清多出来的是什么 ——
+# 数字的变化出现在 diff 里，reviewer 必须看见它。
+#
+# 取值：T-011（2026-08-30），:app:assembleRelease 的 app-release-unsigned.apk，
+# R8 + resource shrinking 已开。按 android/README.md 的要求取 T-009 之后的值。
+#
+# 这 19.4 MiB 里 18.5 MiB 是四个 ABI 的 libsqlcipher.so：
+#     x86_64      5,741,064
+#     arm64-v8a   5,182,792
+#     x86         4,918,720
+#     armeabi-v7a 3,555,336
+# 自己写的代码（classes.dex）是 1.4 MB。
+#
+# ⚠️ 别拿这个数字去对上架体积：发布走 AAB，Play 按 ABI 分发，
+# 用户实际下载约 3.5–5.7 MB 的 native 库 + dex，不是 18.5 MB。
+# §9.1 的「APK ≤ 20 MB」预算说的是用户装到手机上的那一份。
+
+20352900

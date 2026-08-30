@@ -67,4 +67,5 @@
 | [0005](0005-rate-limiting-topology.md) | 限流用自研 Redis 滑动窗口，默认 fail-closed，只对通用写限流开一个 allow 例外 | Accepted |
 | [0006](0006-android-module-graph-enforcement.md) | Android 模块依赖规则用配置期的 Gradle 规则表强制，不用自定义 lint 规则 | Accepted |
 | [0007](0007-android-secret-storage-without-jetpack-security.md) | Android 端的密钥存储自建 Keystore 门面，不用 androidx.security 的 EncryptedSharedPreferences | Accepted |
+| [0008](0008-ci-gate-topology.md) | CI 用一个总是运行的 `pr-gate` 汇总，各条流水线改为 reusable workflow | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。

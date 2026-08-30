@@ -142,13 +142,16 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 | `deptrac analyse` | 0 violation |
 | `composer audit` | 0 高危 |
 | 行覆盖率 | 整体 ≥ 70%；`src/Module/*/Domain` 与 `Application` ≥ 85% |
+| Doctrine 迁移 | `up`/`down` 往返通过；`schema:validate` 通过（ORM 装上之前自动跳过并说明，见 `tools/migration-check.sh`） |
 
 | Android | 阈值 |
 |---|---|
 | `ktlintCheck` / `detekt` | 0 |
 | Android Lint | 0 error；`HardcodedText`、`MissingTranslation`、`ContentDescription` 提升为 error |
-| 单元测试覆盖 | `core:*` 与 `data:*` ≥ 70%（`core:network:api` 有记录在案的豁免：整个模块是生成产物） |
+| 单元测试覆盖 | `core:*` 与 `data:*` ≥ 70%（四条有记录在案的豁免，见 [`Coverage.kt`](android/build-logic/convention/src/main/kotlin/de/ncards/buildlogic/Coverage.kt)；Dagger/Hilt 生成代码不进分母） |
 | 生成代码 diff | 与契约重新生成结果一致 —— `./gradlew :core:network:api:checkApiClientUpToDate` |
+| `assembleRelease` | 成功，且 APK ≤ 基线 + 500 KB（基线入库：`android/app/apk-size-baseline.txt`，涨了在同一 PR 里改并说明） |
+| Instrumentation | Gradle Managed Device，api 26 + api 34。**只在 `main` 合入后跑**（§14.3），PR 上不跑 |
 
 | 通用 | 说明 |
 |---|---|
@@ -158,20 +161,48 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 
 后端门禁在 `backend/` 下用 `composer qa` 一键跑完，细则见 [`backend/README.md`](backend/README.md)。
 
-（完整 CI 流水线由 T-011 交付。当前仓库有四条：`commit-conventions`、`backend`、
-`contract`、`android`。除 `commit-conventions` 外都带 `paths` 过滤，因此**都尚未**
-加进 required status checks —— 不碰对应目录的 PR 永远不会上报那个 context，配上
-strict 策略会把那类 PR 永久卡死。原因见
-[`.github/workflows/backend.yml`](.github/workflows/backend.yml) 头部注释，
-由 T-011 统一处理。）
+### CI 的形状（T-011）
 
-Android 侧的三条本地命令（提 PR 前跑一遍，CI 也跑）：
+一个入口 [`pr.yml`](.github/workflows/pr.yml)，四条并行流水线，一个汇总：
+
+```
+changes ──┬─► backend          backend/** 或 docs/api/** 变动时
+          ├─► android          android/** 或 docs/api/** 变动时
+          ├─► android-release  同上（assembleRelease + APK 大小回归）
+          └─► shared           总是跑（spectral / gitleaks / 敏感日志 / TODO / commitlint）
+                  └─► pr-gate  汇总；**这是唯一的 required status check**
+```
+
+⚠️ **加一条新流水线时，必须同时把它加进 `pr-gate` 的 `needs`** —— 不加，它红了 PR
+照样能合，而且看起来一切正常。这是这套拓扑唯一的失效模式，换来的是「只配一个
+required check」。完整推理见 [ADR-0008](docs/adr/0008-ci-gate-topology.md)。
+
+`main` 合入后跑 [`main.yml`](.github/workflows/main.yml)：全量四条 + 仪器测试
+（Gradle Managed Device，api 26 + 34）+ 后端镜像推 GHCR + AAB 产物。
+部署 staging 属 T-012，Play 上传属 T-456，两处都在 `main.yml` 末尾留了接法说明。
+
+> ⚠️ **服务端仍未生效**：`ht-lin/n-cards` 是 Free 套餐的私有仓库，ruleset 返回 403
+> （见 §3）。`scripts/setup-branch-protection.sh` 里的规则是这套约定唯一的书面记录，
+> 升级 Pro 或转 public 当天原样生效。
+
+提 PR 前的本地命令（CI 跑的是同一批）：
 
 ```bash
+# 全仓通用（§13.3 的「通用」表）
+scripts/ci/sensitive-scan-selftest.sh   # 先证明扫描器本身有效
+scripts/ci/check-gitleaks.sh            # 需要本机装 gitleaks，脚本头部有安装提示
+scripts/ci/check-sensitive-logs.sh
+scripts/ci/check-todo-issue-refs.sh
+
+# 后端
+cd backend && composer qa               # cs + stan + deptrac + selftest + 迁移检查 + test
+
+# Android
 cd android
 ./gradlew -p build-logic test     # §12.3 模块依赖规则表的单测
 tools/module-graph-selftest.sh    # 证明违规依赖真的会让构建失败
 ./gradlew :core:network:api:checkApiClientUpToDate   # 契约与生成代码是否还对得上
+./gradlew koverVerify             # §13.3 的 70% 行覆盖（豁免见 build-logic/Coverage.kt）
 ```
 
 ⚠️ **新建 Android 模块时**，除了 `settings.gradle.kts` 的 `include`，还必须让它匹配到

@@ -1,0 +1,71 @@
+# gitleaks 配置（§13.3 的「通用」表第一行：Secret 扫描 0 命中）。
+#
+# 扫描范围由 scripts/ci/check-gitleaks.sh 决定：**只扫 git 跟踪的文件**。
+# 不这么做的话 `gitleaks dir .` 会连 node_modules / vendor / build / var 一起扫 ——
+# 实测 757 条命中，其中 744 条来自这些目录，而它们一个字节都不入库。
+# 淹在噪声里的门禁等于没有门禁。
+#
+# ⚠️ **加豁免前先想清楚。** 这张表和 build-logic 的 COVERAGE_EXEMPT、
+# deptrac.yaml 的 Sync 只读豁免是同一类东西：每一条都必须写清为什么，
+# 否则它会变成绕开门禁的后门。默认规则集里的 generic-api-key 本来就偏宽，
+# 「反正它老误报」是最容易滑坡的一句话。
+
+title = "N-Cards"
+
+[extend]
+# gitleaks 自带的规则集全量启用，本仓库不加自定义规则 —— 我们没有自研的凭据格式。
+useDefault = true
+
+# ---------------------------------------------------------------- 全局豁免
+
+[[allowlists]]
+description = """
+契约与测试里的假 UUID。全仓统一用 0192f3a1-b2c3-7d4e-8f01-… 这个前缀造 UUIDv7
+夹具（docs/api/openapi.yaml 的 example、core:network:impl 的测试常量），
+generic-api-key 会把它当成高熵字符串。它是**约定好的假值**，换一个前缀
+只会让下一个人再来加一条豁免。
+"""
+regexes = ['0192f3a1-b2c3-7d4e-8f01-[0-9a-f]{12}']
+
+[[allowlists]]
+description = """
+本仓库的占位值命名约定：真实凭据绝不入库，入库的默认值一律以 dev-only- /
+test-only- 开头（backend/.env、backend/.env.test、infra/compose/.env.example）。
+名字本身就是它的文档 —— 一个叫 dev-only-not-a-secret 的值不需要再解释一遍。
+
+Vault 的 dev 模式 root token 同理：它只存在于一次性的 service 容器与本地 compose 里，
+生产走 AppRole（§7.4 / §17.4），unseal key 按 ADR-0004 离线保管、绝不进 CI。
+"""
+regexes = [
+    '''(dev|test)-only-[a-z0-9-]+''',
+]
+
+# ---------------------------------------------------------------- 按文件豁免
+
+[[allowlists]]
+description = """
+docs/api/openapi.yaml 里的 access_token / refresh_token / token 全部是 `example:`
+的值 —— §13.1 第 2 条要求每个端点都有示例，Spectral 的自定义规则集在强制这一点。
+这份文件按定义是**对外的接口描述**，它里面不存在「真实凭据」这个概念；真的有人
+往契约里粘了一个真 token，那是 code review 该挡的事（§13.1 规定契约变更必须
+双端同 PR，一定会被读到）。
+
+只豁免 generic-api-key 这一条规则 —— AWS key、私钥块之类的强特征规则仍然生效。
+"""
+targetRules = ["generic-api-key"]
+paths = ['^docs/api/openapi\.yaml$']
+
+[[allowlists]]
+description = """
+自检脚本的夹具里**必须**有一个真·凭据形态的字符串 —— 它要断言的正是
+「这样的东西会被拦下」。用 dev-only- 那种占位值做夹具等于什么都没断言
+（占位值本来就在上面的豁免表里，脚本会绿得毫无意义）。
+
+那个 AKIA… 是随手编的 20 字符，不对应任何账号。
+
+只豁免 aws-access-token 一条规则、只在这一个文件里 —— 别的规则在这个文件里
+照样生效，而 scripts/ci/check-todo-issue-refs.sh 里有一条形态相同的豁免
+（同一个文件，同样的理由）。
+"""
+targetRules = ["aws-access-token"]
+paths = ['^scripts/ci/sensitive-scan-selftest\.sh$']

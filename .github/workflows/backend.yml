@@ -1,8 +1,8 @@
 # 后端质量门禁（§13.3）。由 T-002 交付的最小版本，T-003 补了 postgres service。
 #
-# T-011 会在此基础上补齐：Doctrine 迁移 up/down 往返、
-# gitleaks、敏感日志扫描、TODO 检查，
-# 并把 backend / android / shared 三条流水线并行编排。
+# T-011 补齐了 Doctrine 迁移 up/down 往返（见下方 migration-check.sh 一步），
+# 并把本文件改成 **reusable workflow**：触发编排搬到了 pr.yml 与 main.yml，
+# gitleaks / 敏感日志扫描 / TODO 检查这三条全仓通用的门禁搬到了 shared.yml。
 # （vault service 由 T-005 补上，见下方注释。）
 # （redis service 由 T-004 补上，见下方注释；契约测试由 T-004 起以
 #  tests/Api/ProblemDetailsContractTest 的形态存在，T-007 起补上了对整份
@@ -22,24 +22,23 @@
 # tests/Integration/Shared/Redis/RedisIdempotencyStoreTest 会整组静默 skip，
 # 于是「并发重试只会执行一次」这条在 CI 里没人验证。
 #
-# ⚠️ 本 workflow 带 paths 过滤，因此**不要**把它加进
-# scripts/setup-branch-protection.sh 的 required_status_checks ——
+# ⚠️ **不要**把 `backend` 加进 scripts/setup-branch-protection.sh 的
+# required_status_checks。这条 job 是有条件运行的（pr.yml 的 changes 过滤器决定），
 # 不碰 backend/** 的 PR 永远不会上报这个 context，配上
 # strict_required_status_checks_policy 会把那类 PR 永久卡死。
-# 这个坑由 T-011 统一处理（通常是加一个总是运行的 merge-gate job）。
+# 唯一的 required check 是 pr.yml 的 `pr-gate` —— 它总是运行，并把本 job 的
+# skipped 正确地算作通过。完整推理见 docs/adr/0008-ci-gate-topology.md。
+#
+# ⚠️ 触发条件（原来的 paths 过滤）现在住在 pr.yml 的 `changes` job 里，
+# 改这条流水线的适用范围要去那里改。其中 `docs/api/**` 那一条是 T-007 加的，
+# 理由必须跟着一起搬：契约文件住在 docs/ 下，而校验它的契约测试
+# （tests/Api/OpenApiDocumentTest、tests/Api/OpenApiContractHarnessTest）住在
+# backend/ 下 —— 少了它，「只改 openapi.yaml、不碰 backend/**」的 PR 不会触发
+# 本流水线，契约与实现的漂移当场溜过去，而那正是这两条测试唯一的存在理由。
 name: backend
 
 on:
-  pull_request:
-    paths:
-      - 'backend/**'
-      # ⚠️ T-007 补：契约文件住在 docs/ 下，而校验它的契约测试
-      # （tests/Api/OpenApiDocumentTest、tests/Api/OpenApiContractHarnessTest）
-      # 住在 backend/ 下。没有这一行，「只改 openapi.yaml、不碰 backend/**」的 PR
-      # 根本不会触发本流水线 —— 契约与实现的漂移当场溜过去，
-      # 而那正是这两条测试唯一的存在理由。
-      - 'docs/api/**'
-      - '.github/workflows/backend.yml'
+  workflow_call:
 
 permissions:
   contents: read
@@ -170,6 +169,16 @@ jobs:
       - name: 初始化 Vault（Transit / policy / AppRole）
         working-directory: .
         run: infra/vault/bootstrap.sh
+
+      # T-011：§13.3 后端表最后一行。--require-db 把「连不上库」从跳过变成失败 ——
+      # 脚本默认跳过是为了让裸机上的 `composer qa` 保持全绿（与 tests/Integration
+      # 里那些 markTestSkipped 的用例同一个口径），但在 CI 上 postgres service
+      # 一定在，连不上就是真出了问题。
+      #
+      # migrations/ 目前只有 .gitkeep，往返那两步是空转；schema:validate 也还不存在
+      # （ORM 属 T-101）。两处都会打印显式的说明行，不静默变绿 —— 理由见脚本头部。
+      - name: Doctrine 迁移检查（§13.3 / §13.5）
+        run: tools/migration-check.sh --require-db
 
       - name: PHPUnit + 覆盖率门禁（§13.3）
         run: |
