@@ -130,7 +130,10 @@ npm run lint:api             # Spectral lint 契约（§13.1），期望 0 error
 
 - 分支：trunk-based，`main` 永远可发布，功能分支 ≤ 3 天。
 - 提交：[Conventional Commits](https://www.conventionalcommits.org/)，由 `commitlint` 在本地 commit-msg 钩子与 CI 两处强制。
-- PR：1 个 approve + 全部 CI 绿，squash merge。
+- PR：1 个 approve + 全部 CI 绿，squash merge。CI 是 `.github/workflows/pr.yml` 的
+  四条并行流水线（backend / android / android-release / shared）汇到一个 `pr-gate`，
+  **`pr-gate` 是唯一的 required status check** —— 理由见
+  [ADR-0008](docs/adr/0008-ci-gate-topology.md)。
 - 契约优先：任何 API 变更**必须先改** `docs/api/openapi.yaml`，与双端实现同 PR 合入。
 
 细则见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。架构决策记录流程见 [`docs/adr/README.md`](docs/adr/README.md)。

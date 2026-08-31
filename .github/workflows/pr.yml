@@ -1,0 +1,133 @@
+# §14.3 的 PR 流水线（目标 ≤ 12 分钟，并行编排）。T-011 交付。
+#
+#   changes ──┬─► backend         （backend/** 或 docs/api/** 变动时）
+#             ├─► android         （android/** 或 docs/api/** 变动时）
+#             ├─► android-release （同上；独立 job，因为 R8 慢）
+#             └─► shared          （**总是**跑）
+#                     └─► pr-gate （always()，汇总，skipped 算通过）
+#
+# ⚠️ **`pr-gate` 是唯一该进 required status checks 的 context**，
+# 见 scripts/setup-branch-protection.sh 与 docs/adr/0008-ci-gate-topology.md。
+#
+# 为什么必须有这个 gate：ruleset 开了 strict_required_status_checks_policy，
+# 而带条件的 job 在不满足条件时**根本不会上报 context**（不是上报一个「跳过」）。
+# 把 backend / android 直接配成 required，只改 README 的 PR 会永远等一个
+# 不会到来的 check。gate 总是运行，并把 skipped 正确地算作通过。
+#
+# 加一条新流水线时**必须**把它同时加进下面的 needs —— 不加，它红了 PR 照样能合。
+# 这是这套拓扑唯一的代价，ADR-0008 的 Consequences 段记着。
+
+name: pr
+
+on:
+  pull_request:
+    # `edited` 是为了 PR 标题改了要重跑 commitlint（squash merge 后标题即 main 上的
+    # commit message，§13.2）。代价是改个标题会重跑全部三条 —— 由下面的 concurrency
+    # 兜住：同一个 PR 的上一次运行会被取消。
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # 决定哪几条流水线要跑。原来散在三个 workflow 顶部的 paths 过滤，现在集中在这里 ——
+  # 「这次 PR 该跑什么」有一个唯一的答案，而不是三份各自演化的清单。
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # dorny/paths-filter 在 pull_request 事件上走 API 取变更文件清单，
+      # 少了这一条它拿不到，于是**所有过滤器都判为 false** —— backend / android
+      # 全被跳过，pr-gate 照样绿。是那种「CI 全绿但什么都没跑」的失效，
+      # 比直接报错难发现得多。
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              # ⚠️ T-007 加的，理由不能丢：契约文件住在 docs/ 下，而校验它的契约测试
+              # （tests/Api/OpenApiDocumentTest、OpenApiContractHarnessTest）住在
+              # backend/ 下。少了这一行，「只改 openapi.yaml」的 PR 不会触发后端流水线，
+              # 契约与实现的漂移当场溜过去。
+              - 'docs/api/**'
+              - '.github/workflows/backend.yml'
+              - '.github/workflows/pr.yml'
+            android:
+              - 'android/**'
+              # ⚠️ T-010 加的，理由同样不能丢：core:network:api 是 openapi.yaml 的生成
+              # 产物，「改了契约却没重新生成」这条门禁（checkApiClientUpToDate）只在
+              # android 流水线里跑。
+              - 'docs/api/**'
+              - '.github/workflows/android.yml'
+              - '.github/workflows/android-release.yml'
+              - '.github/workflows/pr.yml'
+              - 'android/app/apk-size-baseline.txt'
+              - 'scripts/ci/check-apk-size.sh'
+
+  backend:
+    name: backend
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/backend.yml
+
+  android:
+    name: android
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    uses: ./.github/workflows/android.yml
+
+  # §13.3 的 assembleRelease + APK 大小回归。独立 job 而不是接在 android 后面：
+  # R8 单独就要一分多钟，串起来会把关键路径推过 §14.3 的 12 分钟预算。
+  # PR 上不出 AAB —— 那是 main 合入流水线的事（§14.3）。
+  android-release:
+    name: android-release
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    uses: ./.github/workflows/android-release.yml
+
+  shared:
+    name: shared
+    uses: ./.github/workflows/shared.yml
+
+  # 唯一的 required status check。
+  #
+  # `if: always()` + 逐个检查结果，而不是靠 needs 的默认语义 —— 默认语义里
+  # 任何一个 needs 被 skipped，本 job 自己也会被 skipped，于是 required check
+  # 又变成了「永远不上报」，绕了一圈回到原来的坑。
+  pr-gate:
+    name: pr-gate
+    if: always()
+    needs: [changes, backend, android, android-release, shared]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 汇总各条流水线的结论
+        run: |
+          set -euo pipefail
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "各 job 结论：$results"
+          for r in $results; do
+            case "$r" in
+              # skipped = 这条流水线与本次改动无关（paths 过滤），算通过。
+              success|skipped) ;;
+              *)
+                echo "::error::有 job 未通过（$results）—— 上面展开对应的 job 看具体哪一步红了"
+                exit 1
+                ;;
+            esac
+          done
+          echo "✓ 全部通过"

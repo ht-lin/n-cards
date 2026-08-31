@@ -1,0 +1,173 @@
+# §14.3 的 main 合入流水线。T-011 交付。
+#
+#   全量 PR 检查（backend / android / android-release / shared，无 paths 过滤）
+#     ├─► instrumentation  Gradle Managed Device，api 26 + api 34
+#     ├─► backend-image    构建镜像推 GHCR（tag: sha + main）
+#     └─► （AAB 由 android-release 带 bundle: true 一并产出）
+#
+# **本次没有做、留给后续任务的两段**（§14.3 里还有，但依赖的东西不在）：
+#   - 部署 staging → 迁移 → 冒烟测试：**T-012**。需要 infra/ansible/ 的 playbook
+#     （目前只有 README）与部署 SSH key。接法见本文件末尾的注释块。
+#   - AAB 上传 Play Internal Testing：**T-456**。需要正式签名密钥与 Play service
+#     account，两样现在都不存在（release 变体连 signingConfig 都还没有）。
+#
+# 刻意**不**写成永远 skip 的空壳 job：Actions 界面上「跳过了」和「跑了但什么都没做」
+# 分不开，而后者会让人以为部署已经接上了。
+#
+# ⚠️ 这里也跑一遍全量 PR 检查，不是多余的：PR 上带 paths 过滤，而 main 上要的是
+# 「合进来之后整棵树仍然是绿的」。跨目录的相互影响（改契约影响 Android 生成代码之类）
+# 只有全量跑才看得见。顺带：gradle/actions/setup-gradle 只在默认分支写缓存，
+# 所以这一趟也是在给 PR 侧喂 Gradle 缓存。
+
+name: main
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# 不取消进行中的运行：main 上每个 commit 的镜像都要推上去（tag 带 sha），
+# 取消会在 GHCR 上留下空洞，而 T-012 的部署是按 sha 找镜像的。
+concurrency:
+  group: main-pipeline
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    name: backend
+    uses: ./.github/workflows/backend.yml
+
+  android:
+    name: android
+    uses: ./.github/workflows/android.yml
+
+  android-release:
+    name: android-release
+    uses: ./.github/workflows/android-release.yml
+    with:
+      # §14.3：main 合入流水线要「构建 Android AAB」。上传 Play 属 T-456。
+      bundle: true
+
+  shared:
+    name: shared
+    uses: ./.github/workflows/shared.yml
+
+  # §13.3：关键路径的仪器测试在 Gradle Managed Device 上通过；§14.3 点名 api 26 + 34。
+  #
+  # 只在 main 上跑，不进 PR 流水线：两档模拟器启动 + 31 个测试远超 §14.3 的 12 分钟
+  # 预算。代价是仪器测试的红会在合入之后才出现 —— 这是 §14.3 自己的编排，
+  # 不是 T-011 的取舍。
+  #
+  # ⚠️ api 26 这一档是 T-011 第一次跑：T-009 的 31 个测试此前只在 api 34 上验过。
+  # 设备矩阵与「为什么不能用 ATD 镜像」写在 build-logic 的 ManagedDevices.kt 里。
+  #
+  # 跑根任务而不是点名 :core:crypto / :core:database，是为了防静默漂移：
+  # 下一个加 androidTest 的模块不需要记得回来改这里。没有 androidTest 的模块
+  # 对应任务是 NO-SOURCE，不会启动模拟器。
+  instrumentation:
+    name: instrumentation
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      # GMD 需要硬件加速。GitHub 的 Linux x86 runner 有 /dev/kvm，但确认一下比在
+      # 「模拟器启动超时」里猜半天便宜 —— 那个报错完全不会提到 KVM。
+      - name: 确认 KVM 可用
+        run: |
+          test -e /dev/kvm || { echo "::error::runner 上没有 /dev/kvm，GMD 跑不了"; exit 1; }
+          ls -l /dev/kvm
+
+      - name: 仪器测试（GMD, api 26 + api 34）
+        working-directory: android
+        run: ./gradlew ncardsGroupDebugAndroidTest
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-reports
+          path: |
+            android/**/build/reports/androidTests/
+            android/**/build/outputs/androidTest-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # §14.3：「构建后端镜像 → 推 GHCR（tag: sha + main）」。
+  # 镜像名不是随手起的 —— infra/compose/docker-compose.{staging,prod}.yml 里已经
+  # 写死了 ghcr.io/ht-lin/n-cards-backend，T-012 的部署直接消费这个 tag。
+  backend-image:
+    name: backend-image
+    needs: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # GITHUB_TOKEN 推 GHCR 需要这一条。写在 job 级而不是 workflow 级：
+      # 其余 job 一个都不需要写权限。
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: '构建并推送（tag: sha + main）'
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          # backend/Dockerfile 有 dev / prod 两个 target，部署用的是 prod
+          # （非 root、只读 rootfs，§14.2）。
+          target: prod
+          push: true
+          tags: |
+            ghcr.io/ht-lin/n-cards-backend:${{ github.sha }}
+            ghcr.io/ht-lin/n-cards-backend:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ------------------------------------------------------------------
+  # 留给 T-012（Hetzner staging + Ansible）
+  #
+  #   deploy-staging:
+  #     needs: [backend-image, instrumentation]
+  #     → Ansible over SSH 部署 ghcr.io/ht-lin/n-cards-backend:${{ github.sha }}
+  #     → doctrine:migrations:migrate --no-interaction --allow-no-migration
+  #     → 冒烟测试（curl /health/ready + 安全响应头，见 T-012 验收标准）
+  #
+  # 需要的 repository secrets（§14.3「密钥管理」）：部署 SSH key。
+  # ⚠️ Vault unseal key **绝不**进 CI（§14.3 原文 / ADR-0004），staging 只用合成数据。
+  #
+  # 留给 T-456（Play 上架）
+  #
+  #   play-internal:
+  #     needs: android-release
+  #     → 下载 android-release artifact 里的 AAB → 上传 Play Internal Testing
+  #
+  # 需要：正式签名密钥（现在 release 变体连 signingConfig 都没有，见
+  # NcardsAndroidApplicationPlugin）+ Play service account JSON。
+  # ------------------------------------------------------------------

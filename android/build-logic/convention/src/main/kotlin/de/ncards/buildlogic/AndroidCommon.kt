@@ -80,6 +80,10 @@ internal fun Project.configureAndroidCommon(extension: CommonExtension) {
         test.failOnNoDiscoveredTests.set(moduleHasTests)
     }
 
+    // §13.3 / §14.3 的仪器测试跑在 Gradle Managed Device 上（api 26 + api 34）。
+    // 只在 main 合入流水线里跑 —— 理由见 ManagedDevices.kt 与 main.yml。
+    configureManagedDevices(extension)
+
     extension.packaging.resources.excludes.add("/META-INF/{AL2.0,LGPL2.1}")
     extension.packaging.resources.excludes.add("/META-INF/LICENSE*")
 

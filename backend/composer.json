@@ -90,6 +90,7 @@
         ],
         "deptrac": "deptrac analyse --no-progress",
         "deptrac:selftest": "tools/deptrac-selftest.sh",
+        "migration:check": "tools/migration-check.sh",
         "test": "phpunit",
         "test:coverage": [
             "@php -d pcov.enabled=1 vendor/bin/phpunit --coverage-clover var/coverage/clover.xml",
@@ -100,6 +101,7 @@
             "@stan",
             "@deptrac",
             "@deptrac:selftest",
+            "@migration:check",
             "@test"
         ]
     },
@@ -109,6 +111,7 @@
         "stan": "预热容器后跑 PHPStan level 8（§13.3：0 error）",
         "deptrac": "模块与分层边界检查（§4.2 / §13.3：0 violation）",
         "deptrac:selftest": "自检：故意的跨模块 Domain 引用必须被 deptrac 拦下（T-002 验收标准）",
+        "migration:check": "Doctrine 迁移 up/down 往返 + schema:validate（§13.3）；连不上库时跳过",
         "test": "PHPUnit 全量",
         "test:coverage": "带覆盖率跑测试并校验 §13.3 的阈值（需 pcov 或 xdebug）",
         "qa": "本地质量门禁全套：cs + stan + deptrac + selftest + test"

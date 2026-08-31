@@ -1,0 +1,84 @@
+# §13.3 的 `assembleRelease` + APK 大小回归（≤ +500 KB）。T-011 交付。
+#
+# 为什么是独立的一条 workflow 而不是 android.yml 里的一步：R8 单独就要一分多钟，
+# 串在质量门禁后面会把 §14.3 的 12 分钟预算顶破；拆成并行 job 则完全不占关键路径。
+# 拆成**可调用的 workflow**（而不是 pr.yml 里的内联 job）是因为 main.yml 也要它 ——
+# 那里还要顺带产出 AAB，共用同一套 JDK / SDK / Gradle 的接线。
+#
+# ⚠️ SQLCipher 走 JNI 反射，是 R8 的经典断裂点。但 AAR **自带** consumer proguard
+# 规则（keep 了 native 方法、构造函数与 mNativeHandle），`app/proguard-rules.pro`
+# **不需要**额外条目 —— T-009 核对过，T-011 实测 assembleRelease 一次通过。
+# 这里将来红了，先找别的原因，别急着往 proguard-rules.pro 里堆 keep 规则。
+
+name: android-release
+
+on:
+  workflow_call:
+    inputs:
+      bundle:
+        description: '同时构建 AAB（:app:bundleRelease）。§14.3：只有 main 合入流水线需要。'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  android-release:
+    name: android-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17：AGP 9.3.2 的 Gradle module metadata 声明 org.gradle.jvm.version = 17。
+      # 与 android.yml 保持一致 —— 两处必须同版本，否则 Gradle 缓存互相失效。
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ⚠️ gradle/actions/setup-gradle 默认**只在默认分支写缓存**。PR 上这一步只读，
+      # 缓存由 main.yml 调用同样的 workflow 时喂进去。看到「PR 上缓存没更新」不是
+      # 配置坏了，是设计如此（避免 PR 之间互相污染缓存）。
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+
+      - name: assembleRelease（§13.3）
+        working-directory: android
+        run: ./gradlew :app:assembleRelease
+
+      # 基线是入库的（android/app/apk-size-baseline.txt）。涨了就在同一个 PR 里改它，
+      # 数字的变化出现在 diff 里 —— 这正是 §13.3「超出需 PR 说明」的落地形态。
+      - name: APK 大小回归 ≤ +500 KB（§13.3）
+        run: scripts/ci/check-apk-size.sh
+
+      # §14.3 的 main 合入流水线：「构建 Android AAB → 上传 Play Internal Testing」。
+      # 这里只做前半句 —— 上传需要签名密钥与 Play service account，两样都属 T-456。
+      #
+      # ⚠️ 现在产出的 AAB 是**未签名**的（NcardsAndroidApplicationPlugin 里 release
+      # 没有 signingConfig，注释写明「正式签名配置由 T-456 提供」）。它能用来看体积、
+      # 做归档，**不能**直接传 Play。
+      - name: bundleRelease（§14.3，产出 AAB）
+        if: inputs.bundle
+        working-directory: android
+        run: ./gradlew :app:bundleRelease
+
+      - name: 上传产物（APK / AAB / R8 mapping）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+            android/app/build/outputs/mapping/release/mapping.txt
+          retention-days: 7
+          if-no-files-found: ignore

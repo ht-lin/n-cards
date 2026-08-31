@@ -26,9 +26,21 @@ RULESET_NAME="main-protection"
 # 单人期临时豁免，团队扩充后改为 []
 BYPASS_ACTORS='[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]'
 
-# required status checks：当前只有 T-001 的 commitlint。
-# T-011 交付三条流水线后在此追加 backend / android / shared。
-REQUIRED_CHECKS='[{"context": "commitlint"}]'
+# required status checks：**只有 pr-gate 这一个**，别往里加第二个。
+#
+# ⚠️ 这不是偷懒，是这套拓扑唯一正确的配法（T-011 / ADR-0008）。
+# backend / android / android-release 三条 job 都是**有条件运行**的
+# （.github/workflows/pr.yml 的 changes 过滤器决定），而 GitHub 对不满足条件的 job
+# **根本不上报 context**，不是上报一个「跳过」。把它们配成 required，再叠上
+# 下面的 strict_required_status_checks_policy，只改 README 的 PR 会永远等一个
+# 不会到来的 check —— 那是一把没有钥匙的锁。
+#
+# pr-gate 总是运行，needs 上那四条，并把 skipped 正确地算作通过。
+# 新增一条流水线时要改的是 pr.yml 里 pr-gate 的 needs，**不是**这一行。
+#
+# （T-001 时期的 `commitlint` context 已经不存在了：commitlint 现在是
+# shared 流水线里的两步，见 .github/workflows/shared.yml。）
+REQUIRED_CHECKS='[{"context": "pr-gate"}]'
 
 echo "==> 目标仓库: $REPO"
 

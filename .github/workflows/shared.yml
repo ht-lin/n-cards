@@ -1,0 +1,99 @@
+# §14.3 的第三条流水线：`shared`（spectral → gitleaks → 敏感日志 → TODO → commitlint）。
+# 由 T-011 交付，合并了原来的 contract.yml（T-007）与 commit-conventions.yml（T-001）。
+#
+# 这条流水线**没有 paths 过滤，永远运行** —— 它守的是全仓通用的东西（秘密、日志、
+# TODO、提交信息），没有「这次 PR 不涉及」的说法。pr.yml 里它也是唯一无条件跑的 job。
+#
+# ⚠️ 与 §14.3 的一处偏差：`openapi-codegen-diff` 按规格书属于本条流水线，
+# 实际留在了 android.yml。理由见 docs/adr/0008-ci-gate-topology.md ——
+# `checkApiClientUpToDate` 需要 JDK 17 + Android SDK + Gradle，搬过来等于在关键路径上
+# 再装一遍 Android SDK（2–3 分钟），而门禁效果完全相同：两条 job 都挂在同一个
+# pr-gate 下，任一条红，PR 就合不进去。
+#
+# 本 workflow 只能被调用（workflow_call），不自己接事件 —— 触发编排在
+# pr.yml / main.yml 里。理由同上，ADR-0008。
+
+name: shared
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# gitleaks 的版本与校验和一起钉死。校验和是必须的：这是一个从 GitHub Releases
+# 下载后立刻执行的二进制，只钉版本号挡不住 release 资产被替换。
+# 升级时两个值一起改，并本地跑一遍 scripts/ci/sensitive-scan-selftest.sh ——
+# 那里有两条断言在守 .gitleaks.toml 的豁免边界。
+env:
+  GITLEAKS_VERSION: '8.30.1'
+  GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+
+jobs:
+  shared:
+    name: shared
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # commitlint 要遍历分支上的每一条 commit，浅克隆拿不到 base..head 那一段。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # node 版本与仓库根 package.json 的 engines（>=20）一致，取 22。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # --fail-severity=warn 在 package.json 的 lint:api 里。
+      # 刻意的：spectral:oas 里不少有价值的检查默认是 warning，而这个仓库只有
+      # 一份契约，没有「先记个 warning 以后再说」的余地 —— warning 会一直在那儿，
+      # 然后被下一个人当成背景噪音。
+      - name: Spectral（§13.1 第 2 条）
+        run: npm run lint:api
+
+      - name: 安装 gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSLf -o /tmp/gitleaks.tar.gz "$url"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      # 先证明规则本身有效，再拿它去查代码 —— 与 backend 的 deptrac-selftest、
+      # android 的 module-graph-selftest 同一个思路。三个扫描器全绿只能说明
+      # 「当前代码没违规」，说明不了「违规会被拦下」，而后者才是 T-011 的验收标准。
+      - name: 扫描器自检（T-011 验收标准第二条）
+        run: scripts/ci/sensitive-scan-selftest.sh
+
+      - name: gitleaks（§13.3：0 命中）
+        run: scripts/ci/check-gitleaks.sh
+
+      - name: 敏感日志扫描（§13.3）
+        run: scripts/ci/check-sensitive-logs.sh
+
+      - name: TODO 必须带 issue 编号（§13.3）
+        run: scripts/ci/check-todo-issue-refs.sh
+
+      # 以下两步只在 PR 上有意义：main.yml 也调用本 workflow，而 push 事件里
+      # 没有 github.event.pull_request。合入 main 的 commit message 已经在 PR 阶段
+      # 校验过了（squash merge 后它就是 PR 标题）。
+      - name: 校验分支上的每一条 commit（§13.2）
+        if: github.event_name == 'pull_request'
+        run: >-
+          npx commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+
+      # squash merge 后 PR 标题即为 main 上的 commit message，必须同样合规
+      - name: 校验 PR 标题（§13.2）
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s' "$PR_TITLE" | npx commitlint --verbose
