@@ -88,12 +88,42 @@ jobs:
         with:
           build-scan-publish: false
 
-      # GMD 需要硬件加速。GitHub 的 Linux x86 runner 有 /dev/kvm，但确认一下比在
-      # 「模拟器启动超时」里猜半天便宜 —— 那个报错完全不会提到 KVM。
+      # ⚠️ **这一步不是优化，是 emulator 能不能启动的前提。**
+      #
+      # runner 镜像里 /dev/kvm 是 `crw-rw---- 1 root kvm`（0660），而 runner 用户不在
+      # kvm 组里 —— 节点存在，但打不开。emulator 于是回落到无硬件加速，而
+      # ManagedDevices.kt 里两档设备的 testedAbi 都是 x86_64，x86_64 没有 KVM 就直接拒跑：
+      #
+      #     AvdSnapshotHandler$EmulatorStartFailedException: Unable to start Android
+      #     emulator for dev26_default_x86_64_Pixel_2. Error message from emulator
+      #     process = [ERROR | x86_64 emulation currently requires hardware acceleration!]
+      #
+      # api 26 与 api 34 各重试 5 次全挂，收尾是 "Deleting unbootable snapshot"。
+      # 顺带：同一段日志里的 `gpuChoiceBasedOnGpuOptions: Selected GPU option
+      # 'auto-no-window' is not valid` 是 emulator 自恢复的噪音（下一句就 switching to
+      # 'auto'），两档都有，**不是**死因，别被它带偏。
+      - name: 放开 /dev/kvm 权限
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # ⚠️ 这里查的是**可读写**，不是存在性。
+      #
+      # 上一版写的是 `test -e /dev/kvm`，它在 T-011 的失败 run 里**通过了** —— 节点确实
+      # 在，权限却不给开。守卫查错了维度，于是它放行，真正的报错拖到三分钟后的
+      # api26Setup 才炸，而那条报错完全不提 KVM。-r/-w 才是 emulator 实际需要的东西。
       - name: 确认 KVM 可用
         run: |
+          # `|| true` 是必须的：shell 是 `bash -e`，节点不存在时 ls 会直接把脚本带走，
+          # 下面两句精心写的 ::error:: 一个都打不出来，只剩一句 ls 的德/英文 not found。
+          ls -l /dev/kvm || true
           test -e /dev/kvm || { echo "::error::runner 上没有 /dev/kvm，GMD 跑不了"; exit 1; }
-          ls -l /dev/kvm
+          { test -r /dev/kvm && test -w /dev/kvm; } || {
+            echo "::error::/dev/kvm 存在但当前用户读写不了（见上面的 ls），上一步的 udev 规则没生效"
+            exit 1
+          }
 
       # ⚠️ **这一步不是优化，是这条 job 能不能跑完的前提。**
       #
