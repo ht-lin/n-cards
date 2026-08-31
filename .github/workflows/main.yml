@@ -95,9 +95,41 @@ jobs:
           test -e /dev/kvm || { echo "::error::runner 上没有 /dev/kvm，GMD 跑不了"; exit 1; }
           ls -l /dev/kvm
 
+      # ⚠️ **这一步不是优化，是这条 job 能不能跑完的前提。**
+      #
+      # T-011 首跑与重跑都在这里死了两次，症状极具迷惑性：job 红了，但**一行日志都没有**
+      # （`gh run view --log` 报 "log not found"）。真正的原因只出现在 job 的 annotation 里：
+      #
+      #     System.IO.IOException: No space left on device :
+      #       '/home/runner/actions-runner/.../Worker_*.log'
+      #
+      # 磁盘满到 runner 连自己的诊断日志都写不下，于是日志上传这一步也没了 ——
+      # 「失败但没有日志」这个组合本身就是磁盘满的signature，下次见到先来看这里。
+      #
+      # 为什么偏偏是这条 job：它要下两个 system image（api 26 的 aosp 与 api 34 的
+      # aosp-atd，合计约 2 GB）+ 建两个 AVD，还要为 30 个模块构建 androidTest APK。
+      # 另外三条 job 都不碰模拟器，所以只有这里会撑爆。
+      #
+      # 删的四样都与本 job 无关，且是 runner 镜像里最大的几块（合计约 10 GB）。
+      # ⚠️ **不要**删 /usr/local/lib/android —— 那是 $ANDROID_HOME，setup-android 用的就是它。
+      # 也不要整个删 /opt/hostedtoolcache：setup-java 把 JDK 装在那下面。
+      - name: 腾出磁盘空间
+        run: |
+          echo "== 清理前 =="; df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+          echo "== 清理后 =="; df -h /
+
       - name: 仪器测试（GMD, api 26 + api 34）
         working-directory: android
         run: ./gradlew ncardsGroupDebugAndroidTest
+
+      # 失败时磁盘余量是第一个要看的数字（见上面那段）。always() 是刻意的。
+      - name: 磁盘余量（诊断用）
+        if: always()
+        run: df -h /
 
       - name: 上传测试报告
         if: always()
