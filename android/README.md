@@ -308,12 +308,6 @@ cd android
     **四台**模拟器，在 16 GB 机器上把 Gradle daemon 挤死，报错是
     `Gradle build daemon disappeared unexpectedly`，一个字都不提内存。
     GitHub 的标准 runner 也是 16 GB。
-- **CI 上跑 GMD 必须先腾磁盘，否则 runner 会被撑爆。** T-011 首跑与重跑都死在这里，
-  症状是 **job 红了但一行日志都没有** —— 磁盘满到 runner 连自己的诊断日志都写不下，
-  日志上传自然也没了。真正的原因只在 job 的 annotation 里：`No space left on device`。
-  **「失败 + 没有日志」这个组合本身就是磁盘满的signature。**
-  两个 system image 约 2 GB，加上 30 个模块的 androidTest APK，标准 runner 装不下；
-  `main.yml` 里删掉 dotnet / ghc / boost / CodeQL 腾出约 10 GB。
 - **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
   而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
   构建被杀时不回滚。出路：
