@@ -326,9 +326,24 @@ cd android
   - ⚠️ **守卫要查 `-r`/`-w`，不能只查 `-e`。** 最早那版写的是 `test -e /dev/kvm`，
     在失败 run 里**通过了**，然后真报错拖到三分钟后的 `api26Setup` 才炸，
     而那条报错一个字都不提 KVM。
-  - 同一段日志里的 `gpuChoiceBasedOnGpuOptions: Selected GPU option 'auto-no-window'
-    is not valid` 是 emulator 自恢复的噪音（下一句就 `switching to 'auto'`），
-    两档都有，**不是**死因。
+- **CI 上还必须显式指定 GPU 模式,否则两档模拟器一台都起不来。** 这是与前两条**无关的
+  第三个坑**,前两条修好之后才露出来。AGP 启动 GMD 时硬编码传 `-gpu auto-no-window`,
+  而这个模式**已经不合法了**(emulator 37 的 `-help-gpu` 只认 `auto` / `host` /
+  `software` / `lavapipe` / `swiftshader` / `swangle`)。emulator 于是回退到 `auto`,
+  而 `auto` 要真实 GPU,无头 runner 上没有,进程随即退出:
+  `Selected GPU option 'auto-no-window' is not valid, switching to 'auto' mode.`
+  `main.yml` 里用 `-Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader` 覆盖。
+  - ⚠️ **「本地全绿」不能证明 CI 上可用。** 这条报错**本地也会打**,只是不致命 ——
+    本地有显示设备,回退到 `auto` 照样能起。上面 `ManagedDevices.kt` 里记的
+    「62 次测试在 api 26 与 api 34 上全绿」就是在这种环境下测出来的。
+  - ⚠️ **前两条修好后,报错的「形状」几乎不变,变的是内层那句。** T-011 排查时正是因此
+    把这句 GPU 报错当成噪音、写进注释说「不是死因」,绕了一圈(见 #22)。
+    三层各自的判据:磁盘看**有没有日志**;KVM 看
+    `x86_64 emulation currently requires hardware acceleration!` 是否出现;
+    GPU 看 `gpuChoiceBasedOnGpuOptions`。
+  - ⚠️ **只有真正跑到启动阶段的设备才算数。** `api26Setup` 在某次 run 里没报错,
+    不等于它通过了 —— 它可能还在下载镜像时,`api34Setup` 先失败把整个构建中止了。
+    判据是日志里有没有出现该设备名(`dev26_…` / `dev34_…`),而不是有没有 FAILED。
 - **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
   而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
   构建被杀时不回滚。出路：

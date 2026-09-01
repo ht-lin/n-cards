@@ -99,9 +99,10 @@ jobs:
       #     process = [ERROR | x86_64 emulation currently requires hardware acceleration!]
       #
       # api 26 与 api 34 各重试 5 次全挂，收尾是 "Deleting unbootable snapshot"。
-      # 顺带：同一段日志里的 `gpuChoiceBasedOnGpuOptions: Selected GPU option
-      # 'auto-no-window' is not valid` 是 emulator 自恢复的噪音（下一句就 switching to
-      # 'auto'），两档都有，**不是**死因，别被它带偏。
+      #
+      # ⚠️ 修好这一层之后，**同一个报错形状**还会再出现一次，但换了内层原因（GPU 模式，
+      # 见下面「仪器测试」那一步）。判断修没修好看的是内层那句：本层的判据是
+      # `x86_64 emulation currently requires hardware acceleration!` 出现 0 次。
       - name: 放开 /dev/kvm 权限
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -152,9 +153,29 @@ jobs:
           sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
           echo "== 清理后 =="; df -h /
 
+      # ⚠️ **-P 那个 GPU 参数不是调优，删了两档模拟器都起不来。**
+      #
+      # AGP 启动 GMD 时硬编码传 `-gpu auto-no-window`（字符串就在 gradle-9.3.x.jar 里，
+      # 挨着属性名 android.testoptions.manageddevices.emulator.gpu）。但这个模式**已经
+      # 不合法了** —— emulator 37 的 `-help-gpu` 只认 auto / host / software / lavapipe /
+      # swiftshader / swangle。于是 emulator 打一句「不合法，switching to 'auto'」，
+      # 而 `auto` 要真实 GPU，无头 runner 上没有，进程随即退出：
+      #
+      #     AvdSnapshotHandler$EmulatorStartFailedException: Unable to start Android
+      #     emulator for dev26_default_x86_64_Pixel_2. Error message from emulator
+      #     process = [ERROR | gpuChoiceBasedOnGpuOptions: Selected GPU option
+      #     'auto-no-window' is not valid, switching to 'auto' mode.]
+      #
+      # ⚠️ **这条报错在本地也会打，但本地不致命** —— 有显示设备，回退到 `auto` 照样能起。
+      # 所以「本地 62 个仪器测试全绿」**不能**证明这条路径在 CI 上可用，别用它来判断。
+      # 这个陷阱让 T-011 的排查一度把这句话当成噪音、写进注释说「不是死因」（见 #22）。
+      #
+      # 只写在命令行、不进 android/gradle.properties：本地有 GPU，不必跟着降级到软件渲染。
       - name: 仪器测试（GMD, api 26 + api 34）
         working-directory: android
-        run: ./gradlew ncardsGroupDebugAndroidTest
+        run: >-
+          ./gradlew ncardsGroupDebugAndroidTest
+          -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader
 
       # 失败时磁盘余量是第一个要看的数字（见上面那段）。always() 是刻意的。
       - name: 磁盘余量（诊断用）
