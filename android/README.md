@@ -308,6 +308,27 @@ cd android
     **四台**模拟器，在 16 GB 机器上把 Gradle daemon 挤死，报错是
     `Gradle build daemon disappeared unexpectedly`，一个字都不提内存。
     GitHub 的标准 runner 也是 16 GB。
+- **CI 上跑 GMD 必须先腾磁盘，否则 runner 会被撑爆。** T-011 首跑死在这里，
+  症状是 **job 红了但一行日志都没有** —— 磁盘满到 runner 连自己的诊断日志都写不下，
+  日志上传自然也没了。真正的原因只在 job 的 annotation 里：`No space left on device`。
+  **「失败 + 没有日志」这个组合本身就是磁盘满的signature。**
+  两个 system image 约 2 GB，加上 30 个模块的 androidTest APK，标准 runner 装不下；
+  `main.yml` 里删掉 dotnet / ghc / boost / CodeQL 腾出约 10 GB。
+  实测数字（清理生效那次）：清理前 9.4 G 可用 → 清理后 17 G → job 收尾 4.1 G，
+  峰值吃掉约 13 G。**出厂的 9.4 G 是不够的，别以为余量很宽。**
+- **CI 上还必须先放开 `/dev/kvm` 的权限。** 这是与磁盘**无关的第二个坑**，T-011 重跑
+  （磁盘已经够用）死在这里。runner 上 `/dev/kvm` 是 `crw-rw---- 1 root kvm`，
+  runner 用户不在 kvm 组 —— **节点存在，但打不开**。emulator 于是回落到无硬件加速，
+  而上面 `testedAbi = "x86_64"` 两档都需要它，直接拒跑：
+  `x86_64 emulation currently requires hardware acceleration!`
+  api 26 与 api 34 各重试 5 次全挂，收尾 `Deleting unbootable snapshot`。
+  `main.yml` 里用一条 udev 规则把它改成 0666。
+  - ⚠️ **守卫要查 `-r`/`-w`，不能只查 `-e`。** 最早那版写的是 `test -e /dev/kvm`，
+    在失败 run 里**通过了**，然后真报错拖到三分钟后的 `api26Setup` 才炸，
+    而那条报错一个字都不提 KVM。
+  - 同一段日志里的 `gpuChoiceBasedOnGpuOptions: Selected GPU option 'auto-no-window'
+    is not valid` 是 emulator 自恢复的噪音（下一句就 `switching to 'auto'`），
+    两档都有，**不是**死因。
 - **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
   而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
   构建被杀时不回滚。出路：

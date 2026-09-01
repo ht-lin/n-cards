@@ -88,16 +88,78 @@ jobs:
         with:
           build-scan-publish: false
 
-      # GMD 需要硬件加速。GitHub 的 Linux x86 runner 有 /dev/kvm，但确认一下比在
-      # 「模拟器启动超时」里猜半天便宜 —— 那个报错完全不会提到 KVM。
+      # ⚠️ **这一步不是优化，是 emulator 能不能启动的前提。**
+      #
+      # runner 镜像里 /dev/kvm 是 `crw-rw---- 1 root kvm`（0660），而 runner 用户不在
+      # kvm 组里 —— 节点存在，但打不开。emulator 于是回落到无硬件加速，而
+      # ManagedDevices.kt 里两档设备的 testedAbi 都是 x86_64，x86_64 没有 KVM 就直接拒跑：
+      #
+      #     AvdSnapshotHandler$EmulatorStartFailedException: Unable to start Android
+      #     emulator for dev26_default_x86_64_Pixel_2. Error message from emulator
+      #     process = [ERROR | x86_64 emulation currently requires hardware acceleration!]
+      #
+      # api 26 与 api 34 各重试 5 次全挂，收尾是 "Deleting unbootable snapshot"。
+      # 顺带：同一段日志里的 `gpuChoiceBasedOnGpuOptions: Selected GPU option
+      # 'auto-no-window' is not valid` 是 emulator 自恢复的噪音（下一句就 switching to
+      # 'auto'），两档都有，**不是**死因，别被它带偏。
+      - name: 放开 /dev/kvm 权限
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # ⚠️ 这里查的是**可读写**，不是存在性。
+      #
+      # 上一版写的是 `test -e /dev/kvm`，它在 T-011 的失败 run 里**通过了** —— 节点确实
+      # 在，权限却不给开。守卫查错了维度，于是它放行，真正的报错拖到三分钟后的
+      # api26Setup 才炸，而那条报错完全不提 KVM。-r/-w 才是 emulator 实际需要的东西。
       - name: 确认 KVM 可用
         run: |
+          # `|| true` 是必须的：shell 是 `bash -e`，节点不存在时 ls 会直接把脚本带走，
+          # 下面两句精心写的 ::error:: 一个都打不出来，只剩一句 ls 的德/英文 not found。
+          ls -l /dev/kvm || true
           test -e /dev/kvm || { echo "::error::runner 上没有 /dev/kvm，GMD 跑不了"; exit 1; }
-          ls -l /dev/kvm
+          { test -r /dev/kvm && test -w /dev/kvm; } || {
+            echo "::error::/dev/kvm 存在但当前用户读写不了（见上面的 ls），上一步的 udev 规则没生效"
+            exit 1
+          }
+
+      # ⚠️ **这一步不是优化，是这条 job 能不能跑完的前提。**
+      #
+      # T-011 首跑与重跑都在这里死了两次，症状极具迷惑性：job 红了，但**一行日志都没有**
+      # （`gh run view --log` 报 "log not found"）。真正的原因只出现在 job 的 annotation 里：
+      #
+      #     System.IO.IOException: No space left on device :
+      #       '/home/runner/actions-runner/.../Worker_*.log'
+      #
+      # 磁盘满到 runner 连自己的诊断日志都写不下，于是日志上传这一步也没了 ——
+      # 「失败但没有日志」这个组合本身就是磁盘满的signature，下次见到先来看这里。
+      #
+      # 为什么偏偏是这条 job：它要下两个 system image（api 26 的 aosp 与 api 34 的
+      # aosp-atd，合计约 2 GB）+ 建两个 AVD，还要为 30 个模块构建 androidTest APK。
+      # 另外三条 job 都不碰模拟器，所以只有这里会撑爆。
+      #
+      # 删的四样都与本 job 无关，且是 runner 镜像里最大的几块（合计约 10 GB）。
+      # ⚠️ **不要**删 /usr/local/lib/android —— 那是 $ANDROID_HOME，setup-android 用的就是它。
+      # 也不要整个删 /opt/hostedtoolcache：setup-java 把 JDK 装在那下面。
+      - name: 腾出磁盘空间
+        run: |
+          echo "== 清理前 =="; df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/CodeQL" || true
+          echo "== 清理后 =="; df -h /
 
       - name: 仪器测试（GMD, api 26 + api 34）
         working-directory: android
         run: ./gradlew ncardsGroupDebugAndroidTest
+
+      # 失败时磁盘余量是第一个要看的数字（见上面那段）。always() 是刻意的。
+      - name: 磁盘余量（诊断用）
+        if: always()
+        run: df -h /
 
       - name: 上传测试报告
         if: always()
