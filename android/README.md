@@ -312,10 +312,24 @@ cd android
   症状是 **job 红了但一行日志都没有** —— 磁盘满到 runner 连自己的诊断日志都写不下，
   日志上传自然也没了。真正的原因只在 job 的 annotation 里：`No space left on device`。
   **「失败 + 没有日志」这个组合本身就是磁盘满的signature。**
-  两个 system image 约 2 GB，加上 30 个模块的 androidTest APK，标准 runner 装不下；
-  `main.yml` 里删掉 dotnet / ghc / boost / CodeQL 腾出约 10 GB。
-  实测数字（清理生效那次）：清理前 9.4 G 可用 → 清理后 17 G → job 收尾 4.1 G，
-  峰值吃掉约 13 G。**出厂的 9.4 G 是不够的，别以为余量很宽。**
+  两个 system image 约 2 GB，加上 30 个模块的 androidTest APK，标准 runner 装不下。
+  **出厂只有 9.4 G 可用**（72 G 的盘，GitHub 的预装镜像自己占掉 63 G），别以为余量很宽。
+
+  ⚠️ **腾到 17 G 仍然不够** —— 那一版能让 api 26 跑起来，但 api 34 建 snapshot 时
+  磁盘见底，emulator **零输出地静默死亡**（见下面「第四个坑」）。现在删的东西多得多
+  （加上 `$ANDROID_HOME/ndk`、docker 预拉镜像、swift、powershell、hostedtoolcache
+  里除 Java 外的运行时），实测：
+
+  | | 17 G 那版 | 现在 |
+  |---|---|---|
+  | 清理后可用 | 17 G | **39 G** |
+  | 全程最低点 | 未采样 | **21 G** |
+  | job 收尾 | 2.7 G（97 %） | **21 G（72 %）** |
+  | 结果 | api 34 静默死 | 62 个测试全过 |
+
+  峰值吃掉约 18 G（下两个 image + 建两个 AVD + snapshot + 29 个模块的 androidTest APK）。
+  `main.yml` 里有个后台采样器每 10 秒记一次余量，**那是诊断设施不是调试残留**，别删 ——
+  两档 setup 都在同一次 gradle 调用内部，没法在它们之间插 step，只能这么采。
 - **CI 上还必须先放开 `/dev/kvm` 的权限。** 这是与磁盘**无关的第二个坑**，T-011 重跑
   （磁盘已经够用）死在这里。runner 上 `/dev/kvm` 是 `crw-rw---- 1 root kvm`，
   runner 用户不在 kvm 组 —— **节点存在，但打不开**。emulator 于是回落到无硬件加速，
@@ -344,6 +358,29 @@ cd android
   - ⚠️ **只有真正跑到启动阶段的设备才算数。** `api26Setup` 在某次 run 里没报错,
     不等于它通过了 —— 它可能还在下载镜像时,`api34Setup` 先失败把整个构建中止了。
     判据是日志里有没有出现该设备名(`dev26_…` / `dev34_…`),而不是有没有 FAILED。
+- **第四个坑仍然是磁盘,只是换了张脸。** 前三条修好后,api 26 能跑了,但 `api34Setup`
+  的 `aosp_atd` 模拟器**静默死亡** —— `Error message from emulator process = []`,
+  emulator 进程一个字都不输出,5 次重试全挂。把清理加狠(17 G → 39 G)之后**直接就好了**,
+  没有改任何镜像或渲染器配置。
+  - ⚠️ **`aosp_atd` 镜像是清白的,别去动它。** 排查中两次把 ATD 当成病因,两次都错:
+    第一次是把「api 26 没跑到」误读成「api 26 通过了」,于是把两档的差异归给镜像;
+    第二次是看到 api 26 能起、api 34 不能起,又觉得 ATD 可疑。**真实差异是执行顺序**
+    —— api 34 排在后面,轮到它建 snapshot 时磁盘已经被前面吃光了。
+  - ⚠️ **「零输出的静默死亡」优先怀疑磁盘,而不是渲染器。** 有报错文本反而说明
+    emulator 活到了能打日志的时候;什么都没有,更像是写不下东西。
+
+> **T-011 的 GMD 门禁一共踩了四层,每修一层才露出下一层，而且报错的「形状」几乎不变。**
+> 判据要看内层那句,不能看形状:
+>
+> | 层 | 判据 | 修法 |
+> |---|---|---|
+> | 磁盘不足(一) | job 红了但**没有日志** | 清理 dotnet / ghc / boost / CodeQL |
+> | `/dev/kvm` | `x86_64 emulation currently requires hardware acceleration!` | udev 规则改 0666 |
+> | GPU 模式 | `gpuChoiceBasedOnGpuOptions` | `-P…emulator.gpu=swiftshader` |
+> | 磁盘不足(二) | `Error message from emulator process = []`(**零输出**) | 清理加狠到 39 G |
+>
+> 全部修完后:62 个测试(31 × 两档)在 CI 上首次真正执行并全过,耗时约 23 分钟。
+> **在此之前 CI 上从未跑过任何一个仪器测试**,门禁一直是空的。
 - **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
   而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
   构建被杀时不回滚。出路：
