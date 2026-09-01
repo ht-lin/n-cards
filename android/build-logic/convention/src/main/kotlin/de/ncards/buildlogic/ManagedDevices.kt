@@ -85,6 +85,9 @@ private const val MAIN_DEVICE_API = 34
  * testedAbi"）。已确认 `ManagedVirtualDevice.setTestedAbi` 确实被调用了（反编译
  * 插件字节码看过），所以是 AGP 那条警告没读 DSL 的值，不是这里没设上。
  * 今天两条路径的实际 ABI 都是 x86_64，62 次测试在 api 26 与 api 34 上全绿。
+ * ⚠️ 那 62 个绿是**本地**跑出来的，不构成「CI 上也能跑」的证据 —— 本地有显示设备，
+ * CI 的无头 runner 没有，这个差异让 GMD 在 CI 上一台模拟器都起不来（#22，修法在
+ * main.yml 的「仪器测试」那一步）。ABI 这一条的结论不受影响，但别拿它当 CI 的凭据。
  * **别因为警告还在就把这行删掉** —— 删了才是真的会在 AGP 10 上炸。
  * 升 AGP 时回头确认一次：警告消失了，或者它开始说别的。
  *
