@@ -29,9 +29,13 @@ Vault 的 auto-unseal 是**关闭**的（ADR-0004）。unseal key 为 Shamir 3-o
 ## 前置检查
 
 ```bash
-ssh <生产主机>
-cd /opt/ncards          # 以实际部署路径为准（T-012 的 Ansible 定义）
-export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml
+ssh -p 2242 deploy@<主机>   # 端口与用户由 T-012 的 Ansible 定义，见 infra/ansible/inventory/
+cd /opt/ncards             # 部署路径，由 T-012 坐实
+
+# ⚠️ staging 是**三段**叠加链，生产是两段 —— 少叠一层不会报错，
+# 只会静默地用另一套配置（比如 dev 模式的 Vault）。按环境选一行：
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml   # staging
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml                                            # production
 
 # 1) vault 容器在跑吗
 docker compose ps vault
@@ -115,7 +119,7 @@ docker compose exec vault vault operator init \
 ```bash
 # 生产的 compose 里没有 vault-init 服务（被 profiles: ["disabled"] 关掉了）——
 # 那个容器需要常驻一个 root 级 token，不该留在生产环境里。所以这里手工跑。
-docker run --rm --network <compose 的 backing 网络名> \
+docker run --rm --network ncards_backing \
   -v /opt/ncards/infra/vault:/vault/bootstrap:ro \
   -e VAULT_ADDR=http://vault:8200 \
   -e VAULT_TOKEN='<上一步的 root token>' \
@@ -130,7 +134,15 @@ docker compose exec vault vault write -address=http://127.0.0.1:8200 \
 ```
 
 把 `role_id` 与 `secret_id` 写进 sops(age) 加密的配置，随 Ansible 下发为
-`VAULT_ROLE_ID` / `VAULT_SECRET_ID`（T-012）。
+`VAULT_ROLE_ID` / `VAULT_SECRET_ID`（T-012 已交付）。在**运维本机**：
+
+```bash
+sops infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
+# 改完存盘即自动重新加密，然后提交 → PR → 合入 → 下一次部署自动生效
+```
+
+首次初始化时这两个值是 `pending-bootstrap-see-runbook` 占位符 ——
+完整顺序见 [`staging-first-boot.md`](staging-first-boot.md) 第 9–10 步。
 
 **最后一步 —— 吊销 root token：**
 

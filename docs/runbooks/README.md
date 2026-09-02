@@ -8,7 +8,9 @@
 
 | 文件 | 内容 | 交付任务 | 状态 |
 |---|---|---|---|
-| [`vault-unseal.md`](vault-unseal.md) | Vault 手工 unseal（Shamir 3-of-5）。auto-unseal **关闭**，unseal key 离线保管，**绝不进 CI**（Q6，见 [ADR-0004](../adr/0004-manual-vault-unseal.md)） | T-005 初版 ✅ / T-406 完善 | ✅ 初版 |
+| [`vault-unseal.md`](vault-unseal.md) | Vault 手工 unseal（Shamir 3-of-5）。auto-unseal **关闭**，unseal key 离线保管，**绝不进 CI**（Q6，见 [ADR-0004](../adr/0004-manual-vault-unseal.md)） | T-005 初版 ✅ / T-012 补实际路径 ✅ / T-406 完善 | ✅ 初版 |
+| [`staging-first-boot.md`](staging-first-boot.md) | 新主机从裸机到「main 合入自动部署」的 13 步。**其中 vault init / unseal / bootstrap 三步不可自动化** —— 分界线是「凡是需要 unseal key 或 root token 的，永远人工」 | T-012 | ✅ |
+| [`deploy-and-rollback.md`](deploy-and-rollback.md) | 部署红了怎么处置。先读判定（`ok` / `vault_sealed` / `broken`）再动手 —— **`vault_sealed` 不该回滚**。含手工回滚、从快照恢复、磁盘满了的清理 | T-012 | ✅ |
 | `key-rotation.md` | Transit key 轮换与 rewrap。注意 `ncards-hmac` **不轮换**（轮换会让所有 HMAC 查找失效） | T-406 | ⏳ |
 | `restore-from-backup.md` | 从备份恢复 Postgres + Vault。**上线前必须完成一次真实恢复演练**（不可裁剪项） | T-406 | ⏳ |
 | `esp-failover.md` | 邮件服务商故障时的处置。§3.2 已接受"email 是单点故障"，**不做双活**，本文写的是降级与对外沟通口径 | T-407 | ⏳ |
