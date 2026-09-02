@@ -1,0 +1,112 @@
+---
+# 部署前的数据库快照（§14.3「前置数据库快照」）。
+#
+# ============================================================================
+# ⚠️ 这不是备份系统。
+# ============================================================================
+# 无异地、无 WAL 归档、无客户端加密。它是**发布护栏** —— 让「迁移把数据改坏了」
+# 这件事有一个可以退回去的点，仅此而已。
+#
+# §7.4 / §14.2 要求的备份（pgBackRest/wal-g + age + Hetzner Storage Box、
+# 保留 30 天、每季度恢复演练）属于 T-406，届时**替换**本文件的做法。
+# 完整理由与后果见 docs/adr/0010-rollback-image-tag-only.md。
+#
+# staging 是合成数据，未加密落盘无所谓。**生产启用前必须先由 T-406 替换** ——
+# 未加密的 pg_dump 躺在业务主机磁盘上是真实的合规缺口。
+
+- name: 确认快照目录存在
+  ansible.builtin.file:
+    path: "{{ ncards_snapshot_path }}"
+    state: directory
+    owner: root
+    group: root
+    # 0700 + root：快照里是全库明文，不该被将来任何一个非特权用户或
+    # 挂错卷的容器读到。
+    # ⚠️ 这**挡不住 deploy 用户** —— 它有 sudo，而且在 docker 组里（≡ root）。
+    # 别把这行权限当成「拿到部署密钥不等于拿到数据」的依据，那不成立（ADR-0009）。
+    mode: "0700"
+  become: true
+
+- name: 重新采集磁盘余量
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+
+- name: 断言磁盘余量足够做一次部署
+  ansible.builtin.assert:
+    that: >-
+      ((ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available
+        / 1024 / 1024 / 1024) >= ncards_min_free_gb
+    fail_msg: >-
+      根分区可用不足 {{ ncards_min_free_gb }} GB，中止部署。
+      一次部署最坏要同时容纳新镜像、旧镜像、一份快照和解压临时空间。
+      清理步骤见 docs/runbooks/deploy-and-rollback.md 的「磁盘满了」一节。
+      **不要**用 `docker system prune -af` —— 它会把回滚要用的上一个镜像删掉。
+
+- name: 生成快照文件名
+  ansible.builtin.set_fact:
+    ncards_snapshot_file: >-
+      {{ ncards_snapshot_path }}/{{ ansible_date_time.iso8601_basic_short }}-{{
+        (ncards_app_image | split(':') | last)[:12] }}.sql.gz
+
+- name: 导出数据库快照
+  # 管道 + 重定向，用 shell 而不是 command。
+  # `set -o pipefail` 是关键：不写的话 pg_dump 失败但 gzip 成功时整条管道返回 0，
+  # 于是得到一个 20 字节的「成功」快照，而回滚时才会发现它是空的。
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      docker compose {{ ncards_compose_flags }} exec -T postgres
+      pg_dump -U ncards -d ncards
+      | gzip -9 > {{ ncards_snapshot_file }}
+    chdir: "{{ ncards_compose_dir }}"
+    creates: "{{ ncards_snapshot_file }}"
+  args:
+    executable: /bin/bash
+  become: true
+  register: ncards_snapshot_result
+
+- name: 收紧快照文件权限
+  ansible.builtin.file:
+    path: "{{ ncards_snapshot_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+
+- name: 确认快照不是空的
+  ansible.builtin.stat:
+    path: "{{ ncards_snapshot_file }}"
+  register: ncards_snapshot_stat
+  become: true
+  # 一个空库的 gzip 也有几百字节（schema 头）。小于 100 字节说明 pg_dump 没真的跑。
+  failed_when: ncards_snapshot_stat.stat.size < 100
+
+- name: 报告快照
+  ansible.builtin.debug:
+    msg: >-
+      快照 {{ ncards_snapshot_file }}
+      （{{ (ncards_snapshot_stat.stat.size / 1024) | round(1) }} KB）
+
+# ---------------------------------------------------------------------------
+# 清理旧快照
+# ---------------------------------------------------------------------------
+- name: 列出已有快照
+  ansible.builtin.find:
+    paths: "{{ ncards_snapshot_path }}"
+    patterns: "*.sql.gz"
+  register: ncards_snapshots
+  become: true
+
+- name: 删除超出保留份数的旧快照
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  become: true
+  # 按修改时间倒序排好，切掉最新的 N 份，剩下的就是要删的。
+  # 用切片而不是 batch()：batch(N) 是按 N 个一组分块，超过两组时
+  # `| last` 只拿到最后一块，会漏删中间那些。
+  loop: >-
+    {{ (ncards_snapshots.files | sort(attribute='mtime', reverse=true) | list)[ncards_snapshot_keep | int:] }}
+  loop_control:
+    label: "{{ item.path }}"

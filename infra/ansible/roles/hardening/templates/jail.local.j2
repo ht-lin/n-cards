@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+# fail2ban jail 配置（§7.4）。
+
+[DEFAULT]
+# ⚠️ 必须显式写 systemd。
+#
+# Ubuntu 22.04 起默认不再有 /var/log/auth.log（日志全进 journald），而 fail2ban
+# 的 backend=auto 在找不到日志文件时**不会报错**，它只是安静地什么都不封。
+# 现象是 `systemctl status fail2ban` 一片绿、`fail2ban-client status sshd` 显示
+# Currently banned: 0，而暴力破解一直在进行。这一行是这份配置里最重要的一行。
+backend = systemd
+
+# 本机与内网不封。把自己封掉的话，恢复要走 Hetzner Console。
+ignoreip = 127.0.0.1/8 ::1
+
+bantime = 1h
+findtime = 10m
+maxretry = 3
+
+[sshd]
+enabled = true
+# 端口跟着 group_vars 走。写死 22 的话换端口后 jail 就对不上了 ——
+# 而它同样是安静地不工作。
+port = {{ ncards_ssh_port }}

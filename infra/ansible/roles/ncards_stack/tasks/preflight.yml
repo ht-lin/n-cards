@@ -1,0 +1,70 @@
+---
+# 部署前的事实采集与硬性断言。
+#
+# 这一步存在的理由：§4.1 假设的是 CCX23（4 vCPU / 16 GB / 160 GB），而 staging
+# 实机小一档。与其在 playbook 里到处写「假设有多少内存」，不如每次部署都**量一遍**，
+# 把实测值落盘，让偏差有据可查（docs/tasks/M0.md 的交付产物段直接抄这份 JSON）。
+
+- name: 采集主机 facts
+  ansible.builtin.setup:
+
+- name: 取根分区的挂载信息
+  ansible.builtin.set_fact:
+    ncards_root_mount: >-
+      {{ ansible_mounts | selectattr('mount', 'equalto', '/') | first }}
+
+- name: 断言主机规格达到最低要求
+  ansible.builtin.assert:
+    that:
+      - ansible_processor_vcpus | int >= 2
+      # 4 GB 的机器实际报 ~3900 MB（固件与内核预留掉一部分），
+      # 所以门槛给 3400 而不是 4096 —— 卡在 3900 上会让一台合规的机器过不了。
+      - ansible_memtotal_mb | int >= 3400
+      - (ncards_root_mount.size_available / 1024 / 1024 / 1024) | round(1) >= 15
+    fail_msg: >-
+      主机规格不足：{{ ansible_processor_vcpus }} vCPU /
+      {{ ansible_memtotal_mb }} MB /
+      根分区可用 {{ (ncards_root_mount.size_available / 1024 / 1024 / 1024) | round(1) }} GB。
+      最低要求 2 vCPU / 3400 MB / 15 GB 可用。
+      磁盘不够时先看 /var/backups/ncards 与 docker 镜像占用
+      （docs/runbooks/deploy-and-rollback.md 有清理步骤）。
+    success_msg: >-
+      主机规格 OK：{{ ansible_processor_vcpus }} vCPU /
+      {{ ansible_memtotal_mb }} MB /
+      根分区可用 {{ (ncards_root_mount.size_available / 1024 / 1024 / 1024) | round(1) }} GB
+
+- name: 组装主机事实
+  ansible.builtin.set_fact:
+    ncards_host_facts:
+      collected_at: "{{ ansible_date_time.iso8601 }}"
+      declared_machine_type: "{{ ncards_machine_type | default('未声明') }}"
+      vcpus: "{{ ansible_processor_vcpus | int }}"
+      memtotal_mb: "{{ ansible_memtotal_mb | int }}"
+      swaptotal_mb: "{{ ansible_swaptotal_mb | int }}"
+      disk_total_gb: "{{ (ncards_root_mount.size_total / 1024 / 1024 / 1024) | round(1) }}"
+      disk_free_gb: "{{ (ncards_root_mount.size_available / 1024 / 1024 / 1024) | round(1) }}"
+      kernel: "{{ ansible_kernel }}"
+      distro: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+- name: 落盘 host-facts.json
+  ansible.builtin.copy:
+    content: "{{ ncards_host_facts | to_nice_json }}\n"
+    dest: "{{ ncards_state_path }}/host-facts.json"
+    owner: "{{ ncards_deploy_user }}"
+    group: "{{ ncards_deploy_user }}"
+    mode: "0644"
+
+# 打进 CI 日志，这样不登机器也能看到实测值。
+- name: 报告主机事实
+  ansible.builtin.debug:
+    var: ncards_host_facts
+
+# swap 缺失不致命（部署照样能跑），但在 4 GB 机器上它是一次 OOM 的前兆，
+# 值得在每次部署时叫一声。roles/docker 会装上它。
+- name: 提醒 swap 缺失
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️ 本机没有 swap。4 GB 内存上部署峰值可能触发 OOM killer
+      （表现为 postgres 被杀、健康检查判定 broken、触发一次无意义的回滚）。
+      跑一次 site.yml 会创建 2 GB swapfile。
+  when: ansible_swaptotal_mb | int == 0

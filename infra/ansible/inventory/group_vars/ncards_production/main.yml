@@ -1,0 +1,23 @@
+---
+# production 环境变量骨架（T-012）。生产主机尚不存在，见 inventory/production.yml。
+
+ncards_site_address: api.n-cards.de
+ncards_acme_email: ops@n-cards.de
+ncards_acme_ca: https://acme-v02.api.letsencrypt.org/directory
+
+# 生产用与 staging **不同**的 SSH 端口与**不同**的部署密钥。
+# 一把钥匙开两把锁的话，staging 的 CI 泄露就直接等于生产失守。
+ncards_ssh_port: 2243
+ncards_deploy_authorized_keys: []
+
+# 生产不放松日志级别（§14.4 的日志里不得含个人数据，debug 会显著抬高误写的风险）。
+ncards_log_level: info
+
+ncards_machine_type: "未定 —— 开机时按 §9.3 的容量假设与 staging 实测负载定"
+
+# ⚠️ 生产启用前必须先解决的两件事（不解决就别把 environment 选成 production）：
+#
+#   1. ADR-0010：部署前快照目前是**未加密**的 pg_dump 落在业务主机磁盘上。
+#      staging 是合成数据所以无所谓，生产上这是真实的合规缺口 ——
+#      必须先由 T-406 的 age 加密 + Hetzner Storage Box 方案替换。
+#   2. §9.4：上线前必须完成**一次真实的恢复演练**（§13.8 的不可裁剪项）。

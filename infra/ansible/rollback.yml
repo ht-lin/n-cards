@@ -1,0 +1,47 @@
+---
+# 人工回滚（T-012）。
+#
+#     cd infra/ansible
+#     ansible-playbook -i inventory/staging.yml rollback.yml
+#
+# 什么时候用它：deploy.yml 的**自动**回滚也失败了，或者部署当时判定是 ok、
+# 过了一会儿才发现新版本有问题。
+#
+# 它做的事和自动回滚完全一样：把 .env 的 APP_IMAGE 换回
+# state/previous-image，只重启 app，再判定一次。
+#
+# ⚠️ **不回滚数据库。** 迁移已经跑过了，down() 不会被自动执行 ——
+# 理由见 docs/adr/0010-rollback-image-tag-only.md。如果新版本的迁移改坏了数据，
+# 回滚镜像救不了，要从 /var/backups/ncards 的快照恢复，
+# 步骤见 docs/runbooks/deploy-and-rollback.md（那是人工决策，不自动做）。
+
+- name: 回滚到上一个镜像 tag
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 回滚
+      ansible.builtin.include_role:
+        name: ncards_stack
+        tasks_from: rollback
+
+    - name: 回滚后判定
+      ansible.builtin.include_role:
+        name: ncards_stack
+        tasks_from: healthcheck
+
+    - name: 报告结果
+      ansible.builtin.debug:
+        msg: >-
+          回滚完成，判定 {{ ncards_health_verdict }}。
+          {% if ncards_health_verdict == 'vault_sealed' %}
+          Vault 是封印的 —— 先按 docs/runbooks/vault-unseal.md unseal 再看。
+          {% elif ncards_health_verdict == 'broken' %}
+          ⚠️ 回滚后仍然不健康，问题不在镜像。见 deploy-and-rollback.md。
+          {% endif %}
+
+    - name: 回滚未能恢复健康
+      ansible.builtin.fail:
+        msg: "回滚后判定仍为 {{ ncards_health_verdict }}"
+      when: ncards_health_verdict != 'ok'

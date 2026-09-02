@@ -1,0 +1,48 @@
+---
+# 两个环境共用的变量（T-012）。环境相关的值在 group_vars/ncards_{staging,production}/ 里。
+
+# ---------------------------------------------------------------- 路径
+# docs/runbooks/vault-unseal.md 从 T-005 起就假设了这个路径，这里把它坐实。
+ncards_deploy_path: /opt/ncards
+ncards_state_path: "{{ ncards_deploy_path }}/state"
+ncards_snapshot_path: /var/backups/ncards
+
+ncards_deploy_user: deploy
+
+# ---------------------------------------------------------------- compose
+# 叠加链的顺序**不能改**：base → prod → staging。
+# prod 提供生产形态（file 后端的 vault、GHCR 镜像、443），staging 只再覆盖
+# 域名、资源配额、日志级别三处。少一层或换个顺序都会静默得到另一套配置。
+ncards_compose_dir: "{{ ncards_deploy_path }}/infra/compose"
+ncards_compose_files:
+  - docker-compose.base.yml
+  - docker-compose.prod.yml
+  - docker-compose.staging.yml
+
+ncards_image_repo: ghcr.io/ht-lin/n-cards-backend
+
+# ---------------------------------------------------------------- 保留策略
+# 40 GB 的盘上这两个数字不是随手定的，账见 infra/ansible/README.md：
+#   镜像保留 3 个 ≈ 600 MB，够回滚两步；再多就是拿磁盘换一个用不上的深度。
+#   快照 10 份在 M0 的合成数据下是几十 MB；接了真实数据量后要由 T-406 重定。
+ncards_image_keep: 3
+ncards_snapshot_keep: 10
+
+# 快照前要求的最小可用磁盘。留 5 GB 是因为一次部署最坏情况要同时容纳：
+# 新镜像（~300 MB）+ 旧镜像 + 一份快照 + Docker 解压过程的临时空间。
+ncards_min_free_gb: 5
+
+# ---------------------------------------------------------------- 超时
+# 这台机器是 2 vCPU，部署期间迁移 + cache:warmup + pg_dump 会把 CPU 打满，
+# 所以这些值按小机器给，别按开发机的手感调小。
+ncards_compose_wait_timeout: 120
+ncards_health_retries: 12
+ncards_health_delay: 5
+
+# false 时跳过 /health/ready 判定，只要 /health/live 通就算过。
+# 只在**首启**用（那时 Vault 还没 init，ready 必然 503）：
+#     ansible-playbook deploy.yml -e ncards_wait_for_ready=false
+ncards_wait_for_ready: true
+
+# 部署时是否执行 Doctrine 迁移。CI 默认 true；首启和纯回滚时由命令行关掉。
+ncards_run_migrations: true

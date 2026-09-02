@@ -1,0 +1,240 @@
+---
+# 主机加固（§7.4：仅密钥登录、禁 root、fail2ban、非 22 端口）。
+#
+# ⚠️ 本 role 会改掉自己正在用的那条 SSH 连接的端口。改砸了就登不上去了。
+# 执行前**另开一个已登录的会话别关**（runbook 里有这句）。最坏情况走 Hetzner Console。
+
+# ---------------------------------------------------------------------------
+# 两阶段连接：先弄清现在到底能从哪个端口进来
+# ---------------------------------------------------------------------------
+# 首次 provision 时主机还在 22；之后（含重跑本 playbook）在 ncards_ssh_port。
+# inventory 写死任一个都会让另一种情形连不上，所以在这里探一次。
+#
+# 探测走本地 wait_for（对着 ansible_host 探，不需要先连上），两个端口都试，
+# 通了哪个就把 ansible_port 设成哪个。两个都不通就是主机/防火墙的问题，直接失败。
+#
+# 只探目标端口这一个：通了说明已经加固过（重跑），不通就当作首次 provision 回落到 22。
+# 两个端口各探一次再比较结果的写法看着更周全，实际不可靠 —— `failed_when: false`
+# 会把注册结果里的 `failed` 一律改写成 false，事后就分不出哪次真的超时了。
+- name: 探测目标 SSH 端口是否已在监听
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ ncards_ssh_port }}"
+    timeout: 8
+    state: started
+  delegate_to: localhost
+  become: false
+  register: ncards_port_probe
+  ignore_errors: true
+  changed_when: false
+
+- name: 固定本次连接使用的 SSH 端口
+  ansible.builtin.set_fact:
+    ansible_port: "{{ 22 if ncards_port_probe is failed else ncards_ssh_port }}"
+
+- name: 确认选定的 SSH 端口可达
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ ansible_port }}"
+    timeout: 8
+    state: started
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  # 这一步失败说明 22 与 {{ ncards_ssh_port }} 都不通：确认主机开着、DNS 指对了、
+  # Hetzner 的云防火墙没挡。此时 playbook 还什么都没改，排查完直接重跑即可。
+
+- name: 报告连接端口
+  ansible.builtin.debug:
+    msg: "本次经 {{ ansible_host }}:{{ ansible_port }} 连接（目标端口 {{ ncards_ssh_port }}）"
+
+- name: 采集主机 facts
+  ansible.builtin.setup:
+
+# ---------------------------------------------------------------------------
+# 部署用户
+# ---------------------------------------------------------------------------
+- name: 校验部署公钥已配置
+  ansible.builtin.assert:
+    that: ncards_deploy_authorized_keys | length > 0
+    fail_msg: >-
+      ncards_deploy_authorized_keys 是空的。加固会禁掉 root 登录与口令登录 ——
+      在没有任何一把可用公钥的情况下继续，下一次就再也连不上这台机器了。
+      先把公钥填进 inventory/group_vars/<环境>/main.yml。
+
+- name: 创建部署用户
+  ansible.builtin.user:
+    name: "{{ ncards_deploy_user }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: 下发部署用户的 authorized_keys
+  ansible.posix.authorized_key:
+    user: "{{ ncards_deploy_user }}"
+    key: "{{ ncards_deploy_authorized_keys | join('\n') }}"
+    # 独占：列表里没有的键会被删掉。轮换密钥时改 group_vars 重跑即可，
+    # 不会在机器上留下一把没人记得的旧钥匙。
+    exclusive: true
+
+# ---------------------------------------------------------------------------
+# sudo
+# ---------------------------------------------------------------------------
+# ⚠️ 这一条看起来像是在放松安全，值得说清楚为什么不是。
+#
+# deploy 用户必须能做三件需要 root 的事：跑本 playbook（apt / sshd / ufw）、
+# 管理 /var/backups/ncards、以及在 provision 之后**还能再跑一次** ——
+# 因为加固之后 root 的 SSH 登录已经关了，没有第二条进得来的路。
+#
+# 而它本来就在 docker 组里，`docker run -v /:/host` 一条命令就能拿到宿主机根。
+# 也就是说 **root 等价权限在给 sudo 之前就已经存在了**；不给 sudo 换不来任何
+# 实质隔离，只换来「provision 之后再也改不了这台机器」。
+#
+# 真正的安全边界是**谁持有 DEPLOY_SSH_KEY**（ADR-0009 的负面 Consequences）。
+# 禁 root 登录的价值在别处：攻击面上少一个人人都知道名字的账号，
+# 以及审计日志里能看出是谁登进来的。
+- name: 给部署用户 NOPASSWD sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/50-ncards-deploy
+    owner: root
+    group: root
+    mode: "0440"
+    content: "{{ ncards_deploy_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    # 写坏 sudoers 会让 sudo 整个不可用（包括修它自己）。
+    # visudo -cf 在写入之前校验，不过就直接失败，现有文件一个字不动。
+    validate: /usr/sbin/visudo -cf %s
+
+# ---------------------------------------------------------------------------
+# sshd
+# ---------------------------------------------------------------------------
+- name: 下发 sshd 加固 drop-in
+  ansible.builtin.template:
+    src: 10-ncards-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-ncards-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    # 语法错的配置会让 sshd 起不来 —— 那就是把自己锁在门外。
+    # validate 在**写入之前**跑，不过就直接失败，现有配置一个字不动。
+    validate: /usr/sbin/sshd -t -f %s
+  notify: 重启 sshd
+
+# ⚠️ Ubuntu 22.10 起 SSH 默认走 socket activation：ssh.socket 持有监听端口，
+# sshd_config 里的 Port **完全不生效**（sshd 是被 socket 拉起来的，不自己 listen）。
+# 不处理的话现象是「配置改了、服务重启了、端口没变」，而且不报任何错。
+- name: 检查 ssh.socket 是否存在
+  ansible.builtin.command: systemctl cat ssh.socket
+  register: ncards_ssh_socket
+  changed_when: false
+  failed_when: false
+
+- name: 关掉 ssh.socket，改用传统的 ssh.service
+  when: ncards_ssh_socket.rc == 0
+  block:
+    - name: 停用 ssh.socket
+      ansible.builtin.systemd_service:
+        name: ssh.socket
+        enabled: false
+        state: stopped
+
+    - name: 启用 ssh.service
+      ansible.builtin.systemd_service:
+        name: ssh.service
+        enabled: true
+        state: started
+
+# handler 里的重启要立刻发生 —— 后面的 wait_for 依赖它已经生效。
+- name: 立即应用 sshd 配置
+  ansible.builtin.meta: flush_handlers
+
+- name: 确认新 SSH 端口已在监听
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ ncards_ssh_port }}"
+    timeout: 30
+    state: started
+  delegate_to: localhost
+  become: false
+
+- name: 后续任务改用新端口
+  ansible.builtin.set_fact:
+    ansible_port: "{{ ncards_ssh_port }}"
+
+# ---------------------------------------------------------------------------
+# 防火墙
+# ---------------------------------------------------------------------------
+- name: 安装 ufw 与 fail2ban
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+      - unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: ufw 默认拒绝入站
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: ufw 默认允许出站
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+
+- name: ufw 放行必要端口
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop:
+    - { port: "{{ ncards_ssh_port }}", proto: tcp, comment: SSH }
+    # ⚠️ 80 必须开：ACME 的 HTTP-01 挑战走的是 80，关了就永远拿不到证书。
+    # 它同时承担 Caddy 的 80→443 重定向。
+    - { port: "80", proto: tcp, comment: "HTTP (ACME + 重定向)" }
+    - { port: "443", proto: tcp, comment: HTTPS }
+    # HTTP/3。docker-compose.prod.yml 映射了 443/udp，不放行的话 Caddy 会
+    # 广播 Alt-Svc 但客户端连不上，表现为「偶发的首包慢」。
+    - { port: "443", proto: udp, comment: "HTTP/3 (QUIC)" }
+
+- name: 启用 ufw
+  community.general.ufw:
+    state: enabled
+
+# ---------------------------------------------------------------------------
+# fail2ban
+# ---------------------------------------------------------------------------
+- name: 下发 fail2ban jail 配置
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: "0644"
+  notify: 重启 fail2ban
+
+- name: 启用 fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    enabled: true
+    state: started
+
+# ---------------------------------------------------------------------------
+# 自动安全更新
+# ---------------------------------------------------------------------------
+# 任务卡没写这一条，是顺手加的：一台常年在公网上的机器，安全补丁靠人记得打
+# 是不现实的。只开 security channel —— 常规更新自动装会在某个早上把
+# Docker 或内核换掉，那种惊喜不值得。
+- name: 只开启 security channel 的自动更新
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // {{ ansible_managed }}
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";

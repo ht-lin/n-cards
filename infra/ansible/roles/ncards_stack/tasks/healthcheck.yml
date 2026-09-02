@@ -1,0 +1,103 @@
+---
+# 部署后健康判定 —— 产出 ncards_health_verdict ∈ {ok, vault_sealed, broken}。
+#
+# ============================================================================
+# 为什么要三级，而不是「ready 通了就是好的」
+# ============================================================================
+# ADR-0004：Vault 人工 unseal，auto-unseal 关闭。主机每次重启后 Vault 都是**封印**
+# 状态，此时 VaultHealthCheck 把 /health/ready 翻成 503 —— 这是**期望行为**，
+# 不是故障（infra/vault/vault.hcl 与 docker-compose.prod.yml 的注释都写着）。
+#
+# 两级判定（ready 非 200 即失败即回滚）会在这种情况下做一件纯粹有害的事：
+# 把一个好镜像换成旧镜像，然后仍然 503 —— 因为 Vault 还是封印的。
+# 于是运维看到的是「部署失败 + 自动回滚了 + 站点还是坏的」，
+# 而真正要做的只是找三个人来 unseal。
+#
+# 所以先分清「应用是不是活着」与「依赖是不是就绪」，再在不就绪时问一句
+# 「是不是 Vault 封印」。
+
+# ---------------------------------------------------------------------------
+# 第一级：应用活着吗
+# ---------------------------------------------------------------------------
+# 打公网域名而不是主机 localhost —— 这一条同时验了 DNS、TLS 证书、
+# Caddy 的转发。打 localhost 的话，证书没签出来也照样绿。
+- name: 探测 /health/live
+  ansible.builtin.uri:
+    url: "https://{{ ncards_site_address }}/health/live"
+    method: GET
+    status_code: 200
+    # ACME staging 目录签出来的证书不受公共信任。排练时用
+    # -e ncards_validate_certs=false，验收必须是 true。
+    validate_certs: "{{ ncards_validate_certs | default(true) }}"
+  register: ncards_live
+  retries: "{{ ncards_health_retries }}"
+  delay: "{{ ncards_health_delay }}"
+  until: ncards_live.status == 200
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+# ---------------------------------------------------------------------------
+# 第二级：依赖就绪吗
+# ---------------------------------------------------------------------------
+- name: 探测 /health/ready
+  ansible.builtin.uri:
+    url: "https://{{ ncards_site_address }}/health/ready"
+    method: GET
+    status_code: [200, 503]
+    validate_certs: "{{ ncards_validate_certs | default(true) }}"
+  register: ncards_ready
+  retries: "{{ ncards_health_retries }}"
+  delay: "{{ ncards_health_delay }}"
+  until: ncards_ready.status == 200
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+  become: false
+  when:
+    - ncards_live.status == 200
+    # 首启时 Vault 还没 init，ready 必然 503 —— 那一次用
+    # `-e ncards_wait_for_ready=false` 跳过本级，别白等满 retries。
+    - ncards_wait_for_ready | bool
+
+# ---------------------------------------------------------------------------
+# 第三级：不就绪时，是不是 Vault 封印
+# ---------------------------------------------------------------------------
+# `vault status` 的退出码就是答案：0 = 正常，1 = 未初始化，2 = 封印。
+- name: 查询 Vault 封印状态
+  ansible.builtin.command:
+    cmd: >-
+      docker compose {{ ncards_compose_flags }} exec -T vault
+      vault status -address=http://127.0.0.1:8200
+    chdir: "{{ ncards_compose_dir }}"
+  register: ncards_vault_status
+  changed_when: false
+  failed_when: false
+  when:
+    - ncards_live.status == 200
+    - ncards_wait_for_ready | bool
+    - ncards_ready.status | default(0) != 200
+
+- name: 判定
+  ansible.builtin.set_fact:
+    ncards_health_verdict: >-
+      {%- if ncards_live.status != 200 -%}
+      broken
+      {%- elif not (ncards_wait_for_ready | bool) -%}
+      ok
+      {%- elif ncards_ready.status | default(0) == 200 -%}
+      ok
+      {%- elif ncards_vault_status.rc | default(0) in [1, 2] -%}
+      vault_sealed
+      {%- else -%}
+      broken
+      {%- endif -%}
+
+- name: 报告判定结果
+  ansible.builtin.debug:
+    msg: >-
+      判定 {{ ncards_health_verdict }}
+      （/health/live {{ ncards_live.status }}、
+      /health/ready {{ ncards_ready.status | default('未探测') }}、
+      vault status rc {{ ncards_vault_status.rc | default('未探测') }}）

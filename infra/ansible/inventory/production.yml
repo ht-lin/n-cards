@@ -1,0 +1,31 @@
+# production inventory 骨架（T-012）。
+#
+# ============================================================================
+# ⚠️ 生产主机**尚不存在**。本文件是骨架，不是可用配置。
+# ============================================================================
+#
+# T-012 交付的是「生产发布流水线骨架」（任务卡原文），不是生产环境本身。
+# 真正开生产机时要做的事，按顺序：
+#
+#   1. 开机器（§9.3 的容量假设是 CCX23；staging 用的是小一档的机型，
+#      到时按实测负载重新定 —— 别直接抄 staging）
+#   2. api.n-cards.de 加 A/AAAA 记录
+#   3. 填下面的 ansible_host
+#   4. 生成**第二把** age 密钥对，公钥写进仓库根 .sops.yaml 的 production 规则，
+#      私钥填进 GitHub `production` Environment 的 environment secret（不是 repo secret）
+#   5. 走一遍 docs/runbooks/staging-first-boot.md（对生产同样适用，
+#      差别只有域名与「快照必须先由 T-406 的加密备份替换」这一条，见 ADR-0010）
+#   6. 用 .github/workflows/deploy-manual.yml，environment 选 production
+#
+# 在第 1~5 步做完之前，对本 inventory 跑任何 playbook 都会在 DNS 解析这一步失败 ——
+# 这是刻意的，比连上一台错的机器好。
+
+all:
+  children:
+    ncards_production:
+      hosts:
+        production.n-cards:
+          # 生产主机开出来后，这里换成真实域名（或 IP），并删掉上方的骨架说明。
+          ansible_host: api.n-cards.de
+          ansible_user: deploy
+          ansible_port: "{{ ncards_ssh_port }}"

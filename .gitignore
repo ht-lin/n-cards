@@ -8,8 +8,21 @@
 secrets/
 *.decrypted
 
+# ⚠️ infra/ansible/inventory/**/secrets.sops.yaml 是 sops(age) **密文**，
+# **刻意入库**（T-012 / ADR-0009）—— 上面的规则都不匹配它，别顺手加一条把它挡掉。
+# 防「忘了加密就提交明文」的是 scripts/ci/check-sops-encrypted.sh，不是 .gitignore。
+# 明文模板叫 secrets.sops.yaml.example，同样入库。
+
 # --- Node（仓库级工具链：commitlint / spectral / openapi-generator） ---
 node_modules/
+
+# --- Ansible（T-012）---
+# `ansible-galaxy collection install -r requirements.yml` 会按 ansible.cfg 的
+# collections_path 把依赖装到这里 —— 4500 多个文件的第三方源码，与 node_modules
+# 同一个性质。版本钉在 requirements.yml 里，CI 每次现装。
+infra/ansible/collections/
+# ansible-playbook 的重试清单（ansible.cfg 里已经关了，双保险）
+*.retry
 
 # --- PHP / Symfony（T-002 起） ---
 backend/vendor/

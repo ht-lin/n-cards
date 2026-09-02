@@ -1,0 +1,25 @@
+# Galaxy collection 依赖（T-012）。
+#
+#     ansible-galaxy collection install -r requirements.yml
+#
+# 版本**钉死到补丁位**，理由同 docker-compose.prod.yml 的镜像 tag：部署链路上
+# 任何一个会自己漂移的版本，都意味着「昨天绿的流水线今天红了，而仓库一个字没改」。
+# 升级是一次显式的 PR，跑一遍 §7 的排练路径再合。
+
+collections:
+  # docker_compose_v2 / docker_image_pull / docker_container_exec / docker_prune
+  - name: community.docker
+    version: 4.4.0
+
+  # ufw / timezone。fail2ban 与 unattended-upgrades 用 package + template 直接做，
+  # 不额外引 role —— 两个模板文件的事，引进来反而多一层要跟版本的东西。
+  - name: community.general
+    version: 10.1.0
+
+  # sops vars plugin（自动解密 group_vars 里的 *.sops.yaml）与 community.sops.load_vars
+  - name: community.sops
+    version: 1.9.1
+
+  # sysctl（swappiness）、authorized_key、mount（swapfile）
+  - name: ansible.posix
+    version: 1.6.2

@@ -1,0 +1,33 @@
+---
+# 这些值在 inventory/group_vars/all/main.yml 里有真正的定义。
+# 这里重复一遍是为了让 role 单独被调用时也有可用的默认值 —— defaults 是
+# Ansible 优先级最低的一层，group_vars 永远赢过它，不会打架。
+ncards_deploy_path: /opt/ncards
+ncards_state_path: /opt/ncards/state
+ncards_snapshot_path: /var/backups/ncards
+ncards_deploy_user: deploy
+
+ncards_compose_dir: /opt/ncards/infra/compose
+ncards_compose_files:
+  - docker-compose.base.yml
+  - docker-compose.prod.yml
+  - docker-compose.staging.yml
+
+ncards_image_repo: ghcr.io/ht-lin/n-cards-backend
+
+ncards_image_keep: 3
+ncards_snapshot_keep: 10
+ncards_min_free_gb: 5
+
+ncards_compose_wait_timeout: 120
+ncards_health_retries: 12
+ncards_health_delay: 5
+ncards_wait_for_ready: true
+ncards_run_migrations: true
+
+# 部署目标镜像。CI 传完整的 commit sha；本地演练可以传 :main。
+ncards_app_image: "{{ ncards_image_repo }}:main"
+
+# 所有 `docker compose` 调用共用的 -f 串。在一处拼出来，免得某个任务少写一层
+# 叠加文件 —— 那不会报错，只会静默地用另一套配置（比如 dev 模式的 Vault）。
+ncards_compose_flags: "{{ ncards_compose_files | map('regex_replace', '^', '-f ') | join(' ') }}"

@@ -1,0 +1,126 @@
+---
+# 可重复部署（T-012）。**每次 main 合入由 CI 调用**，也可人工跑。
+#
+#     cd infra/ansible
+#     ansible-playbook -i inventory/staging.yml deploy.yml \
+#       -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:<sha>
+#
+# 首启那一次（Vault 还没 init，/health/ready 必然 503）加两个开关：
+#     -e ncards_wait_for_ready=false -e ncards_run_migrations=false
+#
+# 排练时若 ACME 用的是 Let's Encrypt staging 目录（证书不受公共信任）：
+#     -e ncards_validate_certs=false
+#
+# 三条禁令（写在这里是因为改这个文件的人最容易犯）：
+#   1. **绝不 `docker compose down`**，更绝不 `down -v` ——
+#      后者会连 caddy_data（证书）、pg_data、vault_data 一起删。
+#      Vault 数据卷没了 = 全部卡数据永久不可解密（§9.4）。
+#   2. **绝不在主机上构建镜像。** 部署的必须是 CI 验证过的那一个。
+#   3. **绝不把生产数据搬进 staging**，哪怕脱敏（§14.1）。
+
+- name: 部署 N-Cards 栈
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: 校验镜像 tag 已指定
+      ansible.builtin.assert:
+        that:
+          - ncards_app_image is defined
+          - ncards_app_image | length > 0
+          - "':' in ncards_app_image"
+        fail_msg: >-
+          ncards_app_image 必须是完整的 镜像:tag。
+          例：-e ncards_app_image={{ ncards_image_repo }}:0123abc…
+
+    # ------------------------------------------------------------------
+    # 主流程。失败落到 rescue 去判断「该不该回滚」。
+    # ------------------------------------------------------------------
+    - name: 部署
+      block:
+        - name: 执行部署流程
+          ansible.builtin.include_role:
+            name: ncards_stack
+
+      rescue:
+        # 走到这里说明某一步**抛错**了（拉不到镜像、compose 起不来、迁移失败…），
+        # 而不是健康检查判定不好 —— 那种情况走下面的 post 判定。
+        - name: 报告失败步骤
+          ansible.builtin.debug:
+            msg: >-
+              部署在 “{{ ansible_failed_task.name }}” 失败：
+              {{ ansible_failed_result.msg | default('见上面的输出') }}
+
+        # 镜像还没换成功就失败的话（比如 pull 失败），现网还是好的，回滚反而多此一举。
+        # 判据是 .env 里的 APP_IMAGE 是否已经是本次的目标。
+        - name: 检查 .env 是否已被改成本次镜像
+          ansible.builtin.shell:
+            cmd: "grep -q '^APP_IMAGE={{ ncards_app_image }}$' {{ ncards_compose_dir }}/.env"
+          register: ncards_env_switched
+          changed_when: false
+          failed_when: false
+
+        - name: 回滚到上一个镜像
+          ansible.builtin.include_role:
+            name: ncards_stack
+            tasks_from: rollback
+          when: ncards_env_switched.rc == 0
+
+        - name: 未触发回滚的说明
+          ansible.builtin.debug:
+            msg: >-
+              .env 还没切到本次镜像（现网仍在跑上一个版本），不回滚。
+              这是一次无损失败：修掉原因后直接重跑即可。
+          when: ncards_env_switched.rc != 0
+
+        - name: 部署失败
+          ansible.builtin.fail:
+            msg: >-
+              部署失败。处置步骤见 docs/runbooks/deploy-and-rollback.md。
+
+    # ------------------------------------------------------------------
+    # 健康判定的处置。三种判定各有各的正确动作。
+    # ------------------------------------------------------------------
+    - name: 判定 ok —— 清理磁盘
+      ansible.builtin.include_role:
+        name: ncards_stack
+        tasks_from: prune
+      when: ncards_health_verdict == 'ok'
+
+    # ⚠️ Vault 封印时**不回滚**。
+    # 部署本身是成功的（/health/live 200），503 是 ADR-0004 的期望行为。
+    # 回滚只会把好镜像换成旧的、然后仍然 503 —— 多制造一次噪声，
+    # 而真正要做的是找三个人来 unseal。
+    # job 仍然要红：staging 确实不可用，不该看起来像没事。
+    - name: 判定 vault_sealed —— 不回滚，红着等人来 unseal
+      ansible.builtin.fail:
+        msg: |
+          ::error title=VAULT_SEALED::部署本身成功（/health/live 200），但 Vault 处于封印或未初始化状态，
+          /health/ready 返回 503。**这不是部署故障，回滚无用。**
+          按 docs/runbooks/vault-unseal.md 人工 unseal（Shamir 3-of-5）。
+          unseal 之后无需重新部署，/health/ready 会自己转 200。
+      when: ncards_health_verdict == 'vault_sealed'
+
+    - name: 判定 broken —— 回滚
+      when: ncards_health_verdict == 'broken'
+      block:
+        - name: 回滚到上一个镜像
+          ansible.builtin.include_role:
+            name: ncards_stack
+            tasks_from: rollback
+
+        - name: 回滚后重新判定
+          ansible.builtin.include_role:
+            name: ncards_stack
+            tasks_from: healthcheck
+
+        - name: 部署失败（已回滚）
+          ansible.builtin.fail:
+            msg: >-
+              健康检查判定 broken，已回滚到上一个镜像。
+              回滚后的判定：{{ ncards_health_verdict }}。
+              {% if ncards_health_verdict != 'ok' %}
+              ⚠️ **回滚之后仍然不健康** —— 问题不在这次的镜像。
+              立刻按 docs/runbooks/deploy-and-rollback.md 的「回滚也没救回来」一节处置。
+              {% endif %}

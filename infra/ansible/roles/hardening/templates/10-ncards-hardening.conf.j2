@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+# N-Cards 主机 SSH 加固（§7.4）。由 infra/ansible/roles/hardening 下发。
+#
+# 这是 /etc/ssh/sshd_config.d/ 下的 drop-in，**不覆盖**主配置文件。
+# Ubuntu 的 /etc/ssh/sshd_config 头部有 `Include /etc/ssh/sshd_config.d/*.conf`，
+# 且 sshd 对大多数指令取**第一次出现的值** —— drop-in 在 Include 处先被读到，
+# 所以这里的值赢过主配置里的。整份覆盖主配置的做法能达到同样效果，代价是
+# 系统升级时要手工合并上游的改动，不值。
+
+Port {{ ncards_ssh_port }}
+
+# §7.4：仅密钥登录，禁 root。
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+
+# 只有部署用户能登录。加新人时改 group_vars，别在这里手写第二个名字。
+AllowUsers {{ ncards_deploy_user }}
+
+# 三次失败就断开，配合 fail2ban 的 maxretry=3 —— sshd 断开一次算 fail2ban 的一次记账。
+MaxAuthTries 3
+
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitEmptyPasswords no
+
+# 断线的会话不要一直占着。300s × 2 = 10 分钟无响应即回收。
+ClientAliveInterval 300
+ClientAliveCountMax 2

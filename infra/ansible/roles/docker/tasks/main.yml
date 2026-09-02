@@ -1,0 +1,156 @@
+---
+# Docker Engine + compose plugin，以及这台小机器上的两条保命配置
+# （日志轮转与 swap）。
+
+- name: 安装 apt 传输依赖
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - rsync          # ncards_stack 的 synchronize 需要目标机也有 rsync
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# 用 Docker 官方源而不是发行版自带的 docker.io：
+# compose v2 是官方源的 docker-compose-plugin 提供的，发行版包里没有，
+# 而整套部署都建立在 `docker compose`（v2 语法）之上。
+- name: 创建 apt keyring 目录
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: 下载 Docker 官方 GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: 配置 Docker apt 源
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    filename: docker
+    state: present
+
+- name: 安装 Docker Engine 与 compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+# ---------------------------------------------------------------------------
+# 日志轮转 —— 在 40 GB 的盘上不是可选项
+# ---------------------------------------------------------------------------
+# Docker 默认的 json-file driver **没有上限**。Caddy 每个请求写一行 JSON 访问日志
+# （infra/caddy/Caddyfile 的 log 块），app 的 LOG_LEVEL 在 staging 还是 debug ——
+# 不设上限的话，这块盘被日志填满只是时间问题，而磁盘满的表现是「Postgres 突然
+# 只读、部署失败、原因不明」。
+- name: 下发 daemon.json
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "live-restore": true
+      }
+  notify: 重启 docker
+
+- name: 启用 Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+# deploy 用户要能跑 docker compose 而不用 sudo。
+# ⚠️ docker 组等价于 root，见 ADR-0009 的负面 Consequences。
+- name: 把部署用户加入 docker 组
+  ansible.builtin.user:
+    name: "{{ ncards_deploy_user }}"
+    groups: docker
+    append: true
+
+# ---------------------------------------------------------------------------
+# swap —— 4 GB 机器上最划算的一条保险
+# ---------------------------------------------------------------------------
+# Hetzner 的云镜像默认**不带 swap**。这台机器 4 GB，而 staging 栈的常驻占用
+# 约 1.85 GB（app 512M + pg 1G + redis 256M + caddy/vault）。平时富余，
+# 但部署那几十秒里会同时发生：拉取并解压新镜像、Symfony cache:warmup、
+# pg_dump | gzip、以及新旧 app 容器的短暂重叠。
+#
+# 没有 swap 时，这种瞬时峰值的结果不是变慢，而是 OOM killer 直接挑一个进程杀掉 ——
+# 通常是内存占用最大的 postgres。而部署流程会把它读成 broken 然后触发一次
+# 毫无意义的回滚（回滚后内存峰值消失，健康检查又绿了，于是故障看着像随机的）。
+# 2 GB swap 把那几十秒的峰值变成「慢一点」而不是「被杀掉」。
+- name: 检查 swapfile 是否已存在
+  ansible.builtin.stat:
+    path: /swapfile
+  register: ncards_swapfile
+
+- name: 创建 swapfile
+  when: not ncards_swapfile.stat.exists
+  block:
+    - name: 分配 2 GB swapfile
+      # fallocate 在 ext4 上是瞬时的。dd 要写满 2 GB，在这块盘上没必要。
+      ansible.builtin.command: fallocate -l 2G /swapfile
+      changed_when: true
+
+    - name: 收紧 swapfile 权限
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        # 0600 是 mkswap 的硬性要求（更松的权限它会拒绝，因为 swap 里可能
+        # 残留任何进程的内存内容）。
+        mode: "0600"
+
+    - name: 格式化 swapfile
+      ansible.builtin.command: mkswap /swapfile
+      changed_when: true
+
+- name: 挂载 swapfile 并写入 fstab
+  ansible.posix.mount:
+    path: none
+    src: /swapfile
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: 立即启用 swap
+  ansible.builtin.command: swapon /swapfile
+  register: ncards_swapon
+  changed_when: ncards_swapon.rc == 0
+  # 已经启用时 swapon 返回非 0 并抱怨 "already active" —— 那不是错误。
+  failed_when:
+    - ncards_swapon.rc != 0
+    - "'already' not in ncards_swapon.stderr"
+
+# 有 swap 不等于该用 swap。10 的意思是「只在真的快 OOM 时才换出」——
+# 数据库进程的页被换出去会让查询延迟变得很难看。
+- name: 降低 swappiness
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "10"
+    sysctl_set: true
+    state: present
+    reload: true

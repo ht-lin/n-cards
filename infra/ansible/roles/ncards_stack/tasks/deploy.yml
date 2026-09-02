@@ -1,0 +1,62 @@
+---
+# 拉取目标镜像并把栈拉起来。
+#
+# 顺序上有一条不能颠倒：**先把当前镜像记进 state/previous-image，再改 .env**。
+# CI runner 是无状态的，而失败完全可能发生在 .env 已被覆盖之后 ——
+# 回滚目标必须存在目标主机上，不能存在流水线的内存里。
+
+- name: 读取当前的 APP_IMAGE
+  ansible.builtin.shell:
+    cmd: >-
+      grep '^APP_IMAGE=' {{ ncards_compose_dir }}/.env
+      | cut -d= -f2- || true
+  register: ncards_current_image
+  changed_when: false
+  # 首次部署时 .env 还不存在，grep 失败 —— `|| true` 让它安静地返回空串。
+  failed_when: false
+
+- name: 记录回滚目标
+  ansible.builtin.copy:
+    content: "{{ ncards_current_image.stdout | trim }}\n"
+    dest: "{{ ncards_state_path }}/previous-image"
+    owner: "{{ ncards_deploy_user }}"
+    group: "{{ ncards_deploy_user }}"
+    mode: "0644"
+  when: ncards_current_image.stdout | trim | length > 0
+
+- name: 记录本次部署的镜像
+  ansible.builtin.copy:
+    content: "{{ ncards_app_image }}\n"
+    dest: "{{ ncards_state_path }}/current-image"
+    owner: "{{ ncards_deploy_user }}"
+    group: "{{ ncards_deploy_user }}"
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# 拉镜像 —— 独立成一步，且在 up 之前
+# ---------------------------------------------------------------------------
+# 让「镜像不存在 / GHCR 不可达 / tag 打错了」在**动现网之前**就失败。
+# 混在 up 里的话，compose 会先把旧容器停掉再发现拉不到，于是站点直接躺下，
+# 而这本来是一次完全无损的失败。
+- name: 拉取目标镜像
+  community.docker.docker_image_pull:
+    name: "{{ ncards_app_image }}"
+  register: ncards_pull
+
+- name: 起栈
+  community.docker.docker_compose_v2:
+    project_src: "{{ ncards_compose_dir }}"
+    files: "{{ ncards_compose_files }}"
+    state: present
+    # ⚠️ never：绝不在主机上构建。部署的必须是 CI 验证过的那一个镜像。
+    # （即便这里写 policy 也构建不起来 —— 主机上没有 backend/ 源码，
+    #   见 sync.yml 的注释。这是第二道锁。）
+    build: never
+    pull: always
+    # 等到所有服务的 healthcheck 转绿再返回。
+    # backend/docker/entrypoint.sh 在容器启动时做 cache:warmup（几百毫秒），
+    # compose 的 start_period: 30s 覆盖它 —— 不等的话，下一步的迁移和健康检查
+    # 会打在一个还没暖好的应用上。
+    wait: true
+    wait_timeout: "{{ ncards_compose_wait_timeout }}"
+  register: ncards_compose_up

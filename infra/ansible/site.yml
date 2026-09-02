@@ -1,0 +1,53 @@
+---
+# 一次性 provision（T-012）。**人工执行，不在 CI 里跑。**
+#
+#     cd infra/ansible
+#     # 首次（主机还是 root@22）：
+#     ansible-playbook -i inventory/staging.yml site.yml -e ansible_user=root -e ansible_port=22
+#     # 之后重跑（幂等）：
+#     ansible-playbook -i inventory/staging.yml site.yml
+#
+# ⚠️ 这个 playbook 会改掉 SSH 端口、禁掉 root 登录、开防火墙。
+# 执行前**另开一个已登录的 root 会话别关** —— 改砸了还能从那里救回来。
+# 最坏情况走 Hetzner Cloud Console 的网页终端。
+#
+# 它**不**部署应用，也**不**碰 Vault。首启的完整顺序（含 vault init / unseal /
+# bootstrap 这三步不可自动化的人工操作）见 docs/runbooks/staging-first-boot.md。
+
+- name: 主机 provision
+  hosts: all
+  become: true
+  # facts 由 hardening 在探完端口之后自己采 —— 在那之前连哪个端口都还没定。
+  gather_facts: false
+
+  roles:
+    - role: hardening
+    - role: docker
+
+  post_tasks:
+    - name: 创建部署目录骨架
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ncards_deploy_user }}"
+        group: "{{ ncards_deploy_user }}"
+        mode: "0755"
+      loop:
+        - "{{ ncards_deploy_path }}"
+        - "{{ ncards_deploy_path }}/infra"
+        - "{{ ncards_state_path }}"
+
+    - name: 创建快照目录
+      ansible.builtin.file:
+        path: "{{ ncards_snapshot_path }}"
+        state: directory
+        owner: root
+        group: root
+        # 0700 + root：快照是全库明文。挡的是将来多出来的非特权用户，
+        # **不是** deploy（它有 sudo 且在 docker 组里，见 ADR-0009）。
+        mode: "0700"
+
+    - name: 采集并落盘主机事实
+      ansible.builtin.import_role:
+        name: ncards_stack
+        tasks_from: preflight

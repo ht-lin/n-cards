@@ -1,0 +1,38 @@
+---
+# ncards_stack 的入口。各段都带 tag，可以单独跑：
+#
+#     ansible-playbook deploy.yml --tags env      # 只重新下发 .env
+#     ansible-playbook deploy.yml --tags health   # 只做一次健康判定
+#
+# 完整顺序与 §14.3 的「前置数据库快照 → 滚动重启 → 迁移 → 健康检查」一致。
+# （「滚动重启」在单主机单副本上做不到，实际是几秒的 stop-then-start ——
+#  这是 T-012 记录在案的偏差，见 docs/tasks/M0.md。）
+
+- name: preflight
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [preflight]
+
+- name: sync
+  ansible.builtin.import_tasks: sync.yml
+  tags: [sync]
+
+- name: env
+  ansible.builtin.import_tasks: env.yml
+  tags: [env]
+
+- name: snapshot
+  ansible.builtin.import_tasks: snapshot.yml
+  tags: [snapshot]
+
+- name: deploy
+  ansible.builtin.import_tasks: deploy.yml
+  tags: [deploy]
+
+- name: migrate
+  ansible.builtin.import_tasks: migrate.yml
+  tags: [migrate]
+  when: ncards_run_migrations | bool
+
+- name: healthcheck
+  ansible.builtin.import_tasks: healthcheck.yml
+  tags: [health]

@@ -1,0 +1,11 @@
+---
+- name: 重启 sshd
+  ansible.builtin.systemd_service:
+    # ssh.socket 已在 tasks 里停掉，这里重启的是传统的 ssh.service。
+    name: ssh.service
+    state: restarted
+
+- name: 重启 fail2ban
+  ansible.builtin.systemd_service:
+    name: fail2ban
+    state: restarted
