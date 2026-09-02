@@ -69,3 +69,25 @@ description = """
 """
 targetRules = ["aws-access-token"]
 paths = ['^scripts/ci/sensitive-scan-selftest\.sh$']
+
+[[allowlists]]
+description = """
+sops(age) 加密的 Ansible 变量文件（T-012）。**密文入库是刻意的** —— 那正是 sops
+的用法，也是 §14.3「生产环境变量由 sops（age 密钥）加密后提交入库」的原文。
+
+被拦的是密文本身：sops 的输出形态是 ENC[AES256_GCM,data:…,tag:…,type:str]，
+一串高熵 base64，generic-api-key 见了就报。它不是凭据泄露 —— 没有对应的 age
+私钥，这些字节什么也不是。私钥不在仓库里：staging 那把在 GitHub repository
+secret SOPS_AGE_KEY，production 那把在 `production` Environment 的 environment
+secret（两把是**不同**的密钥，见仓库根 .sops.yaml），都另有离线备份。
+
+⚠️ 这条豁免**不是**「这个目录里的秘密不用管」。防「忘了加密就提交明文」的是
+另一道门：scripts/ci/check-sops-encrypted.sh 断言这些文件的每个叶子值都以
+ENC[ 开头，明文提交会在那里被拦下。两条断言写在
+scripts/ci/sensitive-scan-selftest.sh 里，证明这个豁免没开成后门。
+
+只豁免 generic-api-key 一条规则、只在这个路径下 —— AWS key、私钥块之类的
+强特征规则在这些文件里照样生效。
+"""
+targetRules = ["generic-api-key"]
+paths = ['^infra/ansible/inventory/group_vars/.*/secrets\.sops\.yaml$']

@@ -210,7 +210,71 @@ else
     printf 'openapi: 3.1.0\nx-note: AKIAZZ4H7XKQ2JVNPLQR\n' > "$d/docs/api/openapi.yaml"
     seal "$d"
     assert 1 "$SCRIPT_DIR/check-gitleaks.sh" "$d" "被豁免的 openapi.yaml 里的 AWS key 仍被拦下"
+
+    # T-012 的 secrets.sops.yaml 豁免同理：只放行 generic-api-key（密文的高熵串），
+    # 强特征规则照常生效。这一条守的是「有人把这条豁免改成整份文件放行」。
+    d="$(new_repo gitleaks-sops)"
+    mkdir -p "$d/infra/ansible/inventory/group_vars/ncards_staging"
+    cp "$SCRIPT_DIR/../../.gitleaks.toml" "$d/"
+    # 键名用 x-note 而不是 AWS_KEY：本文件对 aws-access-token 有豁免（见 .gitleaks.toml），
+    # 但 `AWS_KEY: <高熵串>` 这种「关键词 + 赋值」的形态会另外触发 generic-api-key，
+    # 而那条规则在本文件里**没有**豁免 —— 于是夹具本身会让门禁红。
+    # 上面 openapi 那条夹具用的也是 x-note，同样的理由。
+    printf 'x-note: AKIAZZ4H7XKQ2JVNPLQR\nsops:\n    version: 3.9.0\n' \
+        > "$d/infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml"
+    seal "$d"
+    assert 1 "$SCRIPT_DIR/check-gitleaks.sh" "$d" "被豁免的 secrets.sops.yaml 里的 AWS key 仍被拦下"
 fi
+
+echo
+echo "== sops 加密检查 =="
+
+# gitleaks 对 secrets.sops.yaml 豁免了 generic-api-key，于是「忘了加密就提交」
+# **不会**被 gitleaks 拦下 —— 挡它的是 check-sops-encrypted.sh。
+# 这两条断言证明那条豁免没有变成一个后门。
+SOPS_SCANNER="$SCRIPT_DIR/check-sops-encrypted.sh"
+
+# ⑧ 明文提交的 secrets.sops.yaml
+d="$(new_repo sops-plain)"
+mkdir -p "$d/infra/ansible/inventory/group_vars/ncards_staging"
+# 夹具值刻意用 dev-only- 前缀（仓库的占位值约定，见 .gitleaks.toml）。
+# 这里**不需要**真·凭据形态 —— 与上面那几条 gitleaks 断言不同，
+# check-sops-encrypted.sh 的判据只有一条「值是不是以 ENC[ 开头」，与熵无关。
+# 放一个高熵串反而会触发 generic-api-key，让这个夹具自己把门禁弄红。
+cat > "$d/infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml" <<'YAML'
+APP_SECRET: dev-only-forgot-to-run-sops-encrypt
+POSTGRES_PASSWORD: dev-only-still-plaintext
+sops:
+    version: 3.9.0
+YAML
+seal "$d"
+assert 1 "$SOPS_SCANNER" "$d" "未加密的 secrets.sops.yaml 被拦下"
+
+# ⑨ 真加密过的放行
+d="$(new_repo sops-encrypted)"
+mkdir -p "$d/infra/ansible/inventory/group_vars/ncards_staging"
+cat > "$d/infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml" <<'YAML'
+APP_SECRET: ENC[AES256_GCM,data:Kx8fQ==,iv:9bT=,tag:mA==,type:str]
+POSTGRES_PASSWORD: ENC[AES256_GCM,data:Lp2wR==,iv:7cU=,tag:nB==,type:str]
+sops:
+    age:
+        - recipient: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-09-02T00:00:00Z"
+    version: 3.9.0
+YAML
+seal "$d"
+assert 0 "$SOPS_SCANNER" "$d" "已加密的 secrets.sops.yaml 放行"
+
+# ⑩ 明文模板不在检查范围内（*.sops.yaml.example 是给人看的）
+d="$(new_repo sops-example)"
+mkdir -p "$d/infra/ansible/inventory/group_vars/ncards_staging"
+printf 'APP_SECRET: dev-only-replace-me\n' \
+    > "$d/infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml.example"
+seal "$d"
+assert 0 "$SOPS_SCANNER" "$d" "明文模板 .example 不误报"
 
 echo
 if [ "$failures" -ne 0 ]; then

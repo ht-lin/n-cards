@@ -1,0 +1,140 @@
+# 部署流水线（§14.3「部署 staging（Ansible over SSH）→ 迁移 → 冒烟测试」）。T-012 交付。
+#
+# 只能被调用（workflow_call），不自己接事件 —— 与 backend/android/shared 四条
+# reusable workflow 同一个形态，理由见 docs/adr/0008-ci-gate-topology.md。
+#
+# 两个调用方：
+#   main.yml           每次 main 合入 → staging，全自动
+#   deploy-manual.yml  人工触发 → staging（排练）或 production（需 approval）
+#
+# **approval 不在这个文件里。** 它是 GitHub `production` Environment 上的
+# required reviewers 保护规则。写在 YAML 里的「审批」都是可以绕过的；
+# Environment 的保护规则不能。staging 的 Environment 没有保护规则，
+# 于是同一个 workflow 在两边一个零阻塞、一个必须有人点头。
+#
+# ⚠️ Vault unseal key **绝不**进 CI（§14.3 原文 / ADR-0004）。
+# 这条流水线拿不到、也不需要它：Vault 封印时部署照样能完成，
+# 只是健康判定会是 vault_sealed，job 红着等人来 unseal（infra/ansible/deploy.yml）。
+
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'staging | production'
+        type: string
+        required: true
+      image_tag:
+        description: '要部署的镜像 tag（通常是完整的 commit sha）'
+        type: string
+        required: true
+      site_url:
+        description: '冒烟测试的目标，带 scheme'
+        type: string
+        required: true
+      run_migrations:
+        description: '是否执行 Doctrine 迁移'
+        type: boolean
+        default: true
+    secrets:
+      DEPLOY_SSH_KEY:
+        required: true
+      DEPLOY_KNOWN_HOSTS:
+        required: true
+      SOPS_AGE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+# 版本与校验和一起钉死 —— 与 shared.yml 里 gitleaks 的做法一致。
+# sops 是一个下载后立刻拿去解密凭据的二进制，只钉版本号挡不住 release 资产被替换。
+# 升级时两个值一起改。
+env:
+  ANSIBLE_VERSION: '2.18.1'
+  SOPS_VERSION: '3.9.4'
+  # 与上游 sops-v3.9.4.checksums.txt 里 sops-v3.9.4.linux.amd64 那一行一致。
+  SOPS_SHA256: '5488e32bc471de7982ad895dd054bbab3ab91c417a118426134551e9626e4e85'
+
+jobs:
+  deploy:
+    name: deploy-${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # approval（production）与 environment secret 的注入都挂在这里。
+    # production 的 SOPS_AGE_KEY 是 environment secret，**同名覆盖** repository
+    # secret —— 于是「只有过了 approval 的 job 才解得开生产配置」由 GitHub 的
+    # 权限模型强制，不靠约定。见仓库根 .sops.yaml。
+    environment: ${{ inputs.environment }}
+
+    # 部署绝不能被取消到一半 —— 那会留下一个 .env 已经改了、容器还没起来的主机。
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: infra/ansible
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装 ansible-core
+        run: pip install "ansible-core==${ANSIBLE_VERSION}"
+        working-directory: .
+
+      - name: 安装 sops
+        working-directory: .
+        run: |
+          set -euo pipefail
+          url="https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"
+          curl -sSLf -o /tmp/sops "$url"
+          echo "${SOPS_SHA256}  /tmp/sops" | sha256sum -c -
+          sudo install -m 0755 /tmp/sops /usr/local/bin/sops
+          sops --version
+
+      - name: 安装 galaxy collections
+        run: ansible-galaxy collection install -r requirements.yml
+
+      # ⚠️ 不用 StrictHostKeyChecking=no。
+      # 那等于「连上什么都行」—— 一次 DNS 劫持就能让部署密钥和整份 .env
+      # （含数据库口令与 Vault secret_id）交给别人。known_hosts 由
+      # 首启第 5 步的 ssh-keyscan 产出，存成 repository secret。
+      - name: 配置 SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # 语法检查顺带当 lint 用。专门的 ansible-lint 门禁留给后续 —— 见
+      # docs/tasks/M0.md 的 T-012 交付产物段（为守住 2 人日砍掉的东西之一）。
+      - name: playbook 语法检查
+        run: |
+          ansible-playbook -i inventory/${{ inputs.environment }}.yml deploy.yml --syntax-check
+
+      - name: 部署
+        env:
+          # sops 从这里读私钥解开 group_vars 里的 secrets.sops.yaml。
+          # **不落盘**。GitHub 会在日志里把 secret 值打码，但即便如此，
+          # 下面也刻意不加 -v/-vvv —— 那会打印出解密后的变量。
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          ANSIBLE_FORCE_COLOR: '1'
+        run: |
+          ansible-playbook -i inventory/${{ inputs.environment }}.yml deploy.yml \
+            -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:${{ inputs.image_tag }} \
+            -e ncards_run_migrations=${{ inputs.run_migrations }}
+
+      # 从 runner 打公网域名，不在主机上打 localhost —— 只有走公网才同时验了
+      # DNS、TLS 证书链、Caddy 的头与 80→443 重定向。这是任务卡验收标准的落点。
+      - name: 冒烟测试
+        working-directory: .
+        run: scripts/ci/smoke-staging.sh "${{ inputs.site_url }}"

@@ -275,18 +275,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ------------------------------------------------------------------
-  # 留给 T-012（Hetzner staging + Ansible）
+  # §14.3：「部署 staging（Ansible over SSH）→ 迁移 → 冒烟测试」。T-012 交付。
   #
-  #   deploy-staging:
-  #     needs: [backend-image, instrumentation]
-  #     → Ansible over SSH 部署 ghcr.io/ht-lin/n-cards-backend:${{ github.sha }}
-  #     → doctrine:migrations:migrate --no-interaction --allow-no-migration
-  #     → 冒烟测试（curl /health/ready + 安全响应头，见 T-012 验收标准）
+  # needs 沿用 T-011 在这里留的编排。⚠️ 代价要说清楚：instrumentation 实测 26 分钟，
+  # 于是「合入 main 到 staging 可用」端到端约 30 分钟，而 Android 仪器测试与后端
+  # 能不能部署**没有因果关系**。把它从 needs 里拿掉能省 20 多分钟 ——
+  # 但那是改 T-011 已记录在案的编排，不该顺手在 T-012 里做。留给 M1 重估
+  # （docs/tasks/M0.md 的交付产物段记着这条）。
   #
-  # 需要的 repository secrets（§14.3「密钥管理」）：部署 SSH key。
+  # 部署逻辑在 reusable 的 deploy.yml 里，与 deploy-manual.yml 共用同一份定义。
+  #
   # ⚠️ Vault unseal key **绝不**进 CI（§14.3 原文 / ADR-0004），staging 只用合成数据。
-  #
+  # Vault 封印时这个 job 会红在 VAULT_SEALED 上且**不回滚** —— 那不是部署故障，
+  # 处置见 docs/runbooks/vault-unseal.md。
+  deploy-staging:
+    name: deploy-staging
+    needs: [backend-image, instrumentation]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image_tag: ${{ github.sha }}
+      site_url: https://api.staging.n-cards.de
+      run_migrations: true
+    # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret 递下去，
+    # 包括将来才加的那些。
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+
+  # ------------------------------------------------------------------
   # 留给 T-456（Play 上架）
   #
   #   play-internal:
