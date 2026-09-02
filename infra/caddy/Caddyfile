@@ -17,6 +17,19 @@
 		output stdout
 		format json
 	}
+
+	# ------------------------------------------------------------------
+	# ACME（T-012）
+	# ------------------------------------------------------------------
+	# ACME 账户邮箱。Let's Encrypt 用它发证书过期提醒 —— 填一个真收得到信的地址。
+	# 本地是 http://localhost，Caddy 根本不会走 ACME，这两行对本地无影响。
+	email {$ACME_EMAIL:ops@n-cards.de}
+
+	# ACME 目录。默认生产；排练时由 .env 覆盖成 Let's Encrypt 的 staging 目录，
+	# 避开「同一域名每周 5 张证书」的速率限制 —— 首签调不通时很容易撞上。
+	# ⚠️ staging 目录签出来的证书**不受公共信任**，那时冒烟测试要带 SMOKE_INSECURE=1；
+	# 而验收必须在生产目录、不带那个开关的情况下跑（任务卡的 curl -I 那条）。
+	acme_ca {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
 }
 
 {$CADDY_SITE_ADDRESS:http://localhost} {

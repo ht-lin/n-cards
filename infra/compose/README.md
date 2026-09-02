@@ -30,7 +30,8 @@ docker compose up -d
 > `${VAR:-default}` 兜底 —— 它不会报错，只会静默用默认值起来。这种失败最难查。
 > （真要放别处，每条叠加链命令都得记得加 `--env-file`，那就是在给自己留坑。）
 
-**staging / production** —— 由 T-012 的 Ansible playbook 调用，用显式叠加链：
+**staging / production** —— 由 T-012 的 Ansible playbook 调用（**已交付**），
+用显式叠加链：
 
 ```bash
 docker compose -f infra/compose/docker-compose.base.yml \
@@ -46,6 +47,25 @@ docker compose -f infra/compose/docker-compose.base.yml \
 ```bash
 docker compose -f docker-compose.base.yml -f docker-compose.prod.yml config
 ```
+
+> staging 上真实的 `.env` 由 Ansible 从 sops(age) 密文渲染，模板是
+> [`../ansible/roles/ncards_stack/templates/env.j2`](../ansible/roles/ncards_stack/templates/env.j2)。
+> 想在本地对拍叠加链的合并结果，照着 `.env.example` 补齐再 `--env-file` 指过去。
+
+### T-012 新增的四个变量
+
+`.env.example` 里都有，本地用不上但**必须存在** —— compose 会读它们，
+一个「compose 引用了、模板里却找不到」的变量是排查时最费时间的东西。
+
+| 变量 | 本地 | staging |
+|---|---|---|
+| `APP_IMAGE` | 用不到（本地是 build 的） | 部署流程写入 commit sha |
+| `LOG_LEVEL` | 用不到 | `debug`（staging 相对 prod 的唯一放松） |
+| `ACME_EMAIL` | 无影响（明文 localhost 不走 ACME） | 证书过期提醒收件人 |
+| `ACME_CA` | 同上 | 生产目录；排练时指向 LE staging 目录避开速率限制 |
+
+⚠️ `CADDY_SITE_ADDRESS` 在 staging/prod 上**不带 scheme**（`api.staging.n-cards.de`
+而不是 `https://…`）—— 裸域名才会触发 Caddy 的自动 TLS 与 80→443 重定向。
 
 ## 约束（改动前先读 §7.4）
 
