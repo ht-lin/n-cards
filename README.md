@@ -126,6 +126,35 @@ npm run lint:api             # Spectral lint 契约（§13.1），期望 0 error
 
 完整质量门禁阈值见 §13.3。
 
+## 如何部署
+
+**staging 是自动的**：`main` 合入 → CI 构建镜像推 GHCR → Ansible over SSH 部署到
+`api.staging.n-cards.de` → 迁移 → 冒烟测试。失败自动回滚上一个镜像 tag。
+不需要任何人操作（T-012）。
+
+```bash
+# 验收/自查：五个安全头 + 无版本回显 + HTTP 自动跳 HTTPS
+scripts/ci/smoke-staging.sh https://api.staging.n-cards.de
+```
+
+人工触发（排练 staging，或发布 production —— 后者需要 approval）：
+Actions → **deploy-manual** → Run workflow，填完整 40 位 commit sha。
+
+⚠️ **主机重启后 Vault 是封印状态**，`/health/ready` 返回 503 —— 这是期望行为
+（[ADR-0004](docs/adr/0004-manual-vault-unseal.md)：auto-unseal 关闭，
+unseal key 离线保管、绝不进 CI）。此时部署会判定为 `vault_sealed`，
+**不触发回滚**，红着等 3 位 key 持有人解封。
+
+| 场景 | 看哪篇 |
+|---|---|
+| 新主机从零搭起来 | [`docs/runbooks/staging-first-boot.md`](docs/runbooks/staging-first-boot.md) |
+| 部署红了 / 要回滚 | [`docs/runbooks/deploy-and-rollback.md`](docs/runbooks/deploy-and-rollback.md) |
+| Vault 封印了 | [`docs/runbooks/vault-unseal.md`](docs/runbooks/vault-unseal.md) |
+| playbook 怎么用 | [`infra/ansible/README.md`](infra/ansible/README.md) |
+
+生产配置由 `sops`（age）加密后入库，部署时在目标主机解密下发；`.env` 不入库
+（[ADR-0009](docs/adr/0009-ansible-sops-deploy-topology.md)）。
+
 ## 协作规范
 
 - 分支：trunk-based，`main` 永远可发布，功能分支 ≤ 3 天。

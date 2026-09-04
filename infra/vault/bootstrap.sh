@@ -341,6 +341,12 @@ echo "✓ 已配置 AppRole ncards-app（token_ttl=1h / max=24h）。"
 # ----------------------------------------------------------------------------
 # role_id 不是秘密（单独拿着它登录不了），可以打印。
 # secret_id **是**秘密，所以这里**不**自动生成 —— 需要时手工执行下面提示的命令。
+#
+# ⚠️ 提示里给的是 `docker compose exec`，而不是本脚本自己在用的那种 curl。
+# 因为 ${VAULT_ADDR} 是**容器视角**的地址：`vault` 这个名字只在 compose 的
+# ncards_backing 网络里解析得出来（那个网络 internal: true，vault 也没有 ports:）。
+# 打印一条带 http://vault:8200 的 curl，读的人几乎一定是在宿主机 shell 里粘贴它，
+# 于是撞上 `Could not resolve host: vault` —— 一条跟权限、跟 Vault 都无关的错。
 _role_response="$(api GET 'auth/approle/role/ncards-app/role-id')"
 _role_id="$(body_of "$_role_response" | jq -r '.data.role_id // empty')"
 
@@ -348,9 +354,15 @@ if [ -n "$_role_id" ]; then
     echo
     echo "  VAULT_ROLE_ID=${_role_id}"
     echo
-    echo "  需要 secret_id 时（⚠️ 是凭据，绝不入库、绝不进 CI 日志）："
-    echo "    curl -sS -X POST -H \"X-Vault-Token: \$VAULT_TOKEN\" \\"
-    echo "      ${VAULT_ADDR}/v1/auth/approle/role/ncards-app/secret-id | jq -r .data.secret_id"
+    echo "  需要 secret_id 时（⚠️ 是凭据，绝不入库、绝不进 CI 日志）。"
+    echo "  在宿主机 /opt/ncards 下，COMPOSE_FILE 已导出、VAULT_TOKEN 还在环境里："
+    echo
+    echo "    docker compose exec -e VAULT_TOKEN=\"\$VAULT_TOKEN\" vault \\"
+    echo "      vault write -f -field=secret_id auth/approle/role/ncards-app/secret-id"
+    echo
+    echo "  拿到之后再吊销 root token（顺序反了就得走 operator generate-root）："
+    echo
+    echo "    docker compose exec -e VAULT_TOKEN=\"\$VAULT_TOKEN\" vault vault token revoke -self"
 fi
 
 echo

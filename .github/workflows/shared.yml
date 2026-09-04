@@ -80,6 +80,20 @@ jobs:
       - name: TODO 必须带 issue 编号（§13.3）
         run: scripts/ci/check-todo-issue-refs.sh
 
+      # T-012：sops 密文文件必须真的是密文。
+      #
+      # 挂在这里而不是新开一条 infra 流水线，是刻意的：ADR-0008 记的唯一失效模式
+      # 是「加了新流水线却忘了加进 pr-gate 的 needs」——那时它红了 PR 照样能合，
+      # 而且看起来一切正常。这条检查是纯文本扫描，几十毫秒，挂进这条本来就
+      # **无条件运行**的流水线，零拓扑改动、零 pr-gate 改动、
+      # scripts/setup-branch-protection.sh 一个字不用改。
+      #
+      # 它与 .gitleaks.toml 里那条 secrets.sops.yaml 的豁免是**配套**的：
+      # 那条豁免放行密文的高熵串，这条负责挡住「忘了加密就提交明文」。
+      # 改任何一个都要回头看另一个。
+      - name: sops 文件必须已加密（T-012）
+        run: scripts/ci/check-sops-encrypted.sh
+
       # 以下两步只在 PR 上有意义：main.yml 也调用本 workflow，而 push 事件里
       # 没有 github.event.pull_request。合入 main 的 commit message 已经在 PR 阶段
       # 校验过了（squash merge 后它就是 PR 标题）。

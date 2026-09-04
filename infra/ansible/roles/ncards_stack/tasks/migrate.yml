@@ -1,0 +1,29 @@
+---
+# 执行 Doctrine 迁移（§14.3）。
+#
+# ⚠️ **迁移不会被自动回滚。** 失败时回滚的只有镜像 tag，数据库保持原样。
+# 理由见 docs/adr/0010-rollback-image-tag-only.md：最常见的失败形态是
+# 「迁移成功、应用起不来」，此时自动跑 down() 会删掉刚加的列 ——
+# 把一个可修复的故障变成数据丢失。数据层的兜底是上一步的 pg_dump 快照，
+# 要不要恢复是人工决策。
+#
+# 由此产生一条对**所有后端任务**的硬性要求：迁移必须 expand-contract
+# （先加可空列/新表，删列与改类型放到下一次发布），否则「回滚到上一个镜像」
+# 不成立 —— 旧镜像跑不了新 schema。ADR-0010 的 Consequences 里记着这条。
+
+- name: 执行数据库迁移
+  community.docker.docker_container_exec:
+    container: ncards-app-1
+    command: >-
+      php bin/console doctrine:migrations:migrate
+      --no-interaction --allow-no-migration
+    # 容器是非 root 的 ncards 用户（uid 1000），exec 也用它 ——
+    # 用 root 跑会在 var/ 下留下 root 拥有的缓存文件，下次容器启动
+    # cache:warmup 就写不进去了。
+    user: ncards
+  register: ncards_migrate
+  changed_when: "'No migrations to execute' not in ncards_migrate.stdout"
+
+- name: 报告迁移结果
+  ansible.builtin.debug:
+    var: ncards_migrate.stdout_lines

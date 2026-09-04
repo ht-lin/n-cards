@@ -1,0 +1,23 @@
+# staging inventory（T-012）。
+#
+# 单主机。Hetzner Nürnberg，域名 api.staging.n-cards.de（ADR-0002）。
+#
+# ⚠️ 首次跑 site.yml 时主机还监听 22 端口、还只有 root 用户 —— 那一次要覆盖两个变量：
+#
+#     ansible-playbook -i inventory/staging.yml site.yml \
+#       -e ansible_user=root -e ansible_port=22
+#
+# 之后（包括 CI 的每一次部署）就用本文件的默认值。
+# 完整首启顺序见 docs/runbooks/staging-first-boot.md。
+
+all:
+  children:
+    ncards_staging:
+      hosts:
+        staging.n-cards:
+          # 用域名而不是 IP：DNS 本来就是部署的前置条件（没它 ACME 拿不到证书），
+          # 让连接和证书签发共用同一个判据，DNS 错了会在第一步就暴露，
+          # 而不是等到 Caddy 静默地拿不到证书。
+          ansible_host: api.staging.n-cards.de
+          ansible_user: deploy
+          ansible_port: "{{ ncards_ssh_port }}"

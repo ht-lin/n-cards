@@ -51,9 +51,18 @@ services:
       # ⚠️ VAULT_SECRET_ID 是凭据，绝不入库、绝不进 CI。
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:?VAULT_ROLE_ID 未配置：生产必须走 AppRole，见 docs/runbooks/vault-unseal.md}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:?VAULT_SECRET_ID 未配置：由 sops 下发，见 T-012}
-    # 覆盖掉 base 的源码绑定挂载。YAML 里 volumes 是列表，叠加时**整体替换**，
-    # 所以给一个空列表就等于「没有任何绑定挂载」。
-    volumes: []
+    # 覆盖掉 base 的源码绑定挂载（`../../backend:/app:ro` 与 `../../docs:/docs:ro`）。
+    #
+    # ⚠️ **必须是 `!reset`，不能是 `volumes: []`。** compose 叠加时 volumes **不是**
+    # 整体替换，而是**按 target 归并** —— 空列表没有任何一个 target，于是归并结果
+    # 就是 base 那两条原样保留。目标主机上没有 backend/（sync.yml 刻意不同步），
+    # Docker 会替你建一个空目录再以 :ro 盖在 /app 上，于是：
+    #   - 镜像里的代码被一个空目录整个遮掉；
+    #   - 紧接着 /app/var 那条 tmpfs 挂不上，因为挂载点要现建而 /app 是只读绑定，
+    #     容器起不来：`make mountpoint "/app/var": read-only file system`。
+    # `!reset` 是 Compose Spec 里专门用来「删掉 base 的这个键」的标签
+    # （需要 compose ≥ 2.24；目标主机与 CI 上都远高于此）。
+    volumes: !reset null
     deploy:
       resources:
         limits:
@@ -90,7 +99,10 @@ services:
       # §7.4：独立数据卷，与 app 不共卷。
       - vault_data:/vault/file
     healthcheck:
-      # 封印状态下 `vault status` 退出码是 2，未初始化是 1，正常是 0。
+      # `vault status` 的退出码：0 = 已初始化且已解封，2 = 封印，1 = 连不上 / 出错。
+      # ⚠️ **未初始化也是 2**（Initialized false + Sealed true，1.18 实测），不是 1 ——
+      # 首启那一次（runbook 第 7 步）Vault 还没 init，靠的正是这一点才算健康、
+      # 才让 `docker_compose_v2` 的 wait 通过。
       # 这里只要求「进程活着且能应答」（0 或 2 都算健康）—— 封印是等待人工
       # unseal 的正常中间态，不该让 compose 反复重启容器。
       test: ["CMD-SHELL", "vault status -address=http://127.0.0.1:8200; [ $$? -ne 1 ]"]

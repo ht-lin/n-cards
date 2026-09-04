@@ -1,0 +1,162 @@
+# 手动部署 / 生产发布（§14.3「生产发布（手动触发 + approval）」）。T-012 交付。
+#
+# 一个文件承担两件事，是刻意的：
+#
+#   environment=production  §14.3 的生产发布流水线骨架 —— 选 sha → approval →
+#                           前置快照 → 重启 → 迁移 → 健康检查 → 失败自动回滚
+#   environment=staging     **不等 main 合入就能演练整条 CI 部署路径**。
+#                           这是把 secrets、known_hosts、sops 解密、collection
+#                           安装全验一遍的唯一办法，也是交付前排练的主力入口。
+#
+# 真正的流程在 deploy.yml（reusable）里，两个调用方共用同一份定义 ——
+# 「生产走的是不是 staging 验过的那条路」这件事因此不需要靠人记得。
+#
+# ⚠️ 生产主机目前**不存在**（inventory/production.yml 是骨架）。
+# 选 production 会在 DNS 解析那一步失败 —— 这是刻意的，比连上一台错的机器好。
+
+name: deploy-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: '目标环境'
+        type: choice
+        options: [staging, production]
+        default: staging
+        required: true
+      image_tag:
+        description: '完整的 40 位 commit sha（GHCR 上必须已有这个 tag）'
+        type: string
+        required: true
+      run_migrations:
+        description: '执行 Doctrine 迁移'
+        type: boolean
+        default: true
+      confirm:
+        description: "生产发布时必须原样输入 deploy-production（staging 忽略此项）"
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  # 先做三件便宜的校验，再去碰主机。
+  # 把「tag 打错了」挡在 approval 之前 —— 让人点了同意才发现拉不到镜像，
+  # 是最没必要的一种浪费。
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      site_url: ${{ steps.resolve.outputs.site_url }}
+    steps:
+      # ⚠️ 这一条**替代**的是 production Environment 上的 required reviewers ——
+      # 那条保护规则在 Free 计划的私有仓库上建不出来（API 明确回
+      # "Please ensure the billing plan supports the required reviewers
+      # protection rule"）。分支策略与 environment secret 两项 Free 可用，
+      # 已经配上了；只有 approval 这一半要在这里补。
+      #
+      # 诚实地说清它弱在哪：写在 YAML 里的确认能被任何有权改 workflow 的人删掉，
+      # 而 Environment 的保护规则不能。它拦不住账号被盗，也拦不住手滑改 YAML；
+      # 它拦住的是「在 dispatch 表单里选错了环境」——考虑到 environment 的默认值
+      # 是 staging、而 production 与它只差一个下拉选项，这恰恰是最可能发生的那种事故。
+      #
+      # 另外值得说明：单人仓库上 required reviewers 的实际效果本来也只是
+      # 「同一个人再点一次」（reviewer 是你，Prevent self-review 必须关掉否则死锁）。
+      # 所以此处丢掉的不是「第二个人把关」，而是「这道门不可绕过」这个性质。
+      # 第二位维护者加入、或者账号升到 Pro 时，删掉这一步换回 Environment 规则。
+      - name: 生产发布确认
+        if: inputs.environment == 'production'
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "deploy-production" ]; then
+            echo "::error::生产发布要求 confirm 输入 deploy-production，实得：'${CONFIRM}'"
+            echo "这是 Free 计划下 required reviewers 的替代品，见本 job 的注释。"
+            exit 1
+          fi
+          echo "✓ 已确认生产发布（触发人：${{ github.actor }}）"
+
+      - name: 校验 sha 形态
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$IMAGE_TAG" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::image_tag 必须是完整的 40 位 commit sha，实得：$IMAGE_TAG"
+            echo "短 sha 与分支名都不接受 —— main.yml 只按完整 sha 推 tag，"
+            echo "别的写法会拉到一个和你以为的不同的镜像（或者 :main 这种会漂的 tag）。"
+            exit 1
+          fi
+
+      # Environment 的 "Deployment branches and tags = main" 只约束**触发时选的 ref**，
+      # 管不到 image_tag —— 那是一个独立的输入。也就是说光靠那条规则，
+      # 从 main 触发、却部署一个从没合进 main 的 commit 是完全合法的。
+      # 这一步把那个缺口堵上，Free / Pro 都需要它。
+      # fetch-depth: 0 —— 祖先判定要完整历史，浅克隆下 merge-base 会误判。
+      - uses: actions/checkout@v4
+        if: inputs.environment == 'production'
+        with:
+          fetch-depth: 0
+
+      - name: 确认 sha 在 main 的历史里
+        if: inputs.environment == 'production'
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git cat-file -e "${IMAGE_TAG}^{commit}" 2>/dev/null; then
+            echo "::error::${IMAGE_TAG} 在本仓库里不是一个已知的 commit"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$IMAGE_TAG" origin/main; then
+            echo "::error::${IMAGE_TAG} 不在 origin/main 的历史里，拒绝发布到生产"
+            echo "生产只发布合入过 main 的 commit —— 那是唯一过了完整门禁的历史。"
+            exit 1
+          fi
+          echo "✓ ${IMAGE_TAG} 是 origin/main 的祖先"
+
+      - name: 确认镜像已存在于 GHCR
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if ! docker manifest inspect "ghcr.io/ht-lin/n-cards-backend:${IMAGE_TAG}" >/dev/null 2>&1; then
+            echo "::error::GHCR 上没有 ghcr.io/ht-lin/n-cards-backend:${IMAGE_TAG}"
+            echo "确认那个 commit 的 main 流水线里 backend-image 这个 job 真的跑绿了。"
+            exit 1
+          fi
+          echo "✓ 镜像存在"
+
+      - name: 解析目标域名
+        id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "site_url=https://api.n-cards.de" >> "$GITHUB_OUTPUT"
+          else
+            echo "site_url=https://api.staging.n-cards.de" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: guard
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: ${{ inputs.environment }}
+      image_tag: ${{ inputs.image_tag }}
+      site_url: ${{ needs.guard.outputs.site_url }}
+      run_migrations: ${{ inputs.run_migrations }}
+    # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret
+    # 都递给被调用的 workflow，包括将来才加的那些。
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}

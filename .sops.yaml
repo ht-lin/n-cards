@@ -1,0 +1,45 @@
+# sops 加密规则（T-012 / §14.3「生产环境变量由 sops（age 密钥）加密后提交入库」）。
+#
+# sops 从被加密文件所在目录**向上**找这个文件，所以它必须在仓库根。
+# 命中第一条匹配的 creation_rule 就停 —— 顺序有意义，具体规则写在通配之前。
+#
+# ============================================================================
+# 为什么是两把密钥而不是一把
+# ============================================================================
+# staging 与 production 用**不同**的 age 密钥对：
+#
+#   staging 私钥    → GitHub repository secret          SOPS_AGE_KEY
+#   production 私钥 → `production` Environment 的 environment secret（同名覆盖）
+#
+# environment secret 只在 job 声明了 `environment: production` 时才注入，
+# 而那个 Environment 上挂着 required reviewers。于是「只有过了 approval 的
+# job 才解得开生产配置」由 GitHub 的权限模型强制，不靠谁记得遵守约定。
+#
+# 一把钥匙管两个环境的话，任何一个能跑 staging 部署的人（或任何一次 staging
+# CI 的泄露）就同时拿到了生产数据库口令和生产的 Vault secret_id。
+#
+# ⚠️ 两把私钥都离线备份，且**与 Vault 的 unseal key 由不同的人保管** ——
+# 同一个人同时持有「配置解密权」与「数据解密权」的话，ADR-0004 的 3-of-5
+# 门限就白设了。
+#
+# ============================================================================
+# 怎么用
+# ============================================================================
+#   sops -e -i path/to/secrets.sops.yaml    # 就地加密（首次）
+#   sops path/to/secrets.sops.yaml          # 解密到编辑器，存盘时自动重新加密
+#
+# 密文文件**入库是刻意的**（这正是 sops 的用法）。scripts/ci/check-sops-encrypted.sh
+# 会在每条 PR 上确认它们确实是密文 —— 那道门防的是「忘了加密就提交」。
+#
+# 轮换密钥：生成新密钥对 → 更新下面的公钥 → `sops updatekeys <文件>` → 换 secret。
+
+creation_rules:
+  - path_regex: infra/ansible/inventory/group_vars/ncards_staging/secrets\.sops\.yaml$
+    # 首启第 2 步生成后，这里填 staging 的 age 公钥（age1… 开头，公钥不是秘密）。
+    # 空值时 sops 会拒绝加密并报 "no keys found" —— 那正是想要的：
+    # 宁可在加密这一步硬失败，也不要产出一个没人解得开的文件。
+    age: "age178ecr47z4ap8at7ns3vxps5l7s9ukhh5ugmrtaj0yaf4smhyaa2shvjl39"
+
+  - path_regex: infra/ansible/inventory/group_vars/ncards_production/secrets\.sops\.yaml$
+    # 生产主机开出来时填入**第二把** age 公钥。别复用 staging 那把。
+    age: "age1h20lnz9ltmdy42vfaazpeyy329qz8064yvh9vp65vw8dawjdnups3264c3"

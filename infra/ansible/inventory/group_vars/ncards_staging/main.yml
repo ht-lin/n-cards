@@ -1,0 +1,47 @@
+---
+# staging 环境变量（T-012）。**本文件不含任何凭据** —— 凭据在同目录的
+# secrets.sops.yaml 里（sops/age 加密），由 community.sops 的 vars plugin 自动解密。
+
+# ---------------------------------------------------------------- 域名与 TLS
+# 刻意**不带 scheme**：Caddy 见到裸域名才会自动申请证书并开 80→443 重定向。
+# 写成 https:// 也能跑，但那样就关掉了自动 HTTP 重定向，冒烟测试第 2 条会红。
+ncards_site_address: api.staging.n-cards.de
+
+# ACME 账户邮箱。Let's Encrypt 用它发证书过期提醒 —— 填一个真的能收到信的地址。
+ncards_acme_email: ops@n-cards.de
+
+# ACME 目录。默认是 Let's Encrypt 生产目录。
+#
+# ⚠️ 排练时改成 staging 目录，避开生产的速率限制（同一域名每周 5 张证书）：
+#   https://acme-staging-v02.api.letsencrypt.org/directory
+# 但 staging 目录签出来的证书**不受公共信任**，此时冒烟测试要带 SMOKE_INSECURE=1。
+# **验收必须在生产目录、且不带 SMOKE_INSECURE 的情况下跑**（任务卡的 curl -I 那条）。
+ncards_acme_ca: https://acme-v02.api.letsencrypt.org/directory
+
+# ---------------------------------------------------------------- SSH
+# 非 22 端口。**明文入库是刻意的** —— 它不是秘密：
+# 换端口的价值是把互联网背景扫描的噪声降下来，**不是安全边界**。
+# 边界是「仅密钥 + 禁 root + fail2ban + ufw」这四条。
+# 把它做成 secret 只会让 inventory 读不懂，换不来任何实质防护。
+ncards_ssh_port: 2242
+
+# 允许登录 deploy 用户的公钥。多把就写成多行。
+# ⚠️ 私钥对应 GitHub repository secret DEPLOY_SSH_KEY。
+ncards_deploy_authorized_keys:
+  [
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDy3VGi+WBfqi4I/ZQCVX/y6cUUXgyYF6H2RYBwIRFNG ncards-deploy@github-actions,
+  ]
+# 例：
+# ncards_deploy_authorized_keys:
+#   - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... ncards-deploy@github-actions"
+
+# ---------------------------------------------------------------- 日志
+# staging 相对 prod 的唯一放松（见 docker-compose.staging.yml 的头注释）。
+ncards_log_level: debug
+
+# ---------------------------------------------------------------- 机型（仅记录）
+# ⚠️ §4.1 假设的是 CCX23（4 vCPU / 16 GB / 160 GB）。staging 实机小一档 ——
+# 这是 T-012 记录在案的第一条偏差，见 docs/tasks/M0.md 的交付产物段。
+# 本变量不参与任何逻辑；真正的判据是 preflight 采集的实测 facts
+# （/opt/ncards/state/host-facts.json）。
+ncards_machine_type: "CX22 (2 vCPU / 4 GB / 40 GB)"

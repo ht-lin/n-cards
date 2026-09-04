@@ -178,8 +178,17 @@ changes ──┬─► backend          backend/** 或 docs/api/** 变动时
 required check」。完整推理见 [ADR-0008](docs/adr/0008-ci-gate-topology.md)。
 
 `main` 合入后跑 [`main.yml`](.github/workflows/main.yml)：全量四条 + 仪器测试
-（Gradle Managed Device，api 26 + 34）+ 后端镜像推 GHCR + AAB 产物。
-部署 staging 属 T-012，Play 上传属 T-456，两处都在 `main.yml` 末尾留了接法说明。
+（Gradle Managed Device，api 26 + 34）+ 后端镜像推 GHCR + AAB 产物
++ **部署 staging**（T-012）。Play 上传属 T-456，在 `main.yml` 末尾留了接法说明。
+
+部署逻辑在 reusable 的 [`deploy.yml`](.github/workflows/deploy.yml) 里，
+被 `main.yml`（staging，自动）与 [`deploy-manual.yml`](.github/workflows/deploy-manual.yml)
+（人工触发；production 需 Environment approval）共用 —— 于是「生产走的是不是
+staging 验过的那条路」不靠谁记得。见 [ADR-0009](docs/adr/0009-ansible-sops-deploy-topology.md)。
+
+> T-012 **没有**新增 PR 侧流水线。它唯一需要的 PR 检查（sops 文件确实是密文）
+> 挂进了本来就无条件运行的 `shared`：零拓扑改动、零 `pr-gate` 改动。
+> 上面那条「加流水线必须同时加进 needs」的代价，能不付就别付。
 
 > ⚠️ **服务端仍未生效**：`ht-lin/n-cards` 是 Free 套餐的私有仓库，ruleset 返回 403
 > （见 §3）。`scripts/setup-branch-protection.sh` 里的规则是这套约定唯一的书面记录，
@@ -193,6 +202,7 @@ scripts/ci/sensitive-scan-selftest.sh   # 先证明扫描器本身有效
 scripts/ci/check-gitleaks.sh            # 需要本机装 gitleaks，脚本头部有安装提示
 scripts/ci/check-sensitive-logs.sh
 scripts/ci/check-todo-issue-refs.sh
+scripts/ci/check-sops-encrypted.sh       # sops 密文文件必须真的是密文（T-012）
 
 # 后端
 cd backend && composer qa               # cs + stan + deptrac + selftest + 迁移检查 + test

@@ -1,0 +1,65 @@
+---
+# 回滚到上一个镜像 tag（§14.3「失败自动回滚上一镜像 tag」）。
+#
+# **只回镜像，不回数据库。** 见 migrate.yml 与 ADR-0010。
+#
+# 被两个地方调用：deploy.yml 的 rescue（判定 broken 时自动），
+# 以及 rollback.yml playbook（人工，自动回滚也失败时）。
+
+- name: 读取回滚目标
+  ansible.builtin.slurp:
+    src: "{{ ncards_state_path }}/previous-image"
+  register: ncards_previous_raw
+  failed_when: false
+
+- name: 确认有可回滚的目标
+  ansible.builtin.assert:
+    that:
+      - ncards_previous_raw.content is defined
+      - (ncards_previous_raw.content | b64decode | trim) | length > 0
+    fail_msg: >-
+      {{ ncards_state_path }}/previous-image 不存在或是空的 —— 没有可回滚的镜像。
+      这通常意味着这是这台机器上的**第一次**部署（没有「上一个」）。
+      此时不要试图回滚，按 docs/runbooks/deploy-and-rollback.md 的
+      「首次部署就失败了」一节排查。
+
+- name: 设定回滚镜像
+  ansible.builtin.set_fact:
+    ncards_rollback_image: "{{ ncards_previous_raw.content | b64decode | trim }}"
+
+- name: 报告回滚动作
+  ansible.builtin.debug:
+    msg: "回滚：{{ ncards_app_image }} → {{ ncards_rollback_image }}"
+
+- name: 把 APP_IMAGE 写回上一个 tag
+  ansible.builtin.lineinfile:
+    path: "{{ ncards_compose_dir }}/.env"
+    regexp: "^APP_IMAGE="
+    line: "APP_IMAGE={{ ncards_rollback_image }}"
+  # 只改这一行而不是重渲染整个 .env：重渲染会把 ncards_app_image 又写成
+  # 失败的那个 tag（模板读的是变量，不是文件）。
+  no_log: true
+
+- name: 只重启 app
+  # 刻意不动 postgres / redis / vault：
+  #   - 数据库和 Redis 与镜像 tag 无关，重启它们只会拉长中断。
+  #   - vault 重启会让它**重新封印**，于是回滚之后还要找三个人来 unseal ——
+  #     把一次自动恢复变成一次人工事故。
+  community.docker.docker_compose_v2:
+    project_src: "{{ ncards_compose_dir }}"
+    files: "{{ ncards_compose_files }}"
+    services:
+      - app
+    state: present
+    build: never
+    pull: always
+    wait: true
+    wait_timeout: "{{ ncards_compose_wait_timeout }}"
+
+- name: 记录已回滚
+  ansible.builtin.copy:
+    content: "{{ ncards_rollback_image }}\n"
+    dest: "{{ ncards_state_path }}/current-image"
+    owner: "{{ ncards_deploy_user }}"
+    group: "{{ ncards_deploy_user }}"
+    mode: "0644"

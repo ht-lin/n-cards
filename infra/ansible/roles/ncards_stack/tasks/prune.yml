@@ -1,0 +1,55 @@
+---
+# 部署成功后清理磁盘。40 GB 的盘上这一步是必须的。
+#
+# ⚠️ **绝不用 `docker system prune -af`。** 它会删掉所有没在跑的镜像 ——
+# 包括 state/previous-image 指向的那一个，也就是回滚目标。
+# 下一次部署失败时才会发现回不去了。
+
+- name: 清理 dangling 镜像与构建缓存
+  community.docker.docker_prune:
+    # 只清没有任何 tag 的层。有 tag 的镜像（含上一个版本）一个不动。
+    images: true
+    images_filters:
+      dangling: true
+    builder_cache: true
+
+# ⚠️ docker 的 --format 用的是 Go template，语法与 Jinja 撞了 —— 不包 raw 的话
+# Ansible 会先拿 Jinja 去解析 {{.Repository}}，然后报 "unable to look up .Repository"。
+- name: 列出本仓库的 app 镜像
+  ansible.builtin.command:
+    argv:
+      - docker
+      - images
+      - "{{ ncards_image_repo }}"
+      - --format
+      - "{% raw %}{{.Repository}}:{{.Tag}}{% endraw %}"
+  register: ncards_app_images
+  changed_when: false
+
+- name: 计算要删的旧 app 镜像
+  ansible.builtin.set_fact:
+    # docker images 默认按创建时间倒序，最新的在前。留最近 N 个，其余删掉。
+    # 排除当前正在跑的镜像与 :main 这类浮动 tag —— 它们与某个 sha tag 指向
+    # 同一批层，删了不省磁盘，只会让下次 pull 变慢。
+    ncards_images_to_remove: >-
+      {{ (ncards_app_images.stdout_lines
+          | reject('equalto', ncards_app_image)
+          | reject('search', ':main$')
+          | reject('search', ':<none>$')
+          | list)[ncards_image_keep | int:] }}
+
+- name: 删除超出保留数的旧镜像
+  community.docker.docker_image_remove:
+    name: "{{ item }}"
+  loop: "{{ ncards_images_to_remove }}"
+  # 某个镜像正被别的东西引用时删不掉 —— 那不是部署失败，下次再说。
+  failed_when: false
+
+- name: 报告磁盘占用
+  ansible.builtin.command: df -h /
+  register: ncards_df
+  changed_when: false
+
+- name: 显示磁盘余量
+  ansible.builtin.debug:
+    var: ncards_df.stdout_lines

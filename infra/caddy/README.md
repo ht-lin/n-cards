@@ -6,11 +6,29 @@ Caddy 反向代理配置。**T-003 交付最小可用版，T-012 完善。**
 `CADDY_SITE_ADDRESS` 参数化（本地 `http://localhost` 明文；staging / prod 是真实
 域名，Caddy 自动申请证书）。
 
-| 已有（T-003） | 待补（T-012） |
+| 已有 | 交付于 |
 |---|---|
-| `reverse_proxy app:8080` | 静态法律页（Impressum / 数据保护声明，§8.6） |
-| 下面全部安全响应头 | 真实域名与 ACME 账户配置 |
-| 禁 `Server` / `X-Powered-By` / `Via` | Grafana 的 basic auth 反代（T-405） |
+| `reverse_proxy app:8080` | T-003 ✅ |
+| 下面全部安全响应头 | T-003 ✅ |
+| 禁 `Server` / `X-Powered-By` / `Via` | T-003 ✅ |
+| ACME 账户邮箱与目录（`ACME_EMAIL` / `ACME_CA`） | T-012 ✅ |
+| Grafana 的 basic auth 反代 | T-405 ⏳ |
+
+> **静态法律页（§8.6）从 T-012 移出了。** 两个原因：
+> ① 这个站点的 `Content-Security-Policy: default-src 'none'` 与 HTML 页面直接冲突 ——
+> 页面自己的 CSS 与字体全会被拦；
+> ② Impressum 需要真实法律主体信息、Datenschutzerklärung 需要终版子处理者清单，
+> 都不是 M0 能定的。
+> 它属于 `n-cards.de` 的站点任务（同时要承载 Play 要求的站外
+> `https://n-cards.de/delete-account`），**不属于 `api.` 这个子域**。
+
+`ACME_CA` 排练时可指向 Let's Encrypt 的 staging 目录避开速率限制
+（同一域名每周 5 张证书，首签调不通时很容易撞上）。⚠️ 那时签出来的证书**不受公共
+信任**，冒烟测试要带 `SMOKE_INSECURE=1`；**验收必须在生产目录、不带那个开关的
+情况下跑**。
+
+证书持久化在 `caddy_data` 卷，正常部署 **0 次签发** —— 所以绝不能
+`docker compose down -v`（那会把证书一起删掉，重签还可能正好撞上速率限制）。
 
 > HSTS 只对 `{scheme} == "https"` 发。本地是明文 `http://localhost`，发了会把
 > 开发者的浏览器对 localhost 永久锁进 HTTPS —— 那是个很难排查的坑。
@@ -27,3 +45,9 @@ Caddy 反向代理配置。**T-003 交付最小可用版，T-012 完善。**
 - 禁用 `X-Powered-By` / `Server` 版本回显
 
 验收：`curl -I https://api.staging.n-cards.de` 能看到全部安全头，且无版本回显。
+这四条已经写成可执行的断言，跑
+[`scripts/ci/smoke-staging.sh`](../../scripts/ci/smoke-staging.sh) 即可
+（每次部署后 CI 会自动跑一遍）。
+
+> ⚠️ 手工对拍时注意：HTTP/2 的响应头名在协议层就是**小写**的，`curl -I` 原样输出。
+> 冒烟脚本统一转小写再比 —— 别按 `Strict-Transport-Security` 的大小写去 grep。
