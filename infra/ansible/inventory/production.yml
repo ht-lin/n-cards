@@ -9,7 +9,9 @@
 #
 #   1. 开机器（§9.3 的容量假设是 CCX23；staging 用的是小一档的机型，
 #      到时按实测负载重新定 —— 别直接抄 staging）
-#   2. api.n-cards.de 加 A/AAAA 记录
+#   2. api.n-cards.de 加 A 记录（**必须**，主机也必须有公网 IPv4：GitHub Actions 的
+#      runner 没有 IPv6，而 ghcr.io 没有 AAAA —— 理由见 runbook 的「前置检查」）。
+#      AAAA 可选，但配了就必须真的通，否则 ACME 会挑 v6 然后一直超时。
 #   3. 填下面的 ansible_host
 #   4. 生成**第二把** age 密钥对，公钥写进仓库根 .sops.yaml 的 production 规则，
 #      私钥填进 GitHub `production` Environment 的 environment secret（不是 repo secret）

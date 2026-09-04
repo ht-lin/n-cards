@@ -27,7 +27,10 @@ ncards_ssh_port: 2242
 
 # 允许登录 deploy 用户的公钥。多把就写成多行。
 # ⚠️ 私钥对应 GitHub repository secret DEPLOY_SSH_KEY。
-ncards_deploy_authorized_keys: []
+ncards_deploy_authorized_keys:
+  [
+    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDy3VGi+WBfqi4I/ZQCVX/y6cUUXgyYF6H2RYBwIRFNG ncards-deploy@github-actions,
+  ]
 # 例：
 # ncards_deploy_authorized_keys:
 #   - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... ncards-deploy@github-actions"

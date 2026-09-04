@@ -38,8 +38,8 @@ creation_rules:
     # 首启第 2 步生成后，这里填 staging 的 age 公钥（age1… 开头，公钥不是秘密）。
     # 空值时 sops 会拒绝加密并报 "no keys found" —— 那正是想要的：
     # 宁可在加密这一步硬失败，也不要产出一个没人解得开的文件。
-    age: ""
+    age: "age178ecr47z4ap8at7ns3vxps5l7s9ukhh5ugmrtaj0yaf4smhyaa2shvjl39"
 
   - path_regex: infra/ansible/inventory/group_vars/ncards_production/secrets\.sops\.yaml$
     # 生产主机开出来时填入**第二把** age 公钥。别复用 staging 那把。
-    age: ""
+    age: "age1h20lnz9ltmdy42vfaazpeyy329qz8064yvh9vp65vw8dawjdnups3264c3"
