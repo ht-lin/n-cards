@@ -5,7 +5,8 @@
 # 主机上没有 backend/ 源码，于是 docker-compose.prod.yml 里遗留的
 # `build.context: ../../backend` 指向一个**不存在的目录** —— 任何误触发的构建
 # 会立刻硬失败，而不是悄悄产出一个未经 CI 验证的镜像跑到生产上去。
-# （prod overlay 的 `volumes: []` 已经废掉了 base 的源码绑定挂载，所以不需要它。）
+# （prod overlay 的 `volumes: !reset null` 已经废掉了 base 的源码绑定挂载，
+#  所以不需要它 —— 那里原来写的 `volumes: []` 是废不掉的，见该文件的注释。）
 
 - name: 创建部署目录骨架
   ansible.builtin.file:
@@ -23,6 +24,17 @@
   ansible.posix.synchronize:
     src: "{{ playbook_dir }}/../"        # 仓库的 infra/ 目录
     dest: "{{ ncards_deploy_path }}/infra/"
+    # ⚠️ 必须显式给 dest_port，不能让 synchronize 自己去 inventory 里取。
+    # 它的 action plugin 是 `task_vars.get('ansible_port')` —— 拿到的是**未渲染**的
+    # 原始值，而 inventory 里写的是 `ansible_port: "{{ ncards_ssh_port }}"`，
+    # 于是模块收到字符串 "{{ ncards_ssh_port }}" 并在 argspec 上炸掉：
+    #   argument 'dest_port' is of type <class 'str'> and we were unable to
+    #   convert to int
+    # 这条报错跟端口配错看不出区别，别顺着它去改 inventory。task 参数是渲染过的，
+    # 同一个 ansible_port 写在这里就是真值（也因此 -e ansible_port=… 依然有效）。
+    # （site.yml 碰不到：hardening 的 set_fact 已经把 ansible_port 变成了真值；
+    # 只有 deploy.yml / rollback.yml 直接吃 inventory 里那层模板。）
+    dest_port: "{{ ansible_port }}"
     delete: true
     recursive: true
     rsync_opts:

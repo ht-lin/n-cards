@@ -233,8 +233,11 @@
     owner: root
     group: root
     mode: "0644"
+    # ⚠️ 这里**不能**写 {{ ansible_managed }}：那个变量由 template 动作插件在渲染
+    # 模板时注入，copy 的 content 走的是普通 templar，取不到它，会直接
+    # 'ansible_managed' is undefined 失败。本 role 的三个 .j2 里用它没问题。
     content: |
-      // {{ ansible_managed }}
+      // Ansible managed: roles/hardening —— 手改会在下次 site.yml 时被覆盖
       APT::Periodic::Update-Package-Lists "1";
       APT::Periodic::Unattended-Upgrade "1";
       APT::Periodic::AutocleanInterval "7";
