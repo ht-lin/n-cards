@@ -116,22 +116,36 @@ docker compose exec vault vault operator init \
 建 kv-v2 与 JWT 签名密钥、写两份 policy、配 AppRole。
 脚本是**幂等**的，重复执行安全，且**绝不覆盖已存在的密钥材料**。
 
+先把 root token 放进这个 shell —— 本节每一条命令都要用它：
+
+```bash
+read -rs VAULT_TOKEN && export VAULT_TOKEN   # 粘贴上一步的 root token。不回显、不进 history
+
+# 期望：policies 里有 root。403 permission denied 的第一嫌疑是 token 没带进去
+# （空 token 报的就是 403，不是 400），先 echo "len=${#VAULT_TOKEN}" 看是不是 0
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token lookup
+```
+
 ```bash
 # 生产的 compose 里没有 vault-init 服务（被 profiles: ["disabled"] 关掉了）——
 # 那个容器需要常驻一个 root 级 token，不该留在生产环境里。所以这里手工跑。
 docker run --rm --network ncards_backing \
   -v /opt/ncards/infra/vault:/vault/bootstrap:ro \
   -e VAULT_ADDR=http://vault:8200 \
-  -e VAULT_TOKEN='<上一步的 root token>' \
+  -e VAULT_TOKEN="$VAULT_TOKEN" \
   $(docker build -q /opt/ncards/infra/vault)
 ```
 
 脚本最后会打印 `VAULT_ROLE_ID=...`。接着生成一个 `secret_id`：
 
 ```bash
-docker compose exec vault vault write -address=http://127.0.0.1:8200 \
-  -f auth/approle/role/ncards-app/secret-id
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+  vault write -f -field=secret_id auth/approle/role/ncards-app/secret-id
 ```
+
+> ⚠️ 脚本提示里的 `http://vault:8200` 是**容器视角**的地址，只在 compose 的
+> `ncards_backing` 网络里解析得出来。在宿主机 shell 里贴 curl 会得到
+> `Could not resolve host: vault`。用上面的 `docker compose exec`。
 
 把 `role_id` 与 `secret_id` 写进 sops(age) 加密的配置，随 Ansible 下发为
 `VAULT_ROLE_ID` / `VAULT_SECRET_ID`（T-012 已交付）。在**运维本机**：
@@ -144,15 +158,23 @@ sops infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
 首次初始化时这两个值是 `pending-bootstrap-see-runbook` 占位符 ——
 完整顺序见 [`staging-first-boot.md`](staging-first-boot.md) 第 9–10 步。
 
-**最后一步 —— 吊销 root token：**
+**最后一步 —— 吊销 root token**（确认 `role_id` 与 `secret_id` 都已到手再跑）：
 
 ```bash
-docker compose exec vault vault token revoke -address=http://127.0.0.1:8200 -self
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token revoke -self
+unset VAULT_TOKEN
 ```
 
-> ⚠️ root token 不该长期存在。需要时可以用 3 把 unseal key 通过
-> `vault operator generate-root` 重新生成一个。留着它等于在 §17.4 的
-> 最小权限体系旁边放一把万能钥匙。
+> ⚠️ root token 不该长期存在。留着它等于在 §17.4 的最小权限体系旁边放一把万能钥匙。
+>
+> 但**顺序反了没有退路**：先吊销的话，后面每条命令都 403，且拿不回同一个 token。
+> 补救只能重新找 3 位 unseal key 持有人生成一个新的：
+>
+> ```bash
+> docker compose exec vault vault operator generate-root -init   # 记下 OTP 与 nonce
+> docker compose exec vault vault operator generate-root         # 3 人各输一把 key + 同一个 nonce
+> docker compose exec vault vault operator generate-root -decode=<encoded-token> -otp=<OTP>
+> ```
 
 ---
 

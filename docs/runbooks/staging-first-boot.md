@@ -18,14 +18,69 @@
 
 ```bash
 # 1. 主机开着、能用 root + 口令或密钥登录（Hetzner 开机邮件里有）
-ssh root@<主机IP>
+ssh root@<主机IPv4>
 
 # 2. 确认发行版与规格。期望：Ubuntu 24.04，≥ 2 vCPU / ≥ 3400 MB / ≥ 15 GB 可用
 lsb_release -d && nproc && free -m | awk '/Mem:/{print $2" MB"}' && df -h /
 
-# 3. 本机装好 ansible-core、sops、age
-ansible --version && sops --version && age-keygen --version
+# 3. 主机有公网 IPv4。期望：一行 inet <公网地址>
+ip -4 addr show scope global | grep inet
+
+# 4. 本机装好 ansible-core、sops、age
+#    期望：core ≥ 2.15（见下），sops ≥ 3.8，age ≥ 1.0
+ansible --version | head -1 && sops --version && age-keygen --version
 ```
+
+> ⚠️ **发行版自带的 ansible 大概率太旧，且失败得不像版本问题。**
+> `requirements.yml` 里钉的三个 collection 都要求 **ansible-core ≥ 2.15**，
+> 而 Ubuntu 22.04 的 `apt install ansible` 给的是 2.12。更麻烦的是它配的
+> `python3-resolvelib` 是 0.8.1，2.12 只兼容 `<0.6` —— 于是第 4 步的
+> `ansible-galaxy collection install` 直接崩在依赖解析器上：
+> `CollectionDependencyProvider.find_matches() got an unexpected keyword
+> argument 'identifier'`。这条报错跟「版本太旧」看不出任何关系，别顺着它查。
+>
+> 装进 venv，别用 apt：
+>
+> ```bash
+> sudo apt install -y python3-venv
+> python3 -m venv ~/.venvs/ansible
+> ~/.venvs/ansible/bin/pip install -U pip 'ansible-core>=2.17,<2.18'
+> sudo apt remove -y ansible-core        # 否则 PATH 里先命中的还是 2.12
+> echo 'export PATH="$HOME/.venvs/ansible/bin:$PATH"' >> ~/.bashrc
+> ```
+>
+> 上限 2.17 是被控制端 Python 卡住的：22.04 是 Python 3.10，
+> 而 ansible-core 2.18 起要求控制端 ≥ 3.11。换更新的发行版再放开上限。
+
+> ⚠️ **Hetzner Cloud Firewall 里必须有 2242 —— 它是独立于主机 ufw 的另一层。**
+> 建机时选了防火墙模板的话，入站允许列表通常是 22/80/443；而第 4 步会把 SSH
+> 搬到 2242，于是 playbook 走到「确认新 SSH 端口已在监听」就卡死 ——
+> 主机上 sshd 好好听着，包在云防火墙那层就被丢了。
+>
+> 进 Console → Firewalls → 这台机器挂的规则集，入站加两条
+> （Source 都是 `0.0.0.0/0, ::/0` —— GitHub runner 的出口 IP 是漂的，收不窄）：
+> **TCP 2242**，以及 **UDP 443**（HTTP/3；模板一般只给 TCP 443，漏了它的现象是
+> 「偶发首包慢」，非常难查）。**22 先留着**，等 2242 验证通了再删。
+>
+> 分不清卡在云防火墙还是主机上，看失败方式：主机拒绝会立刻回 RST
+> （`nc` 瞬间返回），云防火墙是静默丢包（等满超时）。
+>
+> ```bash
+> # 期望：22 立刻 refused（主机可达），2242 succeeded
+> nc -zv -w5 api.staging.n-cards.de 22
+> nc -zv -w5 api.staging.n-cards.de 2242
+> ```
+
+> ⚠️ **IPv4 不是可选项，尽管 Hetzner Cloud 建机时可以取消勾选。** 两条硬依赖：
+> **入站** —— GitHub Actions 的托管 runner 至今没有 IPv6，
+> [`deploy.yml`](../../.github/workflows/deploy.yml) 的 SSH 部署与冒烟测试
+> 都是从 runner 打过来的；**出站** —— `ghcr.io` 与 `github.com` 都没有 AAAA 记录，
+> 主机拉镜像走的是 IPv4。IPv6-only 的机器上这两件事都不成立（能靠
+> Hetzner 的 DNS64/NAT64 兜住出站，但那是一条藏在 `/etc/resolv.conf` 里的依赖，
+> 谁改了 DNS 谁就会看到一条看不出跟网络有关的 `i/o timeout`）。
+> 每月约 €0.50 的 primary IP 比绕过它的任何方案都便宜。
+>
+> IPv6 反过来是可选的：Hetzner 默认还会给一个 /64，配不配 AAAA 都行 —— 见第 1 步。
 
 需要准备好、且**不在**这台机器上的东西：
 
@@ -43,15 +98,20 @@ ansible --version && sops --version && age-keygen --version
 
 ### 1. DNS（人工，一次性）
 
-给 `api.staging.n-cards.de` 加 A 记录指向主机 IPv4。
+给 `api.staging.n-cards.de` 加 A 记录指向主机 IPv4。主机上那个 IPv6 /64
+要不要一并配 AAAA，随意 —— 只配 A 是完全正常的配置。
 
-> ⚠️ **要么 A/AAAA 都配，要么都不配。** 只配 AAAA 而主机 IPv6 没通的话，
-> Let's Encrypt 的 HTTP-01 挑战会优先挑 v6，然后超时 —— 现象是「证书一直签不出来」
-> 而 `curl -4` 一切正常，很费时间。
+> ⚠️ **规则不是「都配」或「都不配」，而是「配了的必须都通」。**
+> Let's Encrypt 的 HTTP-01 挑战按解析结果挑地址族，且**优先挑 v6**。
+> 于是配了 AAAA 而主机 IPv6 实际没通的话，挑战会一路超时 ——
+> 现象是「证书一直签不出来」而 `curl -4` 一切正常，很费时间。
+> 拿不准 v6 通不通就别配 AAAA；A 记录一条足够。
 
 ```bash
-# 期望：返回主机 IP。没生效就等，别往下走 —— 后面 ACME 会失败。
-dig +short api.staging.n-cards.de
+# 期望：A 返回主机 IPv4。没生效就等，别往下走 —— 后面 ACME 会失败。
+dig +short A api.staging.n-cards.de
+# 配了 AAAA 才需要看这条；返回什么就得保证那个地址真的能从公网连上 80。
+dig +short AAAA api.staging.n-cards.de
 ```
 
 ### 2. age 密钥对（人工，一次性）
@@ -87,6 +147,29 @@ cat ncards-deploy.pub
 > 加固会禁掉 root 登录与口令登录。这个列表是空的时候 playbook 会**拒绝执行**
 > 并告诉你原因 —— 那道断言就是防「把自己锁在门外」。
 
+把私钥放到 ssh 找得到的地方，并配上端口与用户 —— 否则第 4 步之后
+ansible 与本文档里所有 `ssh` 命令都会撞上 `Permission denied (publickey)`：
+ssh 默认只提供 `~/.ssh/id_*`，而 `authorized_key` 是 `exclusive: true` 的，
+主机上除了这把钥匙没有第二把，root 登录也已经关了。
+
+```bash
+mv ncards-deploy ~/.ssh/ncards-deploy && chmod 600 ~/.ssh/ncards-deploy
+cat >> ~/.ssh/config <<'EOF'
+Host api.staging.n-cards.de api.n-cards.de
+    User deploy
+    Port 2242
+    IdentityFile ~/.ssh/ncards-deploy
+    IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+```
+
+> 写进 `~/.ssh/config` 而不是 `ansible.cfg` 的 `private_key_file`：后者是仓库里的
+> 文件，钉一条 `/home/<你>/…` 的绝对路径进去，换台机器或换个人就不成立了。
+> 第 4 步**之前**这条配置不生效也无所谓 —— 那一次是 `root@22`。
+>
+> 命令行参数照样赢过 config，所以验证用的 `ssh -p 22 root@…` 一类命令不受影响。
+
 ### 4. 主机 provision（人工，一次性）
 
 > ⚠️ **另开一个 root 会话并保持它开着。** 这一步会改 SSH 端口、禁 root 登录、
@@ -99,6 +182,15 @@ ansible-galaxy collection install -r requirements.yml
 # 首次：主机还是 root@22
 ansible-playbook -i inventory/staging.yml site.yml -e ansible_user=root -e ansible_port=22
 ```
+
+> ⚠️ **这一步中途失败后重跑，命令不一样 —— 那两个 `-e` 必须去掉。**
+> 只要 playbook 跑过了 sshd 那几步（即使后面失败了），root 登录就已经禁了、
+> 22 也不再监听，再指定 `ansible_user=root -e ansible_port=22` 必然连不上。
+> 重跑一律用默认值，role 开头的探测会自己认出 2242 并切过去：
+>
+> ```bash
+> ansible-playbook -i inventory/staging.yml site.yml
+> ```
 
 做了什么：deploy 用户 + authorized_keys、sshd 加固（端口 2242、禁 root、仅密钥）、
 关掉 `ssh.socket`、ufw（只开 2242/80/443/443udp）、fail2ban（`backend=systemd`）、
@@ -132,11 +224,29 @@ ssh-keyscan -p 2242 api.staging.n-cards.de 2>/dev/null
 | 类型 | 名字 | 值 |
 |---|---|---|
 | Environment | `staging` | 无保护规则 |
-| Environment | `production` | required reviewers = 你；deployment branches = 仅 `main` |
+| Environment | `production` | deployment branches = 仅 `main`（见下） |
 | Repository secret | `DEPLOY_SSH_KEY` | 第 3 步的**私钥全文** |
 | Repository secret | `DEPLOY_KNOWN_HOSTS` | 上面的 `ssh-keyscan` 输出 |
 | Repository secret | `SOPS_AGE_KEY` | 第 2 步 **staging** 的 `AGE-SECRET-KEY-1…` |
 | Environment secret（`production`） | 同上三个 | 生产主机就绪后再填 |
+
+> ⚠️ **`production` 上没有 required reviewers，这不是漏配。** Free 计划的私有仓库
+> 建不出这条保护规则（API 以 billing plan 拒绝）。同一页上另外两项 Free 可用、
+> 也确实配上了：Deployment branches = 仅 `main`，以及三个 environment secret
+> （同名覆盖 repository secret —— 生产的 age 私钥只在生产部署的 job 里存在）。
+> approval 这一半降级到了 `deploy-manual.yml` 的 guard 里：生产发布要在
+> `confirm` 框原样输入 `deploy-production`。取舍与解除条件见
+> [ADR-0010](../adr/0010-rollback-image-tag-only.md) 的「其他」段。
+>
+> UI 里那两项是灰的就对了。API 侧可以一次配好：
+>
+> ```bash
+> gh api -X PUT repos/ht-lin/n-cards/environments/production --input - <<'EOF'
+> {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+> EOF
+> gh api -X POST repos/ht-lin/n-cards/environments/production/deployment-branch-policies \
+>   -f name=main -f type=branch
+> ```
 
 还要把 GHCR 上的 `n-cards-backend` 包设为 **public**（Packages → Package settings
 → Change visibility）。理由：镜像里不含任何凭据（`.env` 由 sops 单独下发，
@@ -217,31 +327,99 @@ docker compose exec vault vault status            # 期望：Sealed = false
 
 ### 9. Vault bootstrap + 签发 AppRole（**人工，一次性**）
 
-用一个**用完即吊销**的 root token 跑一次 `bootstrap.sh`：
+接着第 8 步那个 ssh 会话（`COMPOSE_FILE` 已经导出）。整步用一个**用完即吊销**的
+root token，先把它放进这个 shell —— 下面四条命令都要用：
+
+```bash
+read -rs VAULT_TOKEN && export VAULT_TOKEN
+# 粘贴第 8 步 operator init 输出里的 Initial Root Token（hvs.… 开头），回车。
+# 不回显、不进 history。⚠️ 别粘成 5 把 Unseal Key 之一 —— 它们挨在一起。
+
+# 期望：policies 里有 root。403 = 粘错了或粘空了，别往下走
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token lookup
+```
+
+> ⚠️ **空的 `VAULT_TOKEN` 报的是 403 `permission denied`，不是 400。**
+> 看到 403 的第一反应该是「token 没带进去」，而不是「权限配错了」——
+> root token 对任何路径都不可能被拒。先 `echo "len=${#VAULT_TOKEN}"` 看是不是 0。
+
+跑一次 `bootstrap.sh`：
 
 ```bash
 docker run --rm --network ncards_backing \
   -e VAULT_ADDR=http://vault:8200 \
-  -e VAULT_TOKEN=<第 8 步的 root token> \
+  -e VAULT_TOKEN="$VAULT_TOKEN" \
   -v /opt/ncards/infra/vault:/vault/bootstrap:ro \
   $(docker build -q /opt/ncards/infra/vault)
 # 期望：末尾打印 VAULT_ROLE_ID=… 与手工签发 secret_id 的命令
 ```
 
-按它打印的命令签发一个 `secret_id`（脚本刻意不自动生成、不打印），然后：
+签发一个 `secret_id`（脚本刻意不自动生成、不打印）：
 
 ```bash
-docker compose exec vault vault token revoke -self   # 期望：Success
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+  vault write -f -field=secret_id auth/approle/role/ncards-app/secret-id
+# 期望：一行裸的 secret_id。这就是 VAULT_SECRET_ID，只出现这一次
+
+# role_id 不是秘密，bootstrap 的输出滚没了就再读一次
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+  vault read -field=role_id auth/approle/role/ncards-app/role-id
 ```
+
+> ⚠️ **`bootstrap.sh` 打印的那条 `curl` 不能直接贴到宿主机上。** 它里面的
+> `http://vault:8200` 是**容器视角**的地址 —— `vault` 这个名字只在 compose 的
+> `ncards_backing` 网络里解析得出来，而那个网络是 `internal: true`，vault 也刻意
+> 没有 `ports:`。在宿主机 shell 里跑必然是 `Could not resolve host: vault`。
+> 上面的 `docker compose exec` 版本等价，且不需要另起容器。
+
+**两个值都拿到之后**才收尾 —— `revoke -self` 必须是本步最后一条：
+
+```bash
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token revoke -self
+# 期望：Success
+unset VAULT_TOKEN
+```
+
+> ⚠️ 先吊销再签发的话，后面每条命令都会 403，且**没有退路能拿回同一个 token**。
+> 补救要重新找 3 位 unseal key 持有人跑 `vault operator generate-root`
+> （见 [`vault-unseal.md`](vault-unseal.md)）。
 
 ### 10. 写回真凭据（人工，一次性）
 
-在**本机**：
+在**本机**。这是整份 runbook 里**第一次需要解密**，所以要把第 2 步存到离线的
+staging **私钥**取回来用一次 —— 第 6 步的加密只用到公钥，缺私钥不会报错，
+问题拖到这里才暴露：
+
+```
+Failed to get the data key required to decrypt the SOPS file.
+  age1…: FAILED - identity did not match any of the recipients
+```
+
+从离线备份里取 staging 那把的 `AGE-SECRET-KEY-1…` **那一行**
+（不要 `# created:` / `# public key:` 注释行）：
+
+```bash
+read -rs SOPS_AGE_KEY && export SOPS_AGE_KEY   # 粘贴后回车。不回显、不进 history、不落盘
+
+# 先确认拿的是 staging 那把而不是 production 的。
+# 期望：与 .sops.yaml 里 ncards_staging 那条规则的 age: 值逐字相同
+printf '%s\n' "$SOPS_AGE_KEY" | age-keygen -y
+```
+
+对上了再编辑：
 
 ```bash
 sops infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
 # 把 VAULT_ROLE_ID / VAULT_SECRET_ID 的占位符换成第 9 步拿到的真值，存盘即自动重新加密
+
+unset SOPS_AGE_KEY
+head -3 infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
+# 期望：看到 ENC[AES256_GCM,… 而不是明文
 ```
+
+> ⚠️ **别写进 `~/.config/sops/age/keys.txt`。** sops 确实会自动读那里，但那等于
+> 把私钥长期留在一台日常开发机上，正好抵消第 2 步「离线保管、且与 unseal key
+> 分人」的整个设计。用 `SOPS_AGE_KEY` 传一次、用完 `unset`。
 
 提交 → PR → 合入。密文入库是刻意的（[ADR-0009](../adr/0009-ansible-sops-deploy-topology.md)）。
 
@@ -289,9 +467,15 @@ scripts/ci/smoke-staging.sh https://api.staging.n-cards.de
 ssh -p 22 -o ConnectTimeout=5 root@api.staging.n-cards.de   # 期望：超时
 ssh -p 2242 root@api.staging.n-cards.de                     # 期望：Permission denied
 ssh -p 2242 -o PubkeyAuthentication=no deploy@api.staging.n-cards.de  # 期望：Permission denied
-ssh -p 2242 deploy@api.staging.n-cards.de 'sudo ufw status numbered'  # 期望：只有 4 条规则
+ssh -p 2242 deploy@api.staging.n-cards.de 'sudo ufw status numbered'  # 期望：8 行（见下）
 ssh -p 2242 deploy@api.staging.n-cards.de 'swapon --show'             # 期望：/swapfile 2G
 ```
+
+> ufw 那条是**四条**规则（2242/tcp、80/tcp、443/tcp、443/udp），但主机有 IPv6 时
+> 每条会列两遍 —— 一条 v4、一条带 `(v6)` 后缀 —— 所以看到的是 8 行。
+> Ubuntu 的 `/etc/default/ufw` 默认 `IPV6=yes`，而 Hetzner 默认给每台机器一个 /64，
+> 于是 8 行才是常态；主机真没有 IPv6 时才是 4 行。数字对不上先看是不是把 v6 那半算漏了，
+> 再怀疑 playbook。
 
 fail2ban 真的在工作（连错 3 次后）：
 
@@ -321,6 +505,7 @@ docker compose down -v      # ← 删卷。vault_data / pg_data / caddy_data 一
 |---|---|
 | DNS / 域名 | 域名注册商的管理账号持有人 |
 | 主机开不了机、网络不通 | Hetzner 支持（工单里带 server ID） |
-| 证书签不出来 | 先自查 DNS + ufw 80 + `docker compose logs caddy`；仍不行看 Let's Encrypt 速率限制（换 `ACME_CA` 到 staging 目录排练） |
+| 证书签不出来 | 先自查 DNS（尤其「配了 AAAA 但主机 v6 不通」，见第 1 步）+ ufw 80 + `docker compose logs caddy`；仍不行看 Let's Encrypt 速率限制（换 `ACME_CA` 到 staging 目录排练） |
 | Vault init / unseal | 3 位 unseal key 持有人 —— **没有任何技术手段能绕过** |
+| 加固后 2242 连不上 | 先分 RST 还是静默超时：静默 = Hetzner Cloud Firewall 少了 2242（见前置检查）；RST = 主机上 sshd 没起来，看 `journalctl -u ssh` |
 | SSH 把自己锁在门外 | Hetzner Cloud Console 的网页终端（不走 SSH） |
