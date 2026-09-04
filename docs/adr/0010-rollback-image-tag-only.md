@@ -131,6 +131,23 @@ Vault 是**封印**的，此时 `/health/ready` 返回 503 —— 而那是期�
   但 GHCR 上还在，会重新拉）。
 - **首次部署失败时无法回滚**（没有「上一个」）。`rollback.yml` 会带着明确的
   说明失败，而不是把 `.env` 写成空的 `APP_IMAGE`。
+- **⚠️ 生产的 approval 门当前是可绕过的**（未缓解）。本决策原本假设生产发布由
+  `production` Environment 的 required reviewers 守着，但那条保护规则在
+  **Free 计划的私有仓库上建不出来**（GitHub API 明确以 billing plan 拒绝）。
+  同一个 Environment 上另外两项 Free 可用、且已经配上：
+  **Deployment branches = 仅 `main`**，以及生产密钥用 environment secret 隔离。
+  只有 approval 降级成了 `deploy-manual.yml` guard 里的输入确认串
+  （必须原样输入 `deploy-production`）+ 「`image_tag` 必须是 `origin/main` 的祖先」。
+
+  **降级掉的是「不可绕过」这个性质**，不是「第二个人把关」—— 单人仓库上
+  required reviewers 的实际效果本来也只是同一个人再点一次
+  （reviewer 是自己，且 Prevent self-review 必须关掉，否则永远无人可批）。
+  确认串拦得住选错环境（`environment` 默认 staging，与 production 只差一个下拉项，
+  这是最可能发生的事故），拦不住账号被盗或有人直接改 workflow。
+
+  **解除条件**：账号升 GitHub Pro，或仓库转 public。之后配上 required reviewers、
+  删掉 guard 里的确认串那一步；**祖先校验那步要留着** —— Environment 的分支策略
+  只约束触发时选的 ref，管不到 `image_tag`，那个缺口任何计划下都存在。
 
 ## Alternatives considered
 

@@ -7,10 +7,26 @@
 #   main.yml           每次 main 合入 → staging，全自动
 #   deploy-manual.yml  人工触发 → staging（排练）或 production（需 approval）
 #
-# **approval 不在这个文件里。** 它是 GitHub `production` Environment 上的
-# required reviewers 保护规则。写在 YAML 里的「审批」都是可以绕过的；
-# Environment 的保护规则不能。staging 的 Environment 没有保护规则，
-# 于是同一个 workflow 在两边一个零阻塞、一个必须有人点头。
+# **approval 不在这个文件里，而且现在它一半在 GitHub、一半在 deploy-manual.yml。**
+#
+# 原计划是全部交给 `production` Environment 的保护规则 —— 写在 YAML 里的「审批」
+# 可以被任何有权改 workflow 的人删掉，Environment 的规则不能。
+# 但 **Free 计划的私有仓库建不出 required reviewers**（API 直接回
+# "Please ensure the billing plan supports the required reviewers protection rule"），
+# 于是实际落成了这样：
+#
+#   Deployment branches = 仅 main   ✅ 在 Environment 上（Free 可用，已配）
+#   Environment secrets（生产密钥）  ✅ 在 Environment 上（Free 可用）
+#   required reviewers              ❌ 计划不支持 → 降级为 deploy-manual.yml 里的
+#                                      输入确认串 + 「sha 必须是 main 的祖先」
+#
+# 降级的代价记在 docs/adr/0010-rollback-image-tag-only.md 的未缓解风险里。
+# 账号升到 Pro（或仓库转 public）之后，把 required reviewers 配上、
+# 删掉 deploy-manual.yml 的确认串那一步即可 —— 祖先校验那步要留着，
+# Environment 的分支策略管不到 image_tag。
+#
+# staging 的 Environment 没有任何保护规则，于是同一个 workflow 在两边
+# 一个零阻塞、一个要人明确表态。
 #
 # ⚠️ Vault unseal key **绝不**进 CI（§14.3 原文 / ADR-0004）。
 # 这条流水线拿不到、也不需要它：Vault 封印时部署照样能完成，
