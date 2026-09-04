@@ -61,18 +61,58 @@
           changed_when: false
           failed_when: false
 
+        # ⚠️ 第二个判据：主机上得真有「上一个镜像」可退。
+        # 首次部署时 .env 必然已经是本次镜像（env.yml 在快照与起栈之前就渲染完了），
+        # 于是上面那条判据一定成立，但根本没有可退回去的版本。少了这一条，
+        # rollback.yml 的断言会以「没有可回滚的目标」再 fatal 一次，
+        # 把真正的失败原因压在两层输出底下。
+        - name: 读取可回滚的上一个镜像
+          ansible.builtin.slurp:
+            src: "{{ ncards_state_path }}/previous-image"
+          register: ncards_previous_image_raw
+          failed_when: false
+
+        # 「可回滚」要同时满足：文件在、非空、且**不是本次这个镜像**。
+        # 最后一条针对的是「同一个 tag 连续失败两次」：上一次失败留下的 .env 里
+        # APP_IMAGE 已经是本次镜像，这一次的 deploy.yml 会照着它记 previous-image，
+        # 于是回滚 = 把 app 重启成同一个镜像，撞同一个错，只是把真正的原因
+        # 推到更下面一屏。（源头也堵了，见 roles/ncards_stack/tasks/deploy.yml。）
+        - name: 判定是否有可回滚的目标
+          ansible.builtin.set_fact:
+            ncards_previous_image: >-
+              {{ (ncards_previous_image_raw.content | default('') | b64decode | trim) }}
+
         - name: 回滚到上一个镜像
           ansible.builtin.include_role:
             name: ncards_stack
             tasks_from: rollback
-          when: ncards_env_switched.rc == 0
+          when:
+            - ncards_env_switched.rc == 0
+            - ncards_previous_image | length > 0
+            - ncards_previous_image != ncards_app_image
 
-        - name: 未触发回滚的说明
+        - name: 未触发回滚的说明（现网未被切走）
           ansible.builtin.debug:
             msg: >-
               .env 还没切到本次镜像（现网仍在跑上一个版本），不回滚。
               这是一次无损失败：修掉原因后直接重跑即可。
           when: ncards_env_switched.rc != 0
+
+        - name: 未触发回滚的说明（没有可退的上一个版本）
+          ansible.builtin.debug:
+            msg: >-
+              {% if ncards_previous_image | length == 0 %}
+              {{ ncards_state_path }}/previous-image 不存在或是空的 ——
+              这是这台机器上的第一次部署，没有可回滚的目标，不回滚。
+              {% else %}
+              previous-image 记的就是本次镜像（{{ ncards_app_image }}）——
+              上一次部署也是它，且没跑起来过，回滚只会撞同一个错，不回滚。
+              {% endif %}
+              修掉上面报出的原因直接重跑即可（playbook 是幂等的）。排查见
+              docs/runbooks/deploy-and-rollback.md 的「首次部署就失败了」一节。
+          when:
+            - ncards_env_switched.rc == 0
+            - ncards_previous_image | length == 0 or ncards_previous_image == ncards_app_image
 
         - name: 部署失败
           ansible.builtin.fail:

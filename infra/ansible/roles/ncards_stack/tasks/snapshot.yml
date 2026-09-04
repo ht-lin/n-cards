@@ -43,50 +43,77 @@
       清理步骤见 docs/runbooks/deploy-and-rollback.md 的「磁盘满了」一节。
       **不要**用 `docker system prune -af` —— 它会把回滚要用的上一个镜像删掉。
 
-- name: 生成快照文件名
-  ansible.builtin.set_fact:
-    ncards_snapshot_file: >-
-      {{ ncards_snapshot_path }}/{{ ansible_date_time.iso8601_basic_short }}-{{
-        (ncards_app_image | split(':') | last)[:12] }}.sql.gz
-
-- name: 导出数据库快照
-  # 管道 + 重定向，用 shell 而不是 command。
-  # `set -o pipefail` 是关键：不写的话 pg_dump 失败但 gzip 成功时整条管道返回 0，
-  # 于是得到一个 20 字节的「成功」快照，而回滚时才会发现它是空的。
-  ansible.builtin.shell:
-    cmd: >-
-      set -o pipefail &&
-      docker compose {{ ncards_compose_flags }} exec -T postgres
-      pg_dump -U ncards -d ncards
-      | gzip -9 > {{ ncards_snapshot_file }}
+# ⚠️ 首次部署时栈还没起来，没有「部署前」可言 —— 必须先看 postgres 在不在跑。
+# 少了这一步，`docker compose exec -T postgres` 会以
+# `service "postgres" is not running` + rc 1 失败，把一次正常的首启变成部署失败；
+# 而且那时 .env 已经被 env.yml 写成了本次镜像，rescue 会据此判定「该回滚」，
+# 于是紧接着又撞上 rollback.yml 的「没有可回滚的目标」，真正的原因被压在两层下面。
+# 判据用 `--status running` 而不是 `ps -q`：停着的容器也该当作没有快照可做。
+- name: 检测 postgres 是否已在运行
+  ansible.builtin.command:
+    cmd: docker compose {{ ncards_compose_flags }} ps --status running --quiet postgres
     chdir: "{{ ncards_compose_dir }}"
-    creates: "{{ ncards_snapshot_file }}"
-  args:
-    executable: /bin/bash
-  become: true
-  register: ncards_snapshot_result
-
-- name: 收紧快照文件权限
-  ansible.builtin.file:
-    path: "{{ ncards_snapshot_file }}"
-    owner: root
-    group: root
-    mode: "0600"
+  register: ncards_postgres_ps
+  changed_when: false
+  # compose 自己报错（.env 还没渲染、compose 文件缺了一份…）同样按「没在跑」处理：
+  # 那些问题会在下一步起栈时明明白白地失败，不该由快照这一步来代言。
+  failed_when: false
   become: true
 
-- name: 确认快照不是空的
-  ansible.builtin.stat:
-    path: "{{ ncards_snapshot_file }}"
-  register: ncards_snapshot_stat
-  become: true
-  # 一个空库的 gzip 也有几百字节（schema 头）。小于 100 字节说明 pg_dump 没真的跑。
-  failed_when: ncards_snapshot_stat.stat.size < 100
-
-- name: 报告快照
+- name: 跳过快照的说明
   ansible.builtin.debug:
     msg: >-
-      快照 {{ ncards_snapshot_file }}
-      （{{ (ncards_snapshot_stat.stat.size / 1024) | round(1) }} KB）
+      postgres 没有在运行 —— 这台机器上还没有数据库，跳过部署前快照。
+      首次部署时这是期望行为（见 docs/runbooks/staging-first-boot.md 第 7 步）。
+  when: ncards_postgres_ps.stdout | trim | length == 0
+
+- name: 部署前快照
+  when: ncards_postgres_ps.stdout | trim | length > 0
+  block:
+    - name: 生成快照文件名
+      ansible.builtin.set_fact:
+        ncards_snapshot_file: >-
+          {{ ncards_snapshot_path }}/{{ ansible_date_time.iso8601_basic_short }}-{{
+            (ncards_app_image | split(':') | last)[:12] }}.sql.gz
+
+    - name: 导出数据库快照
+      # 管道 + 重定向，用 shell 而不是 command。
+      # `set -o pipefail` 是关键：不写的话 pg_dump 失败但 gzip 成功时整条管道返回 0，
+      # 于是得到一个 20 字节的「成功」快照，而回滚时才会发现它是空的。
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail &&
+          docker compose {{ ncards_compose_flags }} exec -T postgres
+          pg_dump -U ncards -d ncards
+          | gzip -9 > {{ ncards_snapshot_file }}
+        chdir: "{{ ncards_compose_dir }}"
+        creates: "{{ ncards_snapshot_file }}"
+      args:
+        executable: /bin/bash
+      become: true
+      register: ncards_snapshot_result
+
+    - name: 收紧快照文件权限
+      ansible.builtin.file:
+        path: "{{ ncards_snapshot_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+
+    - name: 确认快照不是空的
+      ansible.builtin.stat:
+        path: "{{ ncards_snapshot_file }}"
+      register: ncards_snapshot_stat
+      become: true
+      # 一个空库的 gzip 也有几百字节（schema 头）。小于 100 字节说明 pg_dump 没真的跑。
+      failed_when: ncards_snapshot_stat.stat.size < 100
+
+    - name: 报告快照
+      ansible.builtin.debug:
+        msg: >-
+          快照 {{ ncards_snapshot_file }}
+          （{{ (ncards_snapshot_stat.stat.size / 1024) | round(1) }} KB）
 
 # ---------------------------------------------------------------------------
 # 清理旧快照

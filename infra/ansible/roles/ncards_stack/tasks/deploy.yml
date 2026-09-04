@@ -22,7 +22,14 @@
     owner: "{{ ncards_deploy_user }}"
     group: "{{ ncards_deploy_user }}"
     mode: "0644"
-  when: ncards_current_image.stdout | trim | length > 0
+  when:
+    - ncards_current_image.stdout | trim | length > 0
+    # ⚠️ 同一个 tag 不能记成自己的回滚目标。
+    # .env 是上一步（env.yml）写的，**起栈之前**就已经是本次镜像了 —— 上一次部署
+    # 若失败在起栈这一带，这一次读到的「当前镜像」就是本次镜像自己。照记不误的话，
+    # 失败后的回滚会把 app 重启成同一个镜像、撞同一个错。
+    # 此时保留上一份 previous-image（真的跑起来过的那个版本）才是对的。
+    - ncards_current_image.stdout | trim != ncards_app_image
 
 - name: 记录本次部署的镜像
   ansible.builtin.copy:
