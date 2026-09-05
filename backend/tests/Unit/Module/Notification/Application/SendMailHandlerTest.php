@@ -23,7 +23,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversClass(SendMailHandler::class)]
 final class SendMailHandlerTest extends TestCase
 {
-    private const PROVIDER = 'unset';
+    /** 照着真实配置值写，便于对照 §14.4 的指标标签。Q3 已决（ADR-0013）后从 `unset` 改为 `dogado`。 */
+    private const PROVIDER = 'dogado';
 
     private InMemoryCryptoService $crypto;
     private RecordingTransport $transport;
