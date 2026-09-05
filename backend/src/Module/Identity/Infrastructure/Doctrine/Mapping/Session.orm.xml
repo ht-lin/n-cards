@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `sessions`（§5.2 / §7.1）。
+
+    映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
+    两条 <many-to-one> 必须存在且带 on-delete，理由见 Device.orm.xml 的注释。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Identity\Domain\Entity\Session" table="sessions">
+
+        <indexes>
+            <!--
+                两条外键索引**必须显式声明**，理由见 Device.orm.xml 的同一段注释：
+                不声明的话 DBAL 会自动补 `IDX_<hash>`，而索引是按名字比的。
+
+                用途分别是「按用户撤销整个会话家族」与「远程登出某设备时撤销它的会话」
+                （都是 T-105），PG 不会为外键自动建索引。
+            -->
+            <index name="idx_sessions_user_id" columns="user_id"/>
+            <index name="idx_sessions_device_id" columns="device_id"/>
+        </indexes>
+
+        <unique-constraints>
+            <!--
+                §5.2：refresh_token_hash 是 UNIQUE。这不只是完整性约束，也是
+                T-105 的查找键（findByRefreshTokenHash）。名字与迁移逐字对齐。
+            -->
+            <unique-constraint name="uq_sessions_refresh_token_hash" columns="refresh_token_hash"/>
+        </unique-constraints>
+
+        <!-- id 即 JWT 的 sid claim（§7.1）。 -->
+        <id name="id" type="uuid" column="id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <many-to-one field="user" target-entity="App\Module\Identity\Domain\Entity\User" fetch="LAZY">
+            <join-column name="user_id" referenced-column-name="id"
+                         nullable="false" on-delete="CASCADE"/>
+        </many-to-one>
+
+        <many-to-one field="device" target-entity="App\Module\Identity\Domain\Entity\Device" fetch="LAZY">
+            <join-column name="device_id" referenced-column-name="id"
+                         nullable="false" on-delete="CASCADE"/>
+        </many-to-one>
+
+        <!-- SHA-256（令牌本身是 32 字节随机、不透明，§7.1）。 -->
+        <field name="refreshTokenHash" type="hash_digest" column="refresh_token_hash" nullable="false"/>
+
+        <!--
+            §7.1 轮换重放检测的全部机制：只保留一代。收到等于这一列的令牌
+            = 判定令牌被窃 → 撤销整个会话家族 + 告警 + 安全提醒邮件（T-105）。
+        -->
+        <field name="previousTokenHash" type="hash_digest" column="previous_token_hash" nullable="true"/>
+
+        <!-- now() + 90d，每次轮换顺延（§7.1 的滑动过期）。 -->
+        <field name="expiresAt" type="datetimetz_immutable" column="expires_at" nullable="false"/>
+
+        <field name="revokedAt" type="datetimetz_immutable" column="revoked_at" nullable="true"/>
+
+        <field name="revokedReason" type="text" column="revoked_reason" nullable="true"
+               enum-type="App\Module\Identity\Domain\ValueObject\SessionRevokedReason"/>
+
+        <field name="createdAt" type="datetimetz_immutable" column="created_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+    </entity>
+
+</doctrine-mapping>

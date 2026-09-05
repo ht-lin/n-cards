@@ -48,6 +48,17 @@ services:
     # this creates a service per class whose id is the fully-qualified class name
     App\:
         resource: '../src/'
+        # ------------------------------------------------------------- T-101
+        # Doctrine 实体不是服务。它们由 ORM 用反射实例化（不走构造函数），
+        # 构造参数是 Uuid / HashDigest / Ciphertext 这类值对象，autowiring 无从解析。
+        #
+        # 现在不排除也「碰巧」不报错 —— 未被引用的私有服务定义会在
+        # RemoveUnusedDefinitionsPass 里消失，autowiring 的错误是延迟抛的。
+        # 但那是一条靠巧合成立的路径：哪天有人在别处 type-hint 了 `User`，
+        # 容器会去尝试构造它，报出的错误会指向 services.yaml 而不是真正的原因。
+        # 显式排除掉，让「实体不是服务」成为配置里写着的事实。
+        exclude:
+            - '../src/Module/*/Domain/Entity/'
 
     # ------------------------------------------------------------------ T-004
     # Shared 内核的接口 → 实现别名。

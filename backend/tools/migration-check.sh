@@ -7,14 +7,13 @@
 # 执行过的 down() 就是一段没跑过的代码。真正需要它的时刻是**生产回滚**——
 # 那时才发现它写错了，是这条规范能出的最坏结果。
 #
-# ⚠️ `backend/migrations/` 现在只有 .gitkeep（第一个迁移由 T-101 写），所以往返那两步
-# 目前是空转。这是刻意的：门禁先就位，第一个迁移落地当天自动生效，而不是等到那天
-# 才想起来还得搭一套。与 T-002 对覆盖率阈值「此刻还没代码，配置先就位」同一个做法。
+# T-101 起下面三步都在真的跑：`migrations/` 里有了第一个迁移（Identity 四张表），
+# ORM 也装上了，于是 down/up 往返与 `doctrine:schema:validate` 都有了对象。
+# **本脚本一行没改** —— 它按「有没有 Version*.php」「命令存不存在」自动切换，
+# 门禁先就位、落地当天自动生效，与 T-002 对覆盖率阈值的做法一致。
 #
-# ⚠️ `doctrine:schema:validate` 现在**不存在** —— 它是 ORM 的命令，而
-# config/packages/doctrine.yaml 只装了 DBAL（那份文件的注释写明 `orm:` 段属 T-101）。
-# 本脚本探测到命令缺失时打印一行显式说明，**不静默跳过**：静默跳过的门禁与不存在的
-# 门禁没有区别，而三个月后没人记得它为什么是绿的。
+# 两处「暂无对象 / 未安装 ORM」的分支保留着，它们打印显式说明行而**不静默跳过**：
+# 静默跳过的门禁与不存在的门禁没有区别，而三个月后没人记得它为什么是绿的。
 #
 #   用法: backend/tools/migration-check.sh [--require-db]
 #         composer migration:check
@@ -62,7 +61,7 @@ console doctrine:migrations:migrate --no-interaction --allow-no-migration
 migration_count="$(find migrations -maxdepth 1 -name 'Version*.php' | wc -l)"
 
 if [ "$migration_count" -eq 0 ]; then
-    echo "⊘ 往返检查暂无对象：migrations/ 里还没有迁移文件（第一个由 T-101 写）"
+    echo "⊘ 往返检查暂无对象：migrations/ 里没有迁移文件（T-101 起本该至少有一个 —— 若是空的，多半是漏了 git add）"
 else
     echo "==> 回滚全部 $migration_count 个迁移（验 down()）"
     console doctrine:migrations:migrate first --no-interaction
@@ -78,11 +77,10 @@ if console list doctrine 2>/dev/null | grep -q 'doctrine:schema:validate'; then
     console doctrine:schema:validate
 else
     cat <<'EOF'
-⊘ 跳过 doctrine:schema:validate：本项目暂未安装 Doctrine ORM。
+⊘ 跳过 doctrine:schema:validate：找不到 Doctrine ORM 的命令。
 
-   config/packages/doctrine.yaml 目前只有 dbal: 段 —— T-003 只需要一条能 SELECT 1
-   的连接。装 ORM、补 orm: 段、补 mapping_types 的 uuid 映射都属于 T-101，
-   那一步做完这里会自动开始跑（本脚本按命令是否存在判断，不需要改）。
+   T-101 起 ORM 是装着的（config/packages/doctrine.yaml 有 orm: 段），
+   所以走到这个分支通常意味着依赖没装全 —— 先跑一次 composer install。
 EOF
 fi
 

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `devices`（§5.2）。
+
+    映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
+
+    ============================================================================
+    ⚠️ `user` 必须是 <many-to-one>，不能退化成一个 uuid 列
+    ============================================================================
+    schema:validate 会把库里的 fk_devices_user_id 与 ORM 元数据对账。映射成普通列的话
+    ORM 侧没有对应的外键 → 「多出一条待删外键」→ not in sync，验收标准直接挂。
+
+    on-delete="CASCADE" 也不能漏：Comparator::diffForeignKey 不比约束名，
+    但**比 onDelete**。漏了就是一条 diff。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Identity\Domain\Entity\Device" table="devices">
+
+        <indexes>
+            <!--
+                ⚠️ 这条索引**必须显式声明**。DBAL 给每条外键自动补一条索引，
+                名字是 `IDX_<hash>`（`IDX_11074E9AA76ED395` 之类）——
+                而 Comparator 按名字匹配索引，于是迁移里写什么名字都会 diff。
+                先在这里声明同名索引，DBAL 就不会再补一条。
+                名字与迁移里的 CREATE INDEX 逐字相同。
+
+                它本身也是必要的：设备管理页按 user_id 列设备（T-105），
+                而 PG 不会为外键自动建索引。
+            -->
+            <index name="idx_devices_user_id" columns="user_id"/>
+        </indexes>
+
+        <!--
+            strategy=NONE：§5.2「客户端生成，安装级唯一（重装即新设备）」。
+            也是 JWT 的 did claim。⚠️ 它不是凭据 —— 见 Device 实体的类注释。
+        -->
+        <id name="id" type="uuid" column="id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <many-to-one field="user" target-entity="App\Module\Identity\Domain\Entity\User" fetch="LAZY">
+            <join-column name="user_id" referenced-column-name="id"
+                         nullable="false" on-delete="CASCADE"/>
+        </many-to-one>
+
+        <field name="platform" type="text" column="platform" nullable="false"
+               enum-type="App\Module\Identity\Domain\ValueObject\DevicePlatform"/>
+
+        <!--
+            展示于设备管理页（§5.2）。可空：客户端不是必须上报这三项，
+            而 §13.6 禁止把可选字段变必填 —— 一开始就写 NOT NULL 的话，
+            将来想放宽反而要发迁移。
+        -->
+        <field name="model" type="text" column="model" nullable="true"/>
+        <field name="osVersion" type="text" column="os_version" nullable="true"/>
+        <field name="appVersion" type="text" column="app_version" nullable="true"/>
+
+        <!--
+            FCM token。ROPA §8.2 的设备行保留期是「设备撤销后即删」——
+            Device::revoke() 会把这一列清空。
+        -->
+        <field name="pushToken" type="text" column="push_token" nullable="true"/>
+        <field name="pushTokenUpdatedAt" type="datetimetz_immutable"
+               column="push_token_updated_at" nullable="true"/>
+
+        <field name="lastSeenAt" type="datetimetz_immutable" column="last_seen_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+        <!-- 用户远程登出（T-105）。设备行本身留着，供设备管理页显示历史。 -->
+        <field name="revokedAt" type="datetimetz_immutable" column="revoked_at" nullable="true"/>
+
+        <field name="createdAt" type="datetimetz_immutable" column="created_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+    </entity>
+
+</doctrine-mapping>

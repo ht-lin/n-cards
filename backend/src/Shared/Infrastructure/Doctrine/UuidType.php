@@ -27,9 +27,12 @@ use Doctrine\DBAL\Types\Type;
  * 3. 异常搬到了 `Types\Exception\` 下，`ConversionException::conversionFailed()`
  *    已经没有了。
  *
- * ⚠️ 给 T-101：ORM 落地时要在 doctrine.yaml 里补 `mapping_types: { uuid: uuid }`，
- * 否则反向工程与 `doctrine:schema:validate` 会把 PG 的原生 `uuid` 映回 DBAL
+ * ⚠️ doctrine.yaml 里配了 `mapping_types: { uuid: uuid }`（T-101 补的）。
+ * 少了它，反向工程与 `doctrine:schema:validate` 会把 PG 的原生 `uuid` 映回 DBAL
  * 内建的 `guid`（string），而不是本类型。
+ *
+ * 同目录下另有 {@see CiphertextType} 与 {@see HashDigestType}（T-101），
+ * 三者的分工见 backend/README.md 的「持久化约定」一节。
  */
 final class UuidType extends Type
 {

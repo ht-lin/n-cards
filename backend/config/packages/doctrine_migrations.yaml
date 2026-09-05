@@ -2,7 +2,7 @@
 #
 # T-003 只让 `doctrine:migrations:*` 命令可用 —— §14.3 的部署流程要调
 # `doctrine:migrations:migrate --no-interaction --allow-no-migration`。
-# 第一个迁移文件由 T-101 写。
+# 第一个迁移文件由 T-101 写（Identity 的四张表）。
 #
 # ⚠️ §13.5 / CONTRIBUTING §5 的硬性规范，写迁移前先读：
 #   - 只允许 expand–contract；禁止改列名、删列、无默认值地 SET NOT NULL

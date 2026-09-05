@@ -175,8 +175,13 @@ jobs:
       # 里那些 markTestSkipped 的用例同一个口径），但在 CI 上 postgres service
       # 一定在，连不上就是真出了问题。
       #
-      # migrations/ 目前只有 .gitkeep，往返那两步是空转；schema:validate 也还不存在
-      # （ORM 属 T-101）。两处都会打印显式的说明行，不静默变绿 —— 理由见脚本头部。
+      # T-101 起这一步是**实打实**在跑的：Identity 的四张表有了第一个迁移，ORM 也装上了，
+      # 于是 down/up 往返与 doctrine:schema:validate 都有了对象。workflow 一行没改 ——
+      # 脚本按「有没有 Version*.php」「命令存不存在」自动切换（理由见脚本头部）。
+      #
+      # ⚠️ 这一步必须在 phpunit **之前**：tests/Integration/Module/Identity/** 跑在真的
+      # 迁移过的表上（不是临时表 —— 它们要断言的就是迁移建出来的约束），
+      # 库没迁移时那些用例会 skip 而不是 fail。
       - name: Doctrine 迁移检查（§13.3 / §13.5）
         run: tools/migration-check.sh --require-db
 

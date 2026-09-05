@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `otp_challenges`（§5.2）。
+
+    映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
+
+    ⚠️ 这张表**没有到 users 的外键**，也没有 user_id 列 —— 存的是 email_hash。
+    理由是 §3.8 的哑挑战（is_decoy）：邮箱不存在时同样要建一条挑战，
+    有外键的话它根本插不进去。详见 OtpChallenge 实体的类注释。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Identity\Domain\Entity\OtpChallenge" table="otp_challenges">
+
+        <indexes>
+            <!--
+                §5.2 把 email_hash 标为「索引」。用途是 T-103 的两件事：
+                建新挑战时作废该邮箱的旧挑战（单次登录只允许一个活跃挑战），
+                以及按邮箱维度限流（1/min、5/h、10/day）。
+                名字必须与迁移里的 CREATE INDEX 逐字相同。
+            -->
+            <index name="idx_otp_challenges_email_hash" columns="email_hash"/>
+        </indexes>
+
+        <!-- id 即返回给客户端的 challenge_id（§5.2）。 -->
+        <id name="id" type="uuid" column="id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <field name="emailHash" type="hash_digest" column="email_hash" nullable="false"/>
+
+        <!-- HMAC-SHA256(code, pepper)。§7.1：**不存明文**，比较用 hash_equals。 -->
+        <field name="codeHash" type="hash_digest" column="code_hash" nullable="false"/>
+
+        <!-- Magic Link 令牌的哈希（T-106）。不发 Magic Link 的挑战为 NULL。 -->
+        <field name="magicTokenHash" type="hash_digest" column="magic_token_hash" nullable="true"/>
+
+        <field name="purpose" type="text" column="purpose" nullable="false"
+               enum-type="App\Module\Identity\Domain\ValueObject\OtpPurpose"/>
+
+        <!-- §7.1：≥5 即作废整个挑战。那个 5 是策略，归 T-104，不在这里。 -->
+        <field name="attempts" type="smallint" column="attempts" nullable="false">
+            <options>
+                <option name="default">0</option>
+            </options>
+        </field>
+
+        <field name="expiresAt" type="datetimetz_immutable" column="expires_at" nullable="false"/>
+
+        <field name="consumedAt" type="datetimetz_immutable" column="consumed_at" nullable="true"/>
+
+        <!-- §3.8 防枚举：邮箱不存在时创建的哑挑战，不发信，验证恒失败。 -->
+        <field name="isDecoy" type="boolean" column="is_decoy" nullable="false">
+            <options>
+                <option name="default">false</option>
+            </options>
+        </field>
+
+        <!-- 限流与滥用分析用；ROPA §8.2 规定 30 天后清理（T-113）。 -->
+        <field name="requestIpHash" type="hash_digest" column="request_ip_hash" nullable="true"/>
+
+        <field name="createdAt" type="datetimetz_immutable" column="created_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+    </entity>
+
+</doctrine-mapping>

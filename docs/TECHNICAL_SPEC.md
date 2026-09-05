@@ -2384,6 +2384,67 @@ CREATE TABLE users (
 -- ⚠️ 不可变性由"没有 UPDATE 端点"保证，DB 层不加触发器——
 --    触发器会挡住合法的运维修复，且与 Doctrine 的批量更新交互不佳。
 
+-- otp_challenges
+-- ⚠️ **刻意没有到 users 的外键**，存的是 email_hash 而不是 user_id。
+--    §3.8 的哑挑战（is_decoy）是给不存在的邮箱建的，有外键就插不进去，
+--    而"响应体与耗时与真实路径不可区分"正是靠它成立的。
+CREATE TABLE otp_challenges (
+  id               UUID        PRIMARY KEY,
+  email_hash       BYTEA       NOT NULL,
+  code_hash        BYTEA       NOT NULL,          -- HMAC-SHA256(code, pepper)，不存明文
+  magic_token_hash BYTEA,                         -- Magic Link 令牌哈希
+  purpose          TEXT        NOT NULL,          -- 一期恒为 'login'
+  attempts         SMALLINT    NOT NULL DEFAULT 0,
+  expires_at       TIMESTAMPTZ NOT NULL,
+  consumed_at      TIMESTAMPTZ,
+  is_decoy         BOOLEAN     NOT NULL DEFAULT false,
+  request_ip_hash  BYTEA,                         -- 30 天后清理（§8.2）
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_otp_challenges_email_hash ON otp_challenges (email_hash);
+
+-- devices（id 由客户端生成：安装级唯一，重装即新设备）
+CREATE TABLE devices (
+  id                    UUID        PRIMARY KEY,
+  user_id               UUID        NOT NULL,
+  platform              TEXT        NOT NULL,     -- 一期恒为 'android'
+  model                 TEXT,
+  os_version            TEXT,
+  app_version           TEXT,
+  push_token            TEXT,                     -- 设备撤销后即清空（§8.2）
+  push_token_updated_at TIMESTAMPTZ,
+  last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revoked_at            TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT fk_devices_user_id FOREIGN KEY (user_id)
+    REFERENCES users (id) ON DELETE CASCADE
+);
+CREATE INDEX idx_devices_user_id ON devices (user_id);
+
+-- sessions（id 即 JWT 的 sid claim）
+CREATE TABLE sessions (
+  id                  UUID        PRIMARY KEY,
+  user_id             UUID        NOT NULL,
+  device_id           UUID        NOT NULL,
+  refresh_token_hash  BYTEA       NOT NULL,       -- SHA-256（令牌是 32 字节随机）
+  previous_token_hash BYTEA,                      -- 轮换重放检测，只留一代
+  expires_at          TIMESTAMPTZ NOT NULL,       -- now() + 90d，每次轮换顺延
+  revoked_at          TIMESTAMPTZ,
+  revoked_reason      TEXT,                       -- logout / reuse_detected / user_revoked / account_deleted
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT fk_sessions_user_id FOREIGN KEY (user_id)
+    REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_sessions_device_id FOREIGN KEY (device_id)
+    REFERENCES devices (id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX uq_sessions_refresh_token_hash ON sessions (refresh_token_hash);
+CREATE INDEX idx_sessions_user_id ON sessions (user_id);
+CREATE INDEX idx_sessions_device_id ON sessions (device_id);
+-- ⚠️ platform / purpose / revoked_reason **不加 CHECK 约束**（与 users 的三列相反）。
+--    §13.6 把"新增枚举值"列为向后兼容变更；加了 CHECK 之后每加一个取值都要先发
+--    一次迁移改约束、再发一次代码放开取值域，而这三列的取值域本来就还会长。
+--    取值域由 PHP enum 表达，"enum 与库不同步"由集成测试兜（每个 case 真写一次）。
+
 -- cards
 CREATE TABLE cards (
   id                        UUID PRIMARY KEY,

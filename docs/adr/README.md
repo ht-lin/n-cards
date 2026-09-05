@@ -70,4 +70,5 @@
 | [0008](0008-ci-gate-topology.md) | CI 用一个总是运行的 `pr-gate` 汇总，各条流水线改为 reusable workflow | Accepted |
 | [0009](0009-ansible-sops-deploy-topology.md) | 部署用 Ansible over SSH + sops(age) 下发配置，部署逻辑放 reusable workflow | Accepted |
 | [0010](0010-rollback-image-tag-only.md) | 自动回滚只回镜像 tag，迁移不自动回滚；部署前快照是护栏不是备份 | Accepted |
+| [0011](0011-doctrine-orm-xml-mapping-and-module-owned-foreign-keys.md) | Doctrine ORM 用 XML 映射、实体非 final、外键只在模块内部建成 ORM 关联 | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。
