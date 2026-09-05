@@ -1559,6 +1559,7 @@ Bob:  【选择接受或拒绝】
 | 关系 | friendships, card_members | 共享功能 | 关系存续期 | Hetzner DE |
 | 设备 | device id, model, os/app 版本, push_token | 多设备与推送 | 设备撤销后即删 | Hetzner DE |
 | 安全 | ip_hash, audit_log, 限流计数 | 滥用防护 | ip_hash 30 天；audit 12 个月；限流 24 小时 | Hetzner DE / Redis |
+| 外发邮件队列 | `messenger_messages.body`：收件邮箱 + OTP 码 / 提醒内容，**整条消息体经 Vault Transit 加密**（`ncards-pii`） | 异步投递登录码与安全提醒 | **消费即删行**；投递失败重投 3 次（约 13 秒）后转入 `failed` 队列，由人工处置后删除 | Hetzner DE |
 | 诊断 | 崩溃栈、`X-Request-Id`、脱敏日志 | 稳定性 | 30 天 | Hetzner DE（自托管 Sentry / Loki） |
 
 ### 8.3 子处理者清单（Art. 28，均需签 AVV/DPA）

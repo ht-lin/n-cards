@@ -1,0 +1,36 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">Tippe auf den Button, um dich bei N-Cards anzumelden:</p>
+
+    {#
+      ⚠️ Dieser Link verbraucht den Token NICHT (§7.1).
+
+      Unternehmens-Gateways (Microsoft Defender, Barracuda …) rufen jeden Link in einer
+      E-Mail automatisch per GET auf, um ihn zu scannen. Würde GET den Token einlösen,
+      wäre er verbraucht, bevor die Person ihn überhaupt sieht.
+
+      `magic_link_url` zeigt deshalb auf eine Landing-Page (T-106), die nur einen
+      Bestätigungs-Button rendert; eingelöst wird per POST. Die Landing-Page muss auf
+      HEAD und Prefetch-Requests zustandslos bleiben. Diese Vorlage rendert die URL
+      nur — die Regel wird auf der anderen Seite durchgesetzt.
+    #}
+    <p style="margin: 0 0 24px 0;">
+        <a href="{{ magic_link_url }}" style="display: inline-block; padding: 12px 24px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Anmeldung fortsetzen</a>
+    </p>
+
+    <p style="margin: 0 0 20px 0;">Der Link ist <strong>{{ expires_in_minutes }} Minuten</strong> gültig und kann nur einmal verwendet werden.</p>
+
+    {#
+      URL zusätzlich im Klartext: Manche Clients zeigen Buttons nicht an, und
+      wer die Adresse vor dem Klick prüfen möchte, soll das tun können.
+      `word-break` verhindert, dass die lange URL das Layout sprengt.
+    #}
+    <p style="margin: 0 0 20px 0; color: #71717a; font-size: 13px; word-break: break-all;">{{ magic_link_url }}</p>
+
+    <p style="margin: 0;">Du hast keine Anmeldung angefordert? Dann ignoriere diese E-Mail einfach. Solange du den Link nicht öffnest und bestätigst, passiert nichts.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0;">Diese Nachricht wurde automatisch versendet. Antworten werden nicht gelesen.</p>
+{% endblock %}

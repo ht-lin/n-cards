@@ -1,0 +1,18 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">Your sign-in code for N-Cards:</p>
+
+    {# 与 de/ 那份逐行对应。改一边就要改另一边 —— MailTemplateRenderingTest 只能
+       保证两边都渲染得出来，保证不了两边说的是同一件事。 #}
+    <p style="margin: 0 0 20px 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #18181b;">{{ code }}</p>
+
+    <p style="margin: 0 0 20px 0;">The code is valid for <strong>{{ expires_in_minutes }} minutes</strong> and can only be used once.</p>
+
+    <p style="margin: 0;">Didn't request a sign-in? Just ignore this email. Without the code, nobody can sign in with your address.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0 0 8px 0;">We will never ask you for this code by email or by phone.</p>
+    <p style="margin: 0;">This message was sent automatically. Replies are not read.</p>
+{% endblock %}

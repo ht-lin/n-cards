@@ -64,6 +64,30 @@ doctrine:
         # 这条配置是那个做法能安全嵌套的前提。
         use_savepoints: true
 
+        # ⚠️ T-102：把 `messenger_messages` 挡在 ORM 的视野之外。
+        #
+        # 那张表由 `email` transport 使用（config/packages/messenger.yaml），
+        # DDL 在一个手写迁移里（DSN 带 `auto_setup=0`，因为 §13.5 / CONTRIBUTING §5
+        # 要求所有 DDL 走迁移）。但它**没有** ORM 映射 —— 它不是领域实体。
+        #
+        # 不加这一行的话，`doctrine:schema:validate` 会把它当成「库里多出来、
+        # 映射里没有」的表并报差异，`schema:update --dump-sql` 会给出一句
+        # `DROP TABLE messenger_messages`。于是 `composer migration:check` 第三步
+        # 直接红 —— 而 T-101 刚把「schema:validate 全绿 + dump-sql 报 Nothing to
+        # update」立成了验收标准。
+        #
+        # 负向匹配（`(?!…)`）而不是列出想要的表：新增一张业务表时不用回来改这里，
+        # 而漏改这里的症状恰恰是「schema:validate 说库里少了张表」——
+        # 一个会被立刻发现、且指向正确的错误。
+        #
+        # ⚠️ 结尾**没有** `$`，是刻意的（实测踩过）。`id BIGSERIAL` 会连带建一个
+        # `messenger_messages_id_seq` 序列，而 schema_filter 同样作用在序列上。
+        # 写成 `~^(?!messenger_messages$)~` 的话表被滤掉、序列没有，于是
+        # `schema:update --dump-sql` 会给出一句孤零零的
+        # `DROP SEQUENCE messenger_messages_id_seq CASCADE` —— 真跑下去
+        # 会 CASCADE 掉那张表的主键默认值，队列从此写不进去。
+        schema_filter: '~^(?!messenger_messages)~'
+
         profiling_collect_backtrace: '%kernel.debug%'
 
     orm:

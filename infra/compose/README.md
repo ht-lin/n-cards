@@ -151,9 +151,51 @@ docker compose exec app vendor/bin/phpunit --testsuite Integration
 docker compose exec app cat var/vault-benchmark.txt
 ```
 
+## worker 与 mailpit（T-102）
+
+**`worker`** 消费 `email` 队列（§3.1 / §3.2），与 `app` 是**同一个镜像**，只是入口是
+`bin/console messenger:consume email --time-limit=3600`。base 里就有，`up -d` 会带起来；
+prod / staging 各 2 副本。
+
+分成两个服务而不是在 app 里起后台进程：它们的失败模式不同 ——
+worker 挂了不影响 API 收请求（信只是堆在队列里），反过来也一样。
+
+三件与它有关、容易踩的事：
+
+- **它依赖 Vault。** 消费一条消息 = 一次 `transit/decrypt`（消息体是加密的，
+  见 [ADR-0012](../../docs/adr/0012-mail-channel-topology.md)）。Vault 封着时
+  worker 消费不了，但消息**留在队列里**，unseal 之后自然被消费掉 ——
+  不会丢，也不需要人工补发。
+- **`--time-limit=3600` 让它每小时自杀一次**，由 `restart` 拉起。这是长驻 PHP 进程的
+  常规做法（内存增长、Doctrine 连接老化），不是「有 bug 才需要」。
+- **它只连 `backing` 网络，不连 `edge`。** worker 不收 HTTP 请求。
+
+队列深度与死信怎么看：
+
+```bash
+docker compose exec -T postgres psql -U ncards -c \
+  "select queue_name, count(*) from messenger_messages group by queue_name;"
+docker compose exec -T app bin/console messenger:failed:show --max=10
+```
+
+正常深度是 0。积压或死信的判读与处置见
+[`docs/runbooks/email-dns.md`](../../docs/runbooks/email-dns.md) §3。
+
+**`mailpit`** 是本地看信用的 SMTP 收集器，挂在 **dev profile** 上 —— `up -d` 默认不起：
+
+```bash
+docker compose --profile dev up -d mailpit     # UI: http://localhost:8025
+# 然后把 .env 的 MAILER_DSN 改成 smtp://mailpit:1025 并重启 worker
+```
+
+用 profile 而不是「只写在某个 override 文件里」，是因为 staging/prod 的叠加链读的是
+**同一份 base**（见上面「三处容易踩的坑」）—— 没有 profile 的话这个容器会跟着上生产。
+
+⚠️ 它只映射 UI 端口（8025），**不映射 SMTP（1025）**：发信方是同一个 docker 网络里的
+worker，宿主机不需要能连上它。
+
 ## 尚未交付
 
-§14.2 的服务清单里还有 `worker`、`scheduler`、`prometheus`/`grafana`/`loki`、
-`backup`。它们的依赖还没装，写出来也起不来，所以在
-`docker-compose.prod.yml` 末尾以注释槽位留位并标注了归属任务
-（T-004 / T-113 / T-405 / T-406）。
+§14.2 的服务清单里还有 `scheduler`、`prometheus`/`grafana`/`loki`、`backup`。
+它们的依赖还没装，写出来也起不来，所以在 `docker-compose.prod.yml` 末尾以注释槽位
+留位并标注了归属任务（T-113 / T-405 / T-406）。

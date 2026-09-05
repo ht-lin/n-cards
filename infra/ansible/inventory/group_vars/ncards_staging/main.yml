@@ -45,3 +45,29 @@ ncards_log_level: debug
 # 本变量不参与任何逻辑；真正的判据是 preflight 采集的实测 facts
 # （/opt/ncards/state/host-facts.json）。
 ncards_machine_type: "CX22 (2 vCPU / 4 GB / 40 GB)"
+
+# ---------------------------------------------------------------- 邮件（T-102）
+# ⚠️ 这里**只有非凭据项**。发信 DSN（含 SMTP 口令）在 secrets.sops.yaml 的
+# MAILER_DSN 里，与 VAULT_SECRET_ID 同一口径。
+
+# 发件人地址。SPF / DKIM / DMARC 记录必须配在**这个地址的域**上，
+# 否则几乎必进垃圾箱（§3.2）—— 记录模板与推进节奏见 docs/runbooks/email-dns.md。
+#
+# ⚠️ staging 用的是**与生产同一个发信域**，不是 staging.n-cards.de。这是刻意的：
+# §3.2 的上线必需项是「向 Gmail / GMX / Web.de / Outlook 各发一封 OTP，确认不进
+# 垃圾箱」，而那 4 次验证要在 staging 上做 —— 换个子域去测，测到的就不是生产
+# 会用的那套 SPF/DKIM/DMARC 与域名声誉，验证等于白做。
+#
+# 代价是 staging 的发信量会算进生产域的声誉。可接受：staging 只有合成数据与
+# 团队自己的测试邮箱，量级是每天个位数。§3.2 的「独立事务子域」是明确后置项 ——
+# 真要隔离，那是二期跟着专业 ESP 一起做的事。
+ncards_mail_from_address: no-reply@n-cards.de
+ncards_mail_from_name: N-Cards
+
+# §14.4 `email_send_total{provider,template,result}` 的 provider 标签。
+#
+# ⚠️ Q3（邮件服务商选型，§17.5）**仍是开放问题**，所以这里是 `unset` 而不是
+# 某个具体服务商。指标里出现 provider="unset" 就是「Q3 还没定」的直接可见证据 ——
+# 比一个猜出来的默认值诚实。定下来后改这一行 + 换 secrets 里的 MAILER_DSN，
+# 别的都不用动（这正是 MailSenderInterface 抽象的意义，§3.2）。
+ncards_mail_provider: unset

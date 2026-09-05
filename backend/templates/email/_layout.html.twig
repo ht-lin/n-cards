@@ -1,0 +1,45 @@
+{#
+  四封信共用的 HTML 外壳（T-102）。与语言无关 —— 文案全在 {de,en}/ 下。
+
+  ============================================================================
+  为什么样式全是内联的，且刻意很土
+  ============================================================================
+  邮件客户端不是浏览器。Gmail 会剥掉 <style> 块里的大部分规则，Outlook 用的是
+  Word 的渲染引擎，GMX / Web.de（§3.2 点名要手工验证的两家）各有各的删减。
+  唯一在所有客户端都可靠的是「内联在元素上的基础属性」。
+
+  所以这里没有 flex、没有 CSS 变量、没有媒体查询、没有外部字体 ——
+  一个居中的 table，几条 inline style。看起来朴素是对的：
+  §3.2 的验收标准是「不进垃圾箱」，不是好看。
+
+  ⚠️ 也别加外链图片（logo 之类）。远程图片会被大多数客户端默认拦下，
+  而它带来的唯一确定后果是给我们的域名加上一个「像营销邮件」的特征。
+
+  ============================================================================
+  深色模式
+  ============================================================================
+  用 `color-scheme: light` 显式声明只支持浅色，而不是试图两套都做。
+  部分客户端（iOS Mail、部分 Android 客户端）会对没有声明的邮件做自动反色，
+  结果往往是「深色背景上的深色文字」。声明之后，支持这个属性的客户端不再反色，
+  不支持的本来也就是浅色渲染。
+#}
+<div style="color-scheme: light; background-color: #f4f4f5; margin: 0; padding: 24px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse;">
+        <tr>
+            <td align="center" style="padding: 0 16px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width: 520px; border-collapse: collapse; background-color: #ffffff; border-radius: 8px;">
+                    <tr>
+                        <td style="padding: 32px 32px 24px 32px; color: #18181b; font-size: 16px; line-height: 1.6;">
+                            {% block content %}{% endblock %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 0 32px 32px 32px; color: #71717a; font-size: 13px; line-height: 1.5; border-top: 1px solid #e4e4e7; padding-top: 20px;">
+                            {% block footer %}{% endblock %}
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</div>
