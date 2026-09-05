@@ -1,0 +1,20 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">As a precaution, we ended all sessions of your N-Cards account on <strong>{{ occurred_at }}</strong>.</p>
+
+    {# 措辞与 de/ 同一口径：不写「你被入侵了」。重放检测是启发式，
+       也会被网络重试或客户端 bug 触发 —— 见 de/refresh_replay.html.twig。 #}
+    <p style="margin: 0 0 8px 0; font-weight: 600;">What happened</p>
+    <p style="margin: 0 0 20px 0;">A sign-in credential that had already been used was presented a second time. That can mean it was copied. In that case we end all sessions as a precaution — including the genuine ones.</p>
+
+    <p style="margin: 0 0 8px 0; font-weight: 600;">What you need to do</p>
+    <p style="margin: 0 0 20px 0;">Sign in again on your devices. You'll get a code by email as usual.</p>
+
+    <p style="margin: 0;">Your cards are unchanged. There was no access to card data and there is nothing to restore.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0 0 8px 0;">Questions: <a href="{{ support_url }}" style="color: #71717a;">{{ support_url }}</a></p>
+    <p style="margin: 0;">This message was sent automatically. Replies are not read.</p>
+{% endblock %}

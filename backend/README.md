@@ -234,6 +234,90 @@ staging/prod 用 `VAULT_ROLE_ID` + `VAULT_SECRET_ID` 走 AppRole。
 [ADR-0004](../docs/adr/0004-manual-vault-unseal.md) 与
 [`docs/runbooks/vault-unseal.md`](../docs/runbooks/vault-unseal.md)。
 
+## 邮件通道（T-102）
+
+§3.1 / §3.2 的外发邮件。完整论证在
+[ADR-0012](../docs/adr/0012-mail-channel-topology.md)，这里是使用者视角的摘要。
+
+```
+调用方 ──► MailSenderInterface::send(MailRequest)   ← 入队即返回，不等 SMTP
+             │
+             ├─ SendMailCommand ──► EncryptedMailSerializer ──► messenger_messages
+             │                        （整条 body 经 Vault Transit 加密）
+             │
+   worker ◄──┘  messenger:consume email
+             │
+             └─ SendMailHandler ──► 熔断判定 ──► SymfonyMailerTransport ──► 服务商
+                                    │              （解密收件人、渲染双语模板）
+                                    └─ email_send_total{provider,template,result}
+```
+
+**怎么发一封信**（T-103 起的调用方）：
+
+```php
+$this->mailSender->send(new MailRequest(
+    MailTemplate::OtpCode,
+    MailLocale::German,          // 由调用方从 Identity 的 Locale 映射，见下面第 4 条
+    $user->emailEncrypted(),     // ⚠️ Ciphertext，不是 string
+    ['code' => $code, 'expires_in_minutes' => '10'],
+));
+```
+
+**五条规矩**
+
+1. **调用方只认识 `MailSenderInterface`。** 本接口之上不得出现任何
+   `Symfony\Component\Mailer\*` 或服务商特有类型 —— §3.2 把「一期单通道、无双活」
+   记为有意识的风险接受，而「未来 2 人日能补回来」的唯一前提就是这层收敛。
+   强制点是 deptrac：`Framework.Mail` / `Framework.Templating` 两个图层**只**加进了
+   `Notification.Infrastructure` 的允许列表，`composer deptrac:selftest` 的场景 ④ 守着它。
+2. **收件人是 `Ciphertext`，不是 `string`。** `users.email_encrypted` 原样递进来即可，
+   全程不解密；明文地址的作用域是 `SymfonyMailerTransport::send()` 一个方法体。
+   未注册邮箱（T-103 的 decoy 路径）由调用方自己 `encrypt(CryptoKey::Pii, …)` 一次。
+3. **`send()` 入队即返回，不告诉你信有没有发出去。** 返回 `void` 是刻意的 ——
+   这不是性能优化，是 §3.8 的安全要求：T-103 的验收标准要求「已注册 vs 未注册邮箱的
+   **耗时分布**不可区分」，而同步发信会让两条路径差出一次 SMTP 往返。
+   投递结果只在 `email_send_total{result}` 与 `email_failed` 队列里可见。
+4. **`MailLocale` 与 `Identity\Domain\ValueObject\Locale` 是两个 enum**，取值域相同但
+   不能复用（`Notification.Dto` 的 deptrac 允许列表只有 `Shared.Domain`）。
+   调用方做一行 `match`。取舍见 ADR-0012。
+5. **加模板 = 改四处**：`MailTemplate` 加 case（含 `requiredVariables()`）、
+   `MailCircuitBreaker::criticalityOf()` 加分支、`templates/email/{de,en}/` 各加三份文件、
+   `MailTemplateRenderingTest::sampleVariables()` 加样例值。
+   漏第二处会抛 `\UnhandledMatchError`，漏其余的会被 `MailTemplateRenderingTest` 拦下。
+
+**熔断**（§3.1「全局日发信量超阈值 → 告警 + 自动熔断非关键邮件（保留 OTP）」）：
+阈值在 `config/packages/ncards_mail.yaml`。OTP 与 Magic Link 是 `Critical`，
+任何阈值之上都照发；两封安全提醒是 `Advisory`，熔断时丢弃并记
+`result="suppressed"`。⚠️ 计数器不可达时**放行**，与 §7.5 限流的 fail-closed 相反 ——
+理由见 `MailCircuitBreaker` 的类注释，那个不对称是刻意的。
+
+**本地看信**：默认 `MAILER_DSN=null://null`（不发信）。要肉眼看就起 Mailpit：
+
+```bash
+docker compose --profile dev up -d mailpit     # http://localhost:8025
+# 然后把 infra/compose/.env 的 MAILER_DSN 改成 smtp://mailpit:1025 并重启 worker
+```
+
+不起栈也能看四封信 × 两种语言的渲染结果：
+`vendor/bin/phpunit --filter MailTemplateRenderingTest`。
+
+**通道**：Q3 已决（[ADR-0013](../docs/adr/0013-mail-via-domain-mailbox.md)）——
+发信走 `n-cards.de` 的**域名邮箱**（托管方 dogado GmbH，德国），标准 SMTP，
+**不采购专业 ESP**。`MAIL_PROVIDER=dogado`。换选型时改的只有 `MAILER_DSN` 与
+`MAIL_PROVIDER` 两个环境变量，`MailSenderInterface` 以上一行代码没动。
+
+⚠️ 代价记在 ADR 里，有两条会影响写代码的人：
+① **有发信配额**，超了是被托管商停用账号（R1），所以熔断阈值下调到了
+**200 / 500**（`ncards_mail.yaml`，且那两个数**目前是猜的**）；
+② **没有 bounce / 投诉回路，也没有投递 webhook** —— `email_send_total{result}`
+与 §14.4 的 OTP 转化率告警是仅有的两个送达信号，别指望还有别的地方能看投递结果。
+
+**运维**：R1 触发时的处置、SPF / DKIM / DMARC 记录、配额天花板的判读 ——
+[`docs/runbooks/email-dns.md`](../docs/runbooks/email-dns.md)。
+⚠️ 仍然欠着：dogado 的 DKIM 是否可用（**不支持即为硬阻塞**）、实测配额、
+签 AVV，以及 §3.2 的 4 次手工送达验证（§15.1 上线必需项）——
+见 [`docs/tasks/M1.md`](../docs/tasks/M1.md) 的 T-102 回填块。
+
 ## 持久化约定（Doctrine ORM）
 
 T-101 落地。完整论证在

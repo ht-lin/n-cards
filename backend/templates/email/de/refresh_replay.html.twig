@@ -1,0 +1,24 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">Aus Sicherheitsgründen haben wir am <strong>{{ occurred_at }}</strong> alle Sitzungen deines N-Cards-Kontos beendet.</p>
+
+    {#
+      文案刻意先说「发生了什么」再说「你要做什么」，且不使用「Ihr Konto wurde
+      gehackt」这类措辞 —— §7.1 的重放检测是一条**启发式**：它也会被一次网络重试
+      或客户端 bug 触发。把一个可能的误报写成确定的入侵会造成不必要的恐慌，
+      而恐慌中的用户最容易点进钓鱼页面。
+    #}
+    <p style="margin: 0 0 8px 0; font-weight: 600;">Was passiert ist</p>
+    <p style="margin: 0 0 20px 0;">Eine bereits verwendete Anmeldekennung wurde ein zweites Mal eingesetzt. Das deutet darauf hin, dass sie kopiert worden sein könnte. Wir beenden in so einem Fall vorsorglich alle Sitzungen — auch die echten.</p>
+
+    <p style="margin: 0 0 8px 0; font-weight: 600;">Was du tun musst</p>
+    <p style="margin: 0 0 20px 0;">Melde dich auf deinen Geräten neu an. Du erhältst dazu wie gewohnt einen Code per E-Mail.</p>
+
+    <p style="margin: 0;">Deine Karten sind unverändert. Es gab keinen Zugriff auf Kartendaten und du musst nichts wiederherstellen.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0 0 8px 0;">Fragen dazu: <a href="{{ support_url }}" style="color: #71717a;">{{ support_url }}</a></p>
+    <p style="margin: 0;">Diese Nachricht wurde automatisch versendet. Antworten werden nicht gelesen.</p>
+{% endblock %}

@@ -21,10 +21,11 @@
 #   <Module>.Infrastructure   src/Module/<M>/Infrastructure
 #   <Module>.Http             src/Module/<M>/Http
 #   Shared.*                  src/Shared/*
-#   Framework.{Http,HttpClient,Persistence,Messaging,Logging,Core}
+#   Framework.{Http,HttpClient,Persistence,Messaging,Logging,Mail,Templating,Core}
 #                             vendor 里的框架类型（按 FQCN 正则收集）
 #                             ⚠️ Http 是**入站**（HttpFoundation/HttpKernel/Routing），
 #                                HttpClient 是**出站**（打 Vault 之类）。两者不是一回事。
+#                             ⚠️ Mail 与 Templating 只对 Notification.Infrastructure 开放。
 #   Kernel                    src/Kernel.php
 #
 # ============================================================================
@@ -351,6 +352,41 @@ deptrac:
         - type: classLike
           value: '^Symfony\\(Component|Contracts)\\HttpClient\\'
 
+    # T-102：发信与模板两层，与上面 HttpClient 的论证逐字同构。
+    #
+    # §3.2 把「一期单通道、无双活」记为有意识的风险接受，代价是那句
+    # 「未来 2 人日能补回来」——而它成立的**唯一**前提是「邮箱服务商的细节
+    # 完全收敛在 MailSenderInterface 之后」。不单独成层的话
+    # `Symfony\Component\Mailer\MailerInterface` 会落进 Framework.Core，
+    # 而 Framework.Core 对**每个模块的 Application 层开放** ——
+    # 于是任何 Handler 都能注入 MailerInterface 直接发信，那个前提就没有强制点了。
+    #
+    # ⚠️ 这两层**只加进 Notification.Infrastructure 的允许列表**（见下方 ruleset），
+    # 其余 *.Infrastructure 一概不给。这样「只有 Notification 模块能发信」
+    # 不是一条约定，是 deptrac 强制的事实。
+    #
+    # Mime 与 Mailer 收在同一层：`Symfony\Component\Mime\Email` 是构造一封信的
+    # 主类型，只收 Mailer 等于把门开在旁边。`Symfony\Bridge\Twig\Mime\TemplatedEmail`
+    # 同理 —— 它是 Mime\Email 的子类，语义上属于发信而不是模板。
+    - name: Framework.Mail
+      collectors:
+        - type: classLike
+          value: '^Symfony\\(Component\\(Mailer|Mime)|Bridge\\Twig\\Mime)\\'
+
+    # Twig 环境本身。`Symfony\Bridge\Twig\` 除 `\Mime\` 之外的部分归这里 ——
+    # 上面 Framework.Mail 已经把 Mime 收走，所以必须用 bool collector 排掉，
+    # 否则同一个类同时落进两层，宽的那层会把窄的架空（与 Framework.Core 的
+    # must_not 是同一个理由）。
+    - name: Framework.Templating
+      collectors:
+        - type: bool
+          must:
+            - type: classLike
+              value: '^(Twig\\|Symfony\\(Bundle\\TwigBundle|Bridge\\Twig)\\)'
+          must_not:
+            - type: classLike
+              value: '^Symfony\\Bridge\\Twig\\Mime\\'
+
     - name: Framework.Core
       collectors:
         - type: bool
@@ -362,7 +398,7 @@ deptrac:
               value: '^Symfony\\(Component\\(HttpFoundation|HttpKernel|Routing|Serializer|Security\\Http)|Bundle\\FrameworkBundle\\Controller)\\'
             - type: classLike
               value: '^Symfony\\Bridge\\Doctrine\\'
-            # 下面四条与上面新增的图层一一对应 —— 不排除的话同一个类会同时落进
+            # 下面每一条都与上面某个窄图层一一对应 —— 不排除的话同一个类会同时落进
             # 两个图层，Framework.Core 的宽松允许列表会把窄图层的限制架空。
             - type: classLike
               value: '^Symfony\\Component\\Messenger\\'
@@ -371,6 +407,18 @@ deptrac:
             # T-005：与 Framework.HttpClient 对应。
             - type: classLike
               value: '^Symfony\\(Component|Contracts)\\HttpClient\\'
+            # T-102：与 Framework.Mail / Framework.Templating 对应。
+            # 漏掉任意一条，对应的那层就等于没开 —— 类会落回 Framework.Core，
+            # 而那一层对每个模块的 Application 开放。
+            #
+            # ⚠️ `^Twig\\` 单独一条：上面 `must` 里的 `^(Symfony|Psr|Twig)\\`
+            # 从 T-002 起就把裸 Twig 命名空间收进了 Framework.Core（那时还没装 Twig，
+            # 是为将来留的）。只排除 Symfony\Bridge\Twig 而漏掉这条的话，
+            # `Twig\Environment` 依然对每个模块的 Application 开放。
+            - type: classLike
+              value: '^Symfony\\(Component\\(Mailer|Mime)|Bridge\\Twig|Bundle\\TwigBundle)\\'
+            - type: classLike
+              value: '^Twig\\'
 
     # ---------------------------------------------------------------- Kernel
     - name: Kernel
@@ -625,6 +673,9 @@ deptrac:
       - Shared.Domain
       - Shared.Application
       - Framework.Core
+    # ⚠️ 全仓库**唯一**拿到 Framework.Mail 与 Framework.Templating 的图层（T-102）。
+    # 别照着别的 *.Infrastructure「补全」这两行 —— 它们不在别处是刻意的，
+    # 见上面两层的定义注释与 ADR-0012。
     Notification.Infrastructure:
       - '+_Ports'
       - Notification.Domain
@@ -638,6 +689,8 @@ deptrac:
       - Framework.Messaging
       - Framework.Logging
       - Framework.HttpClient
+      - Framework.Mail
+      - Framework.Templating
     Notification.Http:
       - '+_Ports'
       - Notification.Application

@@ -1,0 +1,20 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">Dein Anmeldecode für N-Cards:</p>
+
+    {#
+      码用 <p> 而不是按钮/链接 —— 它不是可点击的东西。
+      letter-spacing 让六位数字容易被逐位读出来（很多人是在另一台设备上抄写）。
+    #}
+    <p style="margin: 0 0 20px 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #18181b;">{{ code }}</p>
+
+    <p style="margin: 0 0 20px 0;">Der Code ist <strong>{{ expires_in_minutes }} Minuten</strong> gültig und kann nur einmal verwendet werden.</p>
+
+    <p style="margin: 0;">Du hast keine Anmeldung angefordert? Dann ignoriere diese E-Mail einfach. Ohne den Code kann sich niemand mit deiner Adresse anmelden.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0 0 8px 0;">Wir fragen dich niemals per E-Mail oder Telefon nach diesem Code.</p>
+    <p style="margin: 0;">Diese Nachricht wurde automatisch versendet. Antworten werden nicht gelesen.</p>
+{% endblock %}

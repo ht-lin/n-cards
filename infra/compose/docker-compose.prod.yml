@@ -69,6 +69,41 @@ services:
           cpus: "2.0"
           memory: 1G
 
+  # T-102：与 app 同镜像、同凭据口径，只是入口是 messenger:consume。
+  #
+  # 每一条覆盖都与上面 app 的那条对应且理由相同 —— 漏掉任意一条的后果也一样：
+  #   image        生产不现场构建，部署 CI 验证过的那一个
+  #   VAULT_TOKEN  清空，走 AppRole（root token 躺在生产环境变量里本身就是洞）
+  #   volumes      !reset，否则镜像里的代码被一个空目录遮掉，容器起不来
+  worker:
+    build:
+      context: ../../backend
+      target: prod
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:latest}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+      VAULT_TOKEN: ""
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:?VAULT_ROLE_ID 未配置：生产必须走 AppRole，见 docs/runbooks/vault-unseal.md}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:?VAULT_SECRET_ID 未配置：由 sops 下发，见 T-012}
+
+      # ⚠️ 生产**必须**配真实 DSN —— `:?` 让它缺失时 compose 直接拒绝启动。
+      # 没有这道闸的话会回落到 base 的 `null://null`，于是「邮件全部静默丢弃」
+      # 表现为「所有人都登不进去，但每一条日志都是绿的」。
+      # DSN 含 SMTP 口令，是凭据：由 sops(age) 解密后写进目标主机的
+      # infra/compose/.env（T-012），绝不入库、绝不进 CI。
+      MAILER_DSN: ${MAILER_DSN:?MAILER_DSN 未配置：生产必须有真实发信通道，见 docs/runbooks/email-dns.md}
+    volumes: !reset null
+    deploy:
+      # 2 副本。不是为了吞吐（§9.3 的量级一个就够），是为了**一个挂了还有一个** ——
+      # worker 全挂的症状是「登录码不来」，而它不影响 /health/ready，
+      # 在 T-405 的队列积压告警接上之前，冗余是唯一的缓解。
+      replicas: 2
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
   postgres:
     image: postgres:16.10-alpine
     deploy:
@@ -131,13 +166,6 @@ services:
 # ============================================================================
 # 尚未交付的服务（§14.2 清单里有，依赖还没装）
 # ============================================================================
-#  worker:
-#    <<: app 的定义
-#    command: ["php", "bin/console", "messenger:consume", "async", "email", "--time-limit=3600"]
-#    deploy: { replicas: 2 }
-#    → symfony/messenger 已由 T-004 装上，但总线目前全部 `sync://`；
-#      T-1xx 接上 async / email transport 之后再启用
-#
 #  scheduler:
 #    command: ["php", "bin/console", "messenger:consume", "scheduler_default"]
 #    → 每日清理、删号执行、导出过期清理、key rewrap。T-113

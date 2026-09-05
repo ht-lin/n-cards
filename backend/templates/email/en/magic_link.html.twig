@@ -1,0 +1,21 @@
+{% extends 'email/_layout.html.twig' %}
+
+{% block content %}
+    <p style="margin: 0 0 20px 0;">Tap the button to sign in to N-Cards:</p>
+
+    {# ⚠️ This link does NOT consume the token (§7.1). See de/magic_link.html.twig
+       for the full reasoning — enterprise mail gateways auto-GET every link. #}
+    <p style="margin: 0 0 24px 0;">
+        <a href="{{ magic_link_url }}" style="display: inline-block; padding: 12px 24px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Continue sign-in</a>
+    </p>
+
+    <p style="margin: 0 0 20px 0;">The link is valid for <strong>{{ expires_in_minutes }} minutes</strong> and can only be used once.</p>
+
+    <p style="margin: 0 0 20px 0; color: #71717a; font-size: 13px; word-break: break-all;">{{ magic_link_url }}</p>
+
+    <p style="margin: 0;">Didn't request a sign-in? Just ignore this email. Nothing happens as long as you don't open the link and confirm.</p>
+{% endblock %}
+
+{% block footer %}
+    <p style="margin: 0;">This message was sent automatically. Replies are not read.</p>
+{% endblock %}

@@ -6,7 +6,8 @@
 # 谁把 deptrac.yaml 的规则改松了，这个脚本会立刻变红，而 `deptrac analyse`
 # 依然是绿的 —— 它只能证明「当前代码没违规」，证明不了「规则还有效」。
 #
-# 两个场景，对应 deptrac.yaml 同时强制的两个维度：
+# 四个场景。前两个对应 deptrac.yaml 同时强制的两个维度（模块间 / 层间），
+# 后两个各自守着一条「某个设计决定的唯一强制点」：
 #
 #   ① 模块间（T-002 验收标准）
 #      Wallet.Domain 直接引用 Identity.Domain → 必须 violation。
@@ -27,6 +28,17 @@
 #      加了 Shared.Infrastructure（比如为了图省事直接注入某个 Infrastructure 服务），
 #      §5.3 的门面就被架空了，而 CI 不会有任何反应。
 #
+#   ④ 发信只经 MailSenderInterface（T-102）
+#      Identity.Application import Symfony\Component\Mailer\MailerInterface
+#      → 必须 violation。
+#      §3.2 把「一期单通道、无双活」记为有意识的风险接受，代价是那句
+#      「未来 2 人日能补回来」——而它成立的**唯一**前提是「邮箱服务商的细节
+#      完全收敛在 MailSenderInterface 之后」。强制点是 deptrac 的
+#      `Framework.Mail` 图层只加进了 Notification.Infrastructure 的允许列表。
+#      谁哪天把它补进别的 *.Infrastructure（或者更糟：忘了在 Framework.Core 的
+#      must_not 里排除 Mailer，于是它落回那个对所有 Application 开放的图层），
+#      §3.2 的前提就没了，而 `deptrac analyse` 依然全绿。
+#
 # 用法：composer deptrac:selftest
 #
 set -euo pipefail
@@ -37,9 +49,10 @@ MODULE_VIOLATOR='src/Module/Wallet/Domain/__DeptracSelfTestViolation.php'
 MODULE_TARGET='src/Module/Identity/Domain/__DeptracSelfTestTarget.php'
 LAYER_VIOLATOR='src/Shared/Domain/__DeptracSelfTestFrameworkImport.php'
 CRYPTO_VIOLATOR='src/Module/Wallet/Application/__DeptracSelfTestCryptoImport.php'
+MAILER_VIOLATOR='src/Module/Identity/Application/__DeptracSelfTestMailerImport.php'
 
 cleanup() {
-    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR" "$CRYPTO_VIOLATOR"
+    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR" "$CRYPTO_VIOLATOR" "$MAILER_VIOLATOR"
 }
 trap cleanup EXIT
 
@@ -170,5 +183,36 @@ assert_violation \
     'Shared\.Infrastructure' \
     'deptrac.yaml 里某个模块的 Application 允许列表被加进了 Shared.Infrastructure。T-005 的验收标准「无模块直接 import VaultTransitCrypto」就此失效 —— 加解密必须只经 Shared\Application\Crypto 的三个接口，见 CryptoServiceInterface 的类注释。'
 
+rm -f "$CRYPTO_VIOLATOR"
+
+# ---------------------------------------------------------------- 场景 ④
+# 用 Identity.Application 当违规者不是随手挑的：它就是 T-103/T-104 里真正会想
+# 「发封信」的那一层。这条自检要拦的正是那个最自然的错误写法。
+cat > "$MAILER_VIOLATOR" <<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace App\Module\Identity\Application;
+
+use Symfony\Component\Mailer\MailerInterface;
+
+/** deptrac 自检临时文件：模块绕过 MailSenderInterface 直接发信，必须被拦下（T-102）。 */
+final class __DeptracSelfTestMailerImport
+{
+    public function __construct(public readonly MailerInterface $mailer)
+    {
+    }
+}
+PHP
+
+assert_violation \
+    '模块绕过 MailSenderInterface 直接 import Mailer' \
+    'Identity\.Application' \
+    'Framework\.Mail' \
+    'deptrac.yaml 的 Framework.Mail 图层被放宽了（加进了别的允许列表），或者 Framework.Core 的 must_not 里少了对应的排除条目 —— 后者会让 MailerInterface 落回那个对所有 Application 开放的图层。§3.2「把服务商细节收敛在 MailSenderInterface 之后」就此失效，见 MailSenderInterface 的类注释与 ADR-0012。'
+
+rm -f "$MAILER_VIOLATOR"
+
 echo
-echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单 + 加密门面只经接口）。"
+echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单 + 加密门面只经接口 + 发信只经 MailSenderInterface）。"

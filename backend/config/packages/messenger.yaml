@@ -12,18 +12,24 @@
 # 生产者不该同时还要设计总线。infra/compose 的 worker 槽位也是照这个前提写的。
 #
 # ============================================================================
-# T-1xx 接手时要做的事
+# T-102：第一个真实异步消费者到了
 # ============================================================================
-# 1. 装 symfony/doctrine-messenger（或改用 redis transport），加 `async` transport。
-#    ⚠️ doctrine transport 会带来 `messenger_messages` 表 + 一个迁移 ——
-#    那是「第一个真实异步消费者」的决定，T-004 刻意不替它做。
-# 2. 把需要异步的事件路由到 async（§4.2 的协作点表：CardSharedWith / MemberRemoved
-#    等推送类事件；推送失败不应回滚业务事务）。
-# 3. 放开 infra/compose/docker-compose.{base,prod}.yml 里注释掉的 `worker` 服务。
-#    在那之前放开是没有意义的 —— 消费一条 sync 总线的 worker 什么也不做。
+# T-004 把三件事留给了「第一个真实异步消费者」，T-102 是那个任务，三条都已兑现：
+#
+# 1. ✅ 装了 symfony/doctrine-messenger，加了 `email` / `email_failed` 两条 transport。
+#    选 doctrine 而不是 redis 的理由见 ADR-0012，一句话版本：丢一封 OTP 信 =
+#    该用户登不进去，而 §14.2 的 Redis 是单容器、无 AOF，一次重启就吃掉在途的信。
+#    表由迁移建（`auto_setup=0`），不让 transport 自己偷偷 CREATE TABLE。
+# 2. ⏸ 领域事件仍然全部 sync。§4.2 协作点表里那些推送类事件（CardSharedWith /
+#    MemberRemoved）的生产者要到 M3 才存在 —— 现在把它们路由到 async
+#    等于给不存在的消息配路由，属于 CONTRIBUTING §9 禁止的「先留个接口」。
+#    T-306（FCM 集成）接手时照 `email` 的形状再加一条即可。
+# 3. ✅ 放开了 infra/compose/docker-compose.{base,prod}.yml 的 `worker` 服务。
 #
 # ⚠️ 各模块**不得**直接注入 MessageBusInterface。deptrac 的 Framework.Messaging
-# 图层只对 *.Infrastructure 开放，唯一的合法入口是那两个 Shared 接口。
+# 图层只对 *.Infrastructure 开放。合法入口有三个，都在 Infrastructure 里：
+# 那两个 Shared 总线实现，以及 T-102 的 Notification\...\QueueingMailSender
+# （它为什么不能复用 CommandBusInterface，见下方 mail.bus 的注释）。
 framework:
     messenger:
         default_bus: command.bus
@@ -44,9 +50,89 @@ framework:
                     # 还没实现时，Sharing 照样要能发 CardSharedWith）。
                     allow_no_handlers: true
 
+            # T-102：唯一一条会落到异步 transport 的总线。
+            #
+            # ⚠️ 为什么不复用 command.bus
+            # ------------------------------------------------------------
+            # 它的实现 MessengerCommandBus 用 HandleTrait，要求同步拿到
+            # HandledStamp —— 一条被路由到异步 transport 的消息「handled zero
+            # times」，dispatch 当场抛 LogicException。
+            #
+            # 就算绕开 HandleTrait，CommandBusInterface 的类注释也白纸黑字写着
+            # 「命令总线**恒同步**：命令是『请你做这件事』，调用方通常要拿结果
+            # 构造响应」。在那里开一个异步例外会把那句话变成假的，
+            # 而下一个读注释的人不会知道。
+            #
+            # 单独一条总线的额外好处：下面 routing 表里「哪些消息是异步的」
+            # 一眼可读 —— 就是挂在 mail.bus 上的那些。
+            mail.bus:
+                default_middleware:
+                    enabled: true
+
         transports:
             sync: 'sync://'
 
+            # T-102：外发邮件队列（§3.8 要求发信必须异步，见 MailSenderInterface
+            # 的类注释 —— 同步发信会让 decoy 与真实路径的耗时差出一次 SMTP 往返，
+            # 防枚举当场失效）。
+            email:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+
+                options:
+                    # ⚠️⚠️ 关掉 PG 的 LISTEN/NOTIFY，**必须**与 DSN 的 `auto_setup=0` 成对出现。
+                    #
+                    # NOTIFY 那一侧靠一个触发器发通知，而那个触发器只由 auto_setup
+                    # 顺手创建（`Connection::getExtraSetupSqlForTable()`）。
+                    # 我们关掉了 auto_setup（DDL 必须走迁移），所以触发器不存在。
+                    #
+                    # 留着 use_notify 的后果不是报错，是**静默的 60 秒延迟**：
+                    # PostgreSqlConnection::get() 在队列空过一次之后就改走 LISTEN，
+                    # `pgsqlGetNotify()` 永远返回 false，于是它每次只 usleep(1ms)
+                    # 就返回 null，真正的 SELECT 要等 `check_delayed_interval`
+                    # （默认 60000 ms）才跑一次。
+                    # 对一封有效期 10 分钟的 OTP 信来说，那是灾难性的 ——
+                    # 而且看起来完全像是「邮件服务商慢」。
+                    #
+                    # 关掉之后回落到基类的每轮 SELECT，延迟由 worker 的 --sleep
+                    # 决定（默认 1 秒）。§9.3 的量级下这点轮询开销可以忽略。
+                    #
+                    # 另一条路是在迁移里自己建那个触发器。没走，是因为它会往
+                    # schema 里塞一个 `doctrine:schema:validate` 看不见、
+                    # 却能影响运行时行为的对象 —— 正是 auto_setup 那条理由的翻版。
+                    use_notify: false
+
+                # ⚠️ 消息体整体经 Vault Transit 加密后才落库。
+                # 不配这一行，`messenger_messages.body` 就是一列明文邮箱 + 明文
+                # OTP 码，§3.8 与 §7.1 在这一层直接失效，且 T-406 的备份会把它们
+                # 带出主机。理由与取舍见该类的注释。
+                serializer: 'App\Module\Notification\Infrastructure\Messenger\EncryptedMailSerializer'
+
+                retry_strategy:
+                    # 3 次，1s → 3s → 9s。总重投窗口约 13 秒。
+                    #
+                    # 刻意很短：OTP 码的有效期是 10 分钟（§7.1），一封在 5 分钟后
+                    # 才投递成功的登录信对用户已经没有意义 —— 他早就点了重发。
+                    # 拉长退避只会让 email_failed 里堆积的东西更晚被发现。
+                    max_retries: 3
+                    delay: 1000
+                    multiplier: 3
+
+                failure_transport: email_failed
+
+            # 重投三次仍失败的信。**同一张表**，靠 queue_name 分流 ——
+            # 单独开一张表要多一个迁移，而这里需要的只是「别和待发的信混在一起」。
+            email_failed:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: failed
+                    # 同上。这条 transport 只在 `messenger:failed:*` 时被读，
+                    # 但少了它，那些命令会走进同一个 60 秒的 LISTEN 分支。
+                    use_notify: false
+                serializer: 'App\Module\Notification\Infrastructure\Messenger\EncryptedMailSerializer'
+
         routing:
-            # M0：全部同步。T-1xx 起按事件类型逐个改到 async。
+            # 领域事件仍全部同步，理由见文件头第 2 条。
             App\Shared\Domain\Event\DomainEvent: sync
+
+            # T-102：唯一一条异步消息。
+            App\Module\Notification\Application\SendMailCommand: email

@@ -1,0 +1,43 @@
+# Symfony Mailer（T-102 / §3.2）。
+#
+# ============================================================================
+# 「DSN 一行可切换通道」就是本文件的全部意义
+# ============================================================================
+# §3.2 把「一期单通道、无双活、无送达率监控」记为**有意识的风险接受**，
+# 前提是那句「未来 2 人日能补回来」。而它能成立的唯一原因是：
+# 邮箱服务商的全部细节都收敛在这一个 env 变量里。
+#
+# R1 的处置动作（§14.4「OTP 转化率骤降」P1 告警触发时）因此是：
+#   改 MAILER_DSN → 重启 worker。见 docs/runbooks/email-dns.md。
+#
+# 业务代码里不得出现任何服务商特有类型 —— 那条由 deptrac 强制：
+# `Framework.Mail` 图层只对 `Notification.Infrastructure` 开放。
+#
+# ============================================================================
+# ⚠️ 刻意**没有** `message_bus`
+# ============================================================================
+# 配上它，Symfony 会把自己的 `SendEmailMessage`（一整封已渲染好的 MIME 消息，
+# 含**明文收件人**与**明文 OTP 码**）丢进 Messenger transport —— 而我们的
+# transport 落在 Postgres 里，T-406 还会把那个库 age 加密后推去 Storage Box。
+# 于是 §3.8「不存明文邮箱列」与 §7.1「不存明文码」在队列这一层就破了。
+#
+# 异步由我们自己的 `Notification\Application\SendMailCommand` 承担：
+# 它只带密文与模板变量，且经 EncryptedMailSerializer 整体加密后才落库
+# （见 config/packages/messenger.yaml）。Mailer 本身在 worker 里**同步**发。
+framework:
+    mailer:
+        dsn: '%env(MAILER_DSN)%'
+
+        # 信封发件人（SMTP `MAIL FROM`）。与信头 From 同源，避免 SPF 对齐失败 ——
+        # DMARC 的 alignment 要求 From 域与通过 SPF/DKIM 校验的域一致，
+        # 配错的直接症状就是「一期最重要的那封信进垃圾箱」。
+        # 记录模板见 docs/runbooks/email-dns.md。
+        envelope:
+            sender: '%env(MAIL_FROM_ADDRESS)%'
+
+        headers:
+            # 外发邮件只有两类，两类都是事务性的（§3.1：取消邮箱邀请后，
+            # 用户无法让系统向任意第三方发信）。声明出来，让邮箱服务商与
+            # 收件方的批量识别器不要把它们当营销邮件排队。
+            Auto-Submitted: 'auto-generated'
+            X-Auto-Response-Suppress: 'OOF, AutoReply'

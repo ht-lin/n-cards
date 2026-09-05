@@ -53,7 +53,7 @@ T-301 Friendship ─► T-303 级联撤销 ◄─ T-304/305 共享（同事务�
 |---|---|---|---|---|
 | Q1 | 品牌名与域名 | — | T-001, T-012 | M0 |
 | Q2 | 运营主体与 Impressum | — | T-450 | M1 |
-| Q3 | 邮件服务商选型（EU/EEA + DPA） | Brevo FR / Mailjet FR / Postmark EU 三选一 | T-102 | M0 |
+| ~~Q3~~ | ~~邮件服务商选型（EU/EEA + DPA）~~ | ✅ **已决**：`n-cards.de` 的域名邮箱（dogado GmbH，德国），不采购专业 ESP（[ADR-0013](../adr/0013-mail-via-domain-mailbox.md)）。⛔ 尾巴：签 AVV、查发信配额、确认 DKIM、4 次手工送达验证 | ~~T-102~~, T-450 | ✅ M1 |
 | Q4 | 是否启用证书固定 | **不启用**，记为已接受风险 | T-451 | M3 |
 | Q5 | Sentry 自托管 vs EU SaaS | EU SaaS | T-405 | M1 |
 | ~~Q6~~ | ~~Vault unseal 方案~~ | ✅ **已决**：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭（[ADR-0004](../adr/0004-manual-vault-unseal.md)） | ~~T-005~~, T-406 | ✅ M0 |

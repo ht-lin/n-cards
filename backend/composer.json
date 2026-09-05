@@ -15,13 +15,16 @@
         "doctrine/orm": "^3.6",
         "predis/predis": "^3.6",
         "symfony/console": "7.4.*",
+        "symfony/doctrine-messenger": "7.4.*",
         "symfony/dotenv": "7.4.*",
         "symfony/flex": "^2.11",
         "symfony/framework-bundle": "7.4.*",
         "symfony/http-client": "7.4.*",
+        "symfony/mailer": "7.4.*",
         "symfony/messenger": "7.4.*",
         "symfony/monolog-bundle": "^4.0",
         "symfony/runtime": "7.4.*",
+        "symfony/twig-bundle": "7.4.*",
         "symfony/yaml": "7.4.*"
     },
     "require-dev": {

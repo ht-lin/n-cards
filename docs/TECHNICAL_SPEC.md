@@ -247,6 +247,10 @@ J5 删号
 
 > ⚠️ 给实现者：本节是**有意识的风险接受**，不是遗漏。请把发信实现收敛在 `Notification` 模块的 `MailSenderInterface` 之后（Symfony Mailer DSN 一行配置即可切换），**不要把邮箱服务商的细节泄漏到业务代码里**——这是保证"未来 2 人日能补回来"的唯一前提。
 
+> **落地情况（2026-09-05）**：通道由 T-102 交付，抽象由 deptrac 强制（`Framework.Mail` / `Framework.Templating` 两个图层只对 `Notification.Infrastructure` 开放，`deptrac:selftest` 场景 ④ 守着），见 [ADR-0012](adr/0012-mail-channel-topology.md)。上表第一行的"普通商业邮箱服务"取值已定：**`n-cards.de` 的域名邮箱（dogado GmbH）**，见 [ADR-0013](adr/0013-mail-via-domain-mailbox.md)。
+>
+> ⚠️ 该选型给本节的风险接受**追加了一条本节原本没算进去的天花板**：域名邮箱有发信配额上限，而 §9.3 的 5 万注册目标推算出的日发信量（约 1100 封）已经越过典型配额量级。因此本节末尾"重启本决策的信号"从**一条**变成**两条**：除 OTP 转化率 P1 告警外，`email_send_total` 日累计逼近实测配额 50% 同样是信号。判据与处置见 [`docs/runbooks/email-dns.md`](runbooks/email-dns.md) §4。
+
 ### 3.3 【严重】服务端加密的威胁边界被高估
 
 **问题**：ADR-02 容易被误读为"用户数据是安全的"。若 Vault 与应用运行在同一台 Hetzner 主机、且 Vault 由 systemd 自动 unseal，那么**攻破主机 = 拿到全部明文**，加密只剩心理安慰。若对外宣称"加密存储"而不说明边界，是合规风险。
@@ -1559,6 +1563,7 @@ Bob:  【选择接受或拒绝】
 | 关系 | friendships, card_members | 共享功能 | 关系存续期 | Hetzner DE |
 | 设备 | device id, model, os/app 版本, push_token | 多设备与推送 | 设备撤销后即删 | Hetzner DE |
 | 安全 | ip_hash, audit_log, 限流计数 | 滥用防护 | ip_hash 30 天；audit 12 个月；限流 24 小时 | Hetzner DE / Redis |
+| 外发邮件队列 | `messenger_messages.body`：收件邮箱 + OTP 码 / 提醒内容，**整条消息体经 Vault Transit 加密**（`ncards-pii`） | 异步投递登录码与安全提醒 | **消费即删行**；投递失败重投 3 次（约 13 秒）后转入 `failed` 队列，由人工处置后删除 | Hetzner DE |
 | 诊断 | 崩溃栈、`X-Request-Id`、脱敏日志 | 稳定性 | 30 天 | Hetzner DE（自托管 Sentry / Loki） |
 
 ### 8.3 子处理者清单（Art. 28，均需签 AVV/DPA）
@@ -1566,13 +1571,17 @@ Bob:  【选择接受或拒绝】
 | 子处理者 | 处理内容 | 所在地 | 第三国传输 |
 |---|---|---|---|
 | Hetzner Online GmbH | 全部托管与备份 | 德国（备份可选芬兰） | 无 |
-| 商业邮件服务商（**单一**，一期不做双活，§3.2） | 收件邮箱地址、邮件内容（OTP 码、安全提醒） | **必须位于 EU/EEA**（候选：Brevo FR / Mailjet FR / Postmark EU；最终选型见 Q3） | 无（EU/EEA 内） |
+| dogado GmbH（`n-cards.de` 的域名邮箱 = **唯一**发信通道，一期不做双活，§3.2） | 收件邮箱地址、邮件内容（OTP 码、安全提醒） | 德国（多特蒙德） | 无 |
 | Google Ireland Ltd.（FCM） | **仅** 设备推送令牌 + 空唤醒信号 | IE / 全球基础设施 | 有（美国）→ 依据 EU-US Data Privacy Framework + SCC；**因载荷不含个人数据，风险显著降低（§3.12）** |
 | Google Ireland Ltd.（Play） | 分发与账单（无内购则无账单） | IE | 有 |
 
 > ML Kit Barcode Scanning 使用 **bundled** 模型，**完全在设备本地运行**，不向 Google 传输图像或识别结果。**从图片录入（ADR-13）同样是纯本地解码**——所选图片不上传、不落盘、不进入任何日志，解码完成即释放。这两点都必须在隐私声明中明确写出（它们是相对竞品的实质优势，值得写在显眼处）。
 
 > ⚠️ **§3.2 放宽的是可用性要求，不是合规要求。** 即使一期只用"普通商业邮箱服务"，仍**必须**满足：① 处理地在 EU/EEA（或有充分性认定）；② 签署 AVV/DPA；③ 列入本表与隐私声明。**不得**为图省事使用个人邮箱、消费级邮箱（Gmail/GMX 个人账户）或美国 SaaS 的免费层——那是无 DPA 的第三国传输，属于合规硬伤，与"要不要做双活"是两回事。
+
+> **Q3 已决（2026-09-05，[ADR-0013](adr/0013-mail-via-domain-mailbox.md)）：用 `n-cards.de` 自己的域名邮箱（dogado），不采购专业 ESP。** 判据是上面那三条，不是"是不是 ESP"——一份有合同、有 AVV、处理地在德国的商业托管邮箱三条全中，与上一段禁止的"个人 / 消费级免费账户"是两回事。
+>
+> ⛔ **两项合规动作仍然欠着，上线前必须关闭**：① **与 dogado 签署 AVV 并归档**（Art. 28，本表的前提）；② `no-reply@n-cards.de` 是一个**真实存在的双向收件箱**（域名邮箱不同于 ESP 的纯发信地址），退信与用户误回复会让**真实邮箱地址**积累在那里，而 §8.2 的 ROPA 里**没有这条数据流**——需要决定它的处置（自动回复 / 转发 / 定期清空）并据此决定是否补进 ROPA。两项都归 T-450。
 
 ### 8.4 数据主体权利实现
 
@@ -1670,7 +1679,7 @@ Google Play 需额外提交：Data Safety 表单（**必须**与上述 ROPA 一�
 |---|---|---|
 | API 可用性（非 5xx 且 < 2s 的请求占比） | 99.5% | 3.6 小时 |
 | OTP 邮件送达（请求 → 用户成功验证的转化率） | ≥ 92% | — |
-| ~~OTP 邮件时延（发送 → ESP 确认投递）~~ | **一期不测量**：需要接入服务商的投递 webhook，属 §3.2 后置项。用上一行的转化率作为唯一代理指标 | — |
+| ~~OTP 邮件时延（发送 → ESP 确认投递）~~ | **一期不测量**：需要接入服务商的投递 webhook，属 §3.2 后置项。用上一行的转化率作为唯一代理指标。⚠️ Q3 定案后（域名邮箱，[ADR-0013](adr/0013-mail-via-domain-mailbox.md)）这条**不是后置，是不可得**——域名邮箱没有投递 webhook，也没有 bounce / 投诉反馈回路。想要它就必须先换成专业 ESP | — |
 | 共享变更端到端可见（前台） | P95 ≤ 10 s | — |
 | 同步数据正确性（客户端上报的校验失败率） | ≤ 0.01% | — |
 | 崩溃自由用户率 | ≥ 99.5% | — |
@@ -1684,6 +1693,8 @@ Google Play 需额外提交：Data Safety 表单（**必须**与上述 ROPA 一�
 - 人均 15 张卡 → 750K 行 `cards`，约 300 MB（含密文）。
 - 同步请求峰值：7,500 DAU × 10 次/天，峰值集中在 17:00–19:00 → 约 15 req/s。
 - 单台 CCX23 绰绰有余。**扩容路径**：垂直升配 → 拆 Postgres 到独立机 → 应用层多副本 + 负载均衡（应用本身无状态，Session 存 DB/Redis，天然可水平扩展）。
+
+> ⚠️ **本节唯一撑不到 5 万注册的资源不是主机，是发信配额。** 按上面的 DAU 假设推算，日发信量约 **1100 封**（推导见 `backend/config/packages/ncards_mail.yaml`），而 Q3 定案的域名邮箱（dogado，[ADR-0013](adr/0013-mail-via-domain-mailbox.md)）有每小时 / 每天配额，量级通常在几百。**主机的扩容路径解决不了这个** —— 它的扩容路径是换通道：按 §3.2 原方案补做专业 ESP，2 人日，抽象层（`MailSenderInterface`）已就位。触发判据写在 [`docs/runbooks/email-dns.md`](runbooks/email-dns.md) §4。
 
 ### 9.4 可靠性
 
@@ -2341,7 +2352,7 @@ ADR 模板：`Context / Decision / Consequences / Alternatives considered / Stat
 
 | # | 风险 | 概率 | 影响 | 缓解 | 负责人 |
 |---|---|---|---|---|---|
-| R1 | 邮件通道故障 / 发信域名被列入黑名单 → 全站无法登录 | 中 | **致命** | **v1.1 缓解已降级为：** DMARC/SPF/DKIM + 外发限额 + 90 天滑动 refresh（存量用户不受影响）+ OTP 转化率 P1 告警 + 人工切换 DSN 的 runbook。**ESP 双活已撤销，记为已接受风险**（§3.2），告警触发即为重启该决策的信号 | 后端负责人 |
+| R1 | 邮件通道故障 / 发信域名被列入黑名单 → 全站无法登录 | 中 | **致命** | **v1.1 缓解已降级为：** DMARC/SPF/DKIM + 外发限额 + 90 天滑动 refresh（存量用户不受影响）+ OTP 转化率 P1 告警 + 人工切换 DSN 的 runbook。**ESP 双活已撤销，记为已接受风险**（§3.2），告警触发即为重启该决策的信号。**⚠️ Q3 定案（域名邮箱，[ADR-0013](adr/0013-mail-via-domain-mailbox.md)）使本风险的概率上调**：共享托管的出口 IP 声誉不由我们控制（同池租户会连累送达率），且**超发信配额会导致发信账号被托管商停用**——这是一条 v1.1 原本没有的新触发路径。对应地，「外发限额」那条缓解从告警手段升格为**保护手段**，熔断阈值必须压在实测配额之下 | 后端负责人 |
 | R2 | Vault 数据丢失 → 全部卡不可解密 | 低 | **致命** | 独立卷 + 每日快照 + unseal key 离线三份分存 + 季度恢复演练 | 技术负责人 |
 | R3 | 冲突解决实现有 bug → 用户数据丢失 | **低**（v1.1 单写者模型使冲突面大幅收窄，§3.5） | 高 | 属性测试 + 码值冲突绝不静默丢弃（§3.5）+ Beta 期重点观察 | Android 负责人 |
 | R4 | FCM 在国产 ROM 上不送达 → "共享不实时" 差评 | **高** | 中 | 四层触发（§3.6）+ 电池优化引导 + 前台立即同步 + 文案预期管理 | Android 负责人 |
@@ -2647,7 +2658,7 @@ path "auth/token/renew-self"         { capabilities = ["update"] }
 |---|---|---|---|---|
 | ~~Q1~~ | ~~最终品牌名与域名~~ | **已决（2026-08-30）：品牌显示名 `N-Cards`，域名 `n-cards.de`。命名按「谁在读」分两层——人读写 `N-Cards`，机器读写 `ncards`（包名 `de.ncards`、插件 id `ncards.*`、Vault key `ncards-*`、资源名 `Theme.NCards`）；判据不是语法能否带连字符，插件 id 与 Vault key 允许带仍不带。见 [ADR-0002](adr/0002-brand-name-and-domain.md)** | 创始人 | ✅ M0 |
 | Q2 | 运营主体（GmbH / UG / 个人）与 Impressum 内容 | — | 创始人 | M1 结束 |
-| Q3 | 邮件服务商最终选型 | **单一**商业邮件服务，要求：EU/EEA 处理 + 可签 DPA + 支持 SPF/DKIM 自定义域（候选 Brevo FR / Mailjet FR / Postmark EU）。**不做双活**（§3.2） | 后端负责人 | M0 结束 |
+| ~~Q3~~ | ~~邮件服务商最终选型~~ | **已决（2026-09-05）：发信走 `n-cards.de` 的域名邮箱（托管方 dogado GmbH，德国多特蒙德），标准 SMTP submission，不采购专业 ESP。** 三条硬要求逐条满足：EU/EEA 处理 ✅、可签 AVV/DPA ✅（**仍须实际签署**）、自定义域 SPF ✅ / DKIM ✅（2026-09-06 确认：dogado 已自动写入，selector `cloudpit`；待实发验证 `d=` 对齐）。**不做双活**（§3.2）。代价是发信配额有上限、共享 IP 声誉、无 bounce/投诉回路 —— **§9.3 的 5 万注册目标会越过这个上限**，届时按 §3.2 原方案补做专业 ESP（2 人日，抽象层已就位）。见 [ADR-0013](adr/0013-mail-via-domain-mailbox.md) | 创始人 + 后端负责人 | ✅ M1 |
 | Q4 | 一期是否启用证书固定 | **不启用**，记为已接受风险，上线后 30 天内加 | 技术负责人 | M3 |
 | Q5 | Sentry 自托管 vs EU SaaS | EU SaaS（省运维，需 DPA） | 技术负责人 | M1 |
 | ~~Q6~~ | ~~Vault unseal 方案（人工 vs 外部 KMS auto-unseal）~~ | **已决（2026-08-28）：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭。见 [ADR-0004](adr/0004-manual-vault-unseal.md) 与 [`docs/runbooks/vault-unseal.md`](runbooks/vault-unseal.md)** | 技术负责人 | ✅ M0 |

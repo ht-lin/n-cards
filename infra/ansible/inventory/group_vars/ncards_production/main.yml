@@ -21,3 +21,24 @@ ncards_machine_type: "未定 —— 开机时按 §9.3 的容量假设与 stagin
 #      staging 是合成数据所以无所谓，生产上这是真实的合规缺口 ——
 #      必须先由 T-406 的 age 加密 + Hetzner Storage Box 方案替换。
 #   2. §9.4：上线前必须完成**一次真实的恢复演练**（§13.8 的不可裁剪项）。
+
+# ---------------------------------------------------------------- 邮件（T-102）
+# ⚠️ 这里**只有非凭据项**。发信 DSN（含 SMTP 口令）在 secrets.sops.yaml 的
+# MAILER_DSN 里，与 VAULT_SECRET_ID 同一口径。
+
+# 发件人地址。SPF / DKIM / DMARC 记录必须配在**这个地址的域**上，
+# 否则几乎必进垃圾箱（§3.2）—— 记录模板与推进节奏见 docs/runbooks/email-dns.md。
+ncards_mail_from_address: no-reply@n-cards.de
+ncards_mail_from_name: N-Cards
+
+# §14.4 `email_send_total{provider,template,result}` 的 provider 标签。
+#
+# Q3 已决（2026-09-05，docs/adr/0013-mail-via-domain-mailbox.md）：发信走
+# n-cards.de 的**域名邮箱**，托管方 dogado GmbH（德国多特蒙德），不采购专业 ESP。
+# 换选型时动的就是这一行 + secrets 里的 MAILER_DSN 两个变量，别的都没动 ——
+# 这正是 MailSenderInterface 抽象的意义（§3.2），本次是它的第一次真实检验。
+#
+# ⚠️ 域名邮箱有**发信配额**，超了会被托管商停用发信账号（R1 的直接触发路径）。
+# 熔断阈值因此从 3000/10000 下调到 200/500，且那两个数**目前是猜的** ——
+# 实测配额与校准公式见 docs/runbooks/email-dns.md §4。
+ncards_mail_provider: dogado

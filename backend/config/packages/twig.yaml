@@ -1,0 +1,30 @@
+# Twig —— **只用来渲染邮件**（T-102 / §3.2）。
+#
+# ============================================================================
+# 这个项目没有服务端渲染的页面
+# ============================================================================
+# API 是纯 JSON（§6.1 的 RFC 9457），Android 是唯一客户端。装 twig-bundle 的
+# 唯一理由是 `templates/email/{de,en}/` 那四封双语信 —— Symfony Mailer 的
+# `TemplatedEmail` 需要 twig-bridge，而 bridge 需要 bundle 起环境。
+#
+# 所以 `default_path` 下**只该有 email/**。真出现第二个用途（比如 T-106 的
+# Magic Link 落地页）时，那是一次要单独论证的扩张，不是顺手加个目录。
+#
+# ⚠️ deptrac 里 Twig 落在 `Framework.Templating`，**只对 Notification.Infrastructure
+# 开放**。别的模块 import 一个 `Twig\Environment` 会是 violation，这是刻意的。
+twig:
+    default_path: '%kernel.project_dir%/templates'
+    file_name_pattern: '*.twig'
+
+    # ⚠️ **三个环境都开**，不只 test（recipe 默认只在 test 里开）。
+    #
+    # 关掉的话，模板里一个拼错的变量名渲染成空字符串而不是抛异常 —— 后果是
+    # 一封**没有 OTP 码**的登录信被真的发出去，用户看到的是一片空白，
+    # 而日志里什么都没有。这类错误必须在渲染那一刻炸掉：
+    # 消息会进 `email_failed` 队列，`email_send_total{result="failed"}` 会动，
+    # 两者都是能被发现的信号。
+    #
+    # 代价是可接受的：模板的变量集由 MailTemplate 的 requiredVariables() 固定，
+    # MailTemplateRenderingTest 穷举 4 封信 × 2 种语言 × 3 份模板，
+    # 拼写错误在 CI 就会红，到不了生产。
+    strict_variables: true

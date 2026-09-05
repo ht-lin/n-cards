@@ -28,6 +28,29 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  # T-102。与 app 一样：只调 image / 日志级别 / 配额，形态不变。
+  #
+  # ⚠️ 副本数**不降到 1**。prod 是 2，staging 也是 2 —— 「worker 有多个副本」
+  # 会暴露一类只在并发消费时才出现的问题（同一条消息被取两次、
+  # Redis 计数器竞态），而那正是 staging 该替生产踩到的雷。
+  #
+  # ⚠️ staging 的 MAILER_DSN 同样是**真实**通道（由 sops 下发，见 T-012），
+  # 不是 null://。§3.2 的验收标准是「向 Gmail / GMX / Web.de / Outlook 各发一封
+  # 确认不进垃圾箱」，那 4 次手工验证要在 staging 上做 —— 收件人用团队自己的
+  # 测试邮箱。发信域名与 SPF/DKIM/DMARC 记录见 docs/runbooks/email-dns.md。
+  worker:
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:main}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+      LOG_LEVEL: debug
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   postgres:
     deploy:
       resources:
