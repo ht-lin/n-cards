@@ -1,34 +1,56 @@
-# Doctrine —— T-003 只装 **DBAL**，不装 ORM。
+# Doctrine —— DBAL（T-003）+ ORM（T-101）。
 #
-# 为什么没有 `orm:` 段：
-# T-003 需要的只是一条能 `SELECT 1` 的连接，用来实现 §14.2 / T-003 验收标准里的
-# `/health/ready`（PG 不可用时 503）。实体映射、仓储、迁移文件属于 T-101 起的任务，
-# 那时再 `composer require doctrine/orm` 并在本文件补 `orm:` 段。
-#
-# 现在就把 DBAL 装上（而不是写一段临时的原生 PDO 探活）的理由：
-# `DATABASE_URL`、`migrations/`、deptrac 的 `Framework.Persistence` 图层三者都要就位，
-# T-101 直接接着用，不产生一次性代码。
+# T-003 只装了 DBAL：那时需要的只是一条能 `SELECT 1` 的连接，用来实现 §14.2 /
+# T-003 验收标准里的 `/health/ready`（PG 不可用时 503）。实体映射、仓储与第一个
+# 迁移属于 T-101，`orm:` 段是那时补上的。
 #
 # ⚠️ doctrine-bundle 锁在 **2.x**：3.x 起要求 PHP ^8.4，而本项目按 §12.2 跑 PHP 8.3
 # （`composer.json` 的 `config.platform.php = 8.3.99`，CI 用 `php-version: '8.3'`）。
 # 将来若把基线抬到 8.4，可一并升到 doctrine-bundle 3.x。
+#
+# ============================================================================
+# 映射为什么是 XML 而不是 PHP 属性（T-101 / ADR-0011）
+# ============================================================================
+# `deptrac.yaml` 里每个模块的 Domain 层允许列表只有 `Shared.Domain` 一项 ——
+# 没有任何 `Framework.*`。这就是 §12.2「Domain 不得 import 任何框架类型」的强制点。
+# 而 `#[ORM\Entity]` 会 import `Doctrine\ORM\Mapping\*`，落进 `Framework.Persistence`
+# 图层，于是属性映射在这个项目里**结构性地不可能**。
+#
+# 所以实体是纯 PHP（`Module/<M>/Domain/Entity/`），映射是 XML
+# （`Module/<M>/Infrastructure/Doctrine/Mapping/`）—— 与 T-005 把
+# `CryptoServiceInterface` 挪出 `Shared/Infrastructure` 是同一类结构性妥协。
+#
+# 新增一个模块的实体时，在下面的 `orm.mappings` 里复制一整块并改名。
 
 doctrine:
     dbal:
         url: '%env(resolve:DATABASE_URL)%'
 
-        # T-004：Uuid 值对象 ↔ Postgres 原生 `uuid` 列（16 字节，索引友好；
-        # §9.3 假设 cards 表 75 万行，与 VARCHAR(36) 是实质差别）。
+        # 三个自定义类型，都是「让类型系统守住一列的语义」而不是便利糖：
         #
-        # `dbal.types` 走 doctrine-bundle 的 DBAL pass，不需要 `orm:` 段 ——
-        # 本文件此刻正确地还没有那一段。
+        #   uuid        T-004：Uuid 值对象 ↔ PG 原生 `uuid` 列（16 字节，索引友好；
+        #               §9.3 假设 cards 表 75 万行，与 VARCHAR(36) 是实质差别）
+        #   ciphertext  T-101：Ciphertext ↔ TEXT。挡住明文被写进 `*_encrypted` 列 ——
+        #               库层分不出存进去的是密文还是明文，类型系统是唯一的闸门
+        #   hash_digest T-101：HashDigest ↔ BYTEA。挡住 hex 被写进摘要列，
+        #               并把「比较必须常量时间」（§7.1）收敛到 HashDigest::equals()
         #
-        # ⚠️ 给 T-101：装 ORM 时要一并补
-        #     mapping_types: { uuid: uuid }
-        # 否则反向工程与 `doctrine:schema:validate` 会把 PG 的原生 `uuid`
-        # 映回 DBAL 内建的 `guid`（string），而不是我们的 UuidType。
+        # `dbal.types` 走 doctrine-bundle 的 DBAL pass，与有没有 `orm:` 段无关。
         types:
             uuid: App\Shared\Infrastructure\Doctrine\UuidType
+            ciphertext: App\Shared\Infrastructure\Doctrine\CiphertextType
+            hash_digest: App\Shared\Infrastructure\Doctrine\HashDigestType
+
+        # 反向工程时把 PG 的原生 `uuid` 映回我们的 UuidType，而不是 DBAL 内建的
+        # `guid`（string）。
+        #
+        # ⚠️ 这里**只有 uuid 一条**，不要顺手加 `bytea: hash_digest` / `text: ciphertext`。
+        # `doctrine:schema:validate` 的列比较走 `getColumnDeclarationSQL()` 的字符串
+        # 相等（不是类型对象相等），内省出的 blob/text 与我们的类型生成的都是
+        # `BYTEA` / `TEXT`，本来就对得上。真加了反而有害：将来一个存二进制附件的
+        # BYTEA 列会被反向工程成「摘要」，一个存普通长文本的 TEXT 列会被当成密文。
+        mapping_types:
+            uuid: uuid
 
         # 显式钉死驱动与版本：DATABASE_URL 由容器环境变量注入（T-003）或 sops 下发
         # （T-012），不应该靠 query string 里的 serverVersion 来决定平台行为。
@@ -38,9 +60,42 @@ doctrine:
 
         # 嵌套事务用 SAVEPOINT 而不是「静默忽略内层」—— §4.2 唯一强制同事务的跨模块
         # 协作点（Social 解除好友 → Sharing 级联撤销）依赖嵌套事务语义正确。
+        # 仓储的 save() 直接 flush，多写原子性靠 TransactionRunnerInterface 包一层，
+        # 这条配置是那个做法能安全嵌套的前提。
         use_savepoints: true
 
         profiling_collect_backtrace: '%kernel.debug%'
+
+    orm:
+        # 不自动扫描 —— 每个模块的映射都要在下面显式登记。
+        # 「加了实体但忘了登记」会在 `doctrine:mapping:info` 里立刻现形，
+        # 而自动扫描会让它安静地变成一个不受管的普通类。
+        auto_mapping: false
+
+        # 关掉 doctrine-bundle 的控制器参数解析（EntityValueResolver）。
+        # §12.2 分层职责表：`Http/Controller` 不得直接用 Doctrine。开着的话，
+        # 一个 `public function show(User $user)` 就能让控制器直接查库，
+        # 把 Application 层整个绕过去 —— 而 deptrac 拦不住它（那是框架在背后做的）。
+        controller_resolver:
+            auto_mapping: false
+
+        # 按 XSD 校验映射文件。写错一个属性名（`nullable` 写成 `nullble`）时，
+        # 不校验的话 Doctrine 会静默忽略它，于是那一列悄悄变成 NOT NULL，
+        # 直到 schema:validate 或第一次插入才炸。
+        validate_xml_mapping: true
+
+        auto_generate_proxy_classes: '%kernel.debug%'
+
+        # 报告字段声明在哪个类上（ORM 3 的默认行为，显式写出来免得升级时行为漂移）。
+        report_fields_where_declared: true
+
+        mappings:
+            Identity:
+                type: xml
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Module/Identity/Infrastructure/Doctrine/Mapping'
+                prefix: 'App\Module\Identity\Domain\Entity'
+                alias: Identity
 
 when@test:
     doctrine:

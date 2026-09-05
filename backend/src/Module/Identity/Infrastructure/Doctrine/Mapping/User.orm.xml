@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `users`（§5.2 / §17.1）。
+
+    ============================================================================
+    为什么映射是 XML 而不是 PHP 属性
+    ============================================================================
+    deptrac.yaml 里 `Identity.Domain: [Shared.Domain]` 是一份空的框架允许列表。
+    `#[ORM\Entity]` 会 import `Doctrine\ORM\Mapping\*` → `Framework.Persistence`
+    图层 → violation。详见 ADR-0011。
+
+    ============================================================================
+    ⚠️ 改这个文件前先读：三处必须与迁移逐字对齐，否则 schema:validate 会红
+    ============================================================================
+    `doctrine:schema:validate` 拿本文件生成的 schema 与真库内省结果做 diff，
+    比较规则是 DBAL 的 Comparator（不是「看起来差不多」）：
+
+    1. **索引与唯一约束按名字匹配**（`Table::hasIndex($name)`）。所以下面每个
+       `<unique-constraint>` 的 name 必须与 migrations/Version*.php 里
+       `CONSTRAINT uq_...` 的名字**逐字**相同。不写 name 的话 ORM 会自己生成
+       `UNIQ_<hash>`，于是 diff 里一增一删两条。
+    2. **列比较走 `getColumnDeclarationSQL()` 的字符串相等**，DEFAULT 也在里面。
+       所以 DDL 里每个 `DEFAULT` 都要在这里用 `<options>` 声明一遍。
+    3. **枚举列用 `type="text"`**，不是 `type="string"` —— 后者在 PG 上是
+       `VARCHAR(255)`，与 §17.1 的 `TEXT` 对不上。
+
+    外键不看约束名（Comparator::diffForeignKey 只比列、目标表与 on-delete），
+    这张表也没有外键，那条约束在 Device / Session 的映射里。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Identity\Domain\Entity\User" table="users">
+
+        <unique-constraints>
+            <!-- §3.8：邮箱不存明文列，email_hash 既是查找键也是唯一键。 -->
+            <unique-constraint name="uq_users_email_hash" columns="email_hash"/>
+            <!--
+                username 已在应用层归一化为小写（§17.1），所以普通 UNIQUE
+                即等价于大小写不敏感唯一 —— 不需要函数索引，精确查找也能走这个索引。
+            -->
+            <unique-constraint name="uq_users_username" columns="username"/>
+        </unique-constraints>
+
+        <!--
+            strategy=NONE：id 由应用生成（UUIDv7，Shared\Domain\Identity\Uuid7Generator）。
+            没有序列，也不能有 —— UUIDv7 的时间有序性正是我们要的索引局部性。
+        -->
+        <id name="id" type="uuid" column="id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <!-- HMAC-SHA256(lower(trim(email)), pepper)，pepper 存 Vault（ncards-hmac）。 -->
+        <field name="emailHash" type="hash_digest" column="email_hash" nullable="false"/>
+
+        <!-- Vault Transit 密文（ncards-pii），只用于发信。 -->
+        <field name="emailEncrypted" type="ciphertext" column="email_encrypted" nullable="false"/>
+
+        <!--
+            ⚠️ nullable 是**有意的**，不是遗漏：首次 OTP 验证即建行，那一刻还没有
+            username（§5.2 的注册中间态）。强制补全由 T-108 的 Kernel 监听器负责。
+        -->
+        <field name="username" type="text" column="username" nullable="true"/>
+
+        <field name="locale" type="text" column="locale" nullable="false"
+               enum-type="App\Module\Identity\Domain\ValueObject\Locale">
+            <options>
+                <option name="default">de</option>
+            </options>
+        </field>
+
+        <field name="status" type="text" column="status" nullable="false"
+               enum-type="App\Module\Identity\Domain\ValueObject\UserStatus">
+            <options>
+                <option name="default">active</option>
+            </options>
+        </field>
+
+        <!-- §8.4 删除宽限期的起点。 -->
+        <field name="deletionRequestedAt" type="datetimetz_immutable"
+               column="deletion_requested_at" nullable="true"/>
+
+        <field name="createdAt" type="datetimetz_immutable" column="created_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+        <field name="updatedAt" type="datetimetz_immutable" column="updated_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+    </entity>
+
+</doctrine-mapping>

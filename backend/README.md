@@ -6,8 +6,9 @@ Symfony 7.4 (LTS) / PHP 8.3+ **模块化单体**。骨架与质量门禁由 T-00
 刻意不用品牌名 —— 品牌名（Q1）在 [ADR-0002](../docs/adr/0002-brand-name-and-domain.md) 里还挂着
 `Proposed`，用 `App\` 则将来改名对 `backend/` 的源码零影响。
 
-持久化目前只有 **Doctrine DBAL**（T-003 为了 `/health/ready` 探活引入），
-没有 ORM —— 实体映射与第一个迁移属 T-101。
+持久化是 **Doctrine DBAL + ORM**（DBAL 由 T-003 为 `/health/ready` 探活引入，
+ORM 与第一个迁移由 T-101 落地）。映射的形态相当特殊，动实体之前先读
+[持久化约定](#持久化约定doctrine-orm)。
 `doctrine/doctrine-bundle` 钉在 **2.x**：3.x 起要求 PHP ^8.4，而本项目按 §12.2
 跑 8.3（`composer.json` 的 `config.platform.php` 与 CI 的 `php-version` 都是 8.3）。
 
@@ -197,9 +198,12 @@ username 的 10 次总计归 users 行（T-107）。它们是生命周期计数�
 
 | 接口 | 用途 | 谁会用 |
 |---|---|---|
-| `CryptoServiceInterface` | 单条 `encrypt` / `decrypt` | T-101（email）、T-109（建卡/改卡） |
+| `CryptoServiceInterface` | 单条 `encrypt` / `decrypt` | `users.email_encrypted`（T-101 建列，T-102/104 填）、T-109（建卡/改卡） |
 | `BatchDecryptorInterface` | **批量** `decrypt`，一次请求解一批 | T-109 列表、T-203 bootstrap |
 | `HmacHasherInterface` | 带 pepper 的 HMAC-SHA256，返回 32 字节裸摘要 | `email_hash`、`barcode_value_fingerprint`、`code_hash` |
+
+> `HmacHasherInterface::hash()` 返回的 32 字节裸摘要在进实体之前要包成
+> `Shared\Domain\Crypto\HashDigest`（T-101）—— 理由与 `Ciphertext` 同源，见下一节第 2 条。
 
 **四条规矩**
 
@@ -229,6 +233,61 @@ staging/prod 用 `VAULT_ROLE_ID` + `VAULT_SECRET_ID` 走 AppRole。
 **运维**：生产每次重启后 Vault 是封印状态，必须人工 unseal ——
 [ADR-0004](../docs/adr/0004-manual-vault-unseal.md) 与
 [`docs/runbooks/vault-unseal.md`](../docs/runbooks/vault-unseal.md)。
+
+## 持久化约定（Doctrine ORM）
+
+T-101 落地。完整论证在
+[ADR-0011](../docs/adr/0011-doctrine-orm-xml-mapping-and-module-owned-foreign-keys.md)，
+这里只列会绊住人的五条。
+
+**1. 映射是 XML，不是属性。** 实体在 `Module/<M>/Domain/Entity/`，是纯 PHP；
+映射在 `Module/<M>/Infrastructure/Doctrine/Mapping/<Entity>.orm.xml`，在
+`config/packages/doctrine.yaml` 的 `orm.mappings` 里逐模块登记（`auto_mapping: false`）。
+不是风格选择：`deptrac.yaml` 里每个模块的 Domain 允许列表逐字是 `[Shared.Domain]`，
+`#[ORM\Entity]` 会 import `Doctrine\ORM\Mapping\*` → `Framework.Persistence` → violation。
+
+**2. 三个自定义 DBAL 类型，都在 `Shared\Infrastructure\Doctrine`。**
+
+| 类型 | PHP ↔ 列 | 挡住什么 |
+|---|---|---|
+| `uuid` | `Uuid` ↔ PG 原生 `uuid` | VARCHAR(36) 带来的索引膨胀（T-004） |
+| `ciphertext` | `Ciphertext` ↔ `TEXT` | 明文被写进 `*_encrypted` 列 |
+| `hash_digest` | `HashDigest` ↔ `BYTEA` | hex 被写进摘要列；用 `===` 比摘要（§7.1 要常量时间） |
+
+后两个**不收裸 `string`** —— 那正是它们存在的理由。`HashDigestType` 还要
+`getBindingType() = BINARY`：不然 pdo_pgsql 把裸字节当文本发，遇到 `0x00` 就截断，
+而摘要里出现 `0x00` 的概率约 12%。
+
+**3. 实体不是 `final`，属性不加 `readonly`。** 本仓库其余地方一律 `final readonly`，
+实体是例外：Doctrine 的懒加载对象要继承实体类并在实例已存在之后回填属性。
+「事实不可变」靠**没有 setter** 保证。每个实体类的注释都写了这一条，别顺手加回来。
+
+**4. 外键要建成 `<many-to-one>`，且暂时只在模块内部。**
+`doctrine:schema:validate` 会把库里的外键与 ORM 元数据对账，映射成普通 uuid 列的话
+那条命令永远绿不了。join-column 必须写 `on-delete` —— Comparator 不比外键**名字**
+（所以迁移里用 §5.2 要求的 `fk_<table>_<column>`），但**比 onDelete**。
+⚠️ 跨模块外键（T-109 的 `cards.owner_id → users`）是**未决问题**，见 ADR-0011 末尾。
+
+**5. 索引、唯一约束与每个 DEFAULT 都要在 XML 里再写一遍，名字与迁移逐字相同。**
+索引是**按名字**比的：不显式声明的话 DBAL 会自动补 `IDX_<hash>`（外键索引尤其容易忘），
+于是迁移里写什么名字都会 diff。DEFAULT 用 `<options><option name="default">now()</option></options>`。
+
+写完跑这两条对账，任何漂移都会当场现形：
+
+```bash
+composer migration:check   # 迁移 up/down 往返 + doctrine:schema:validate
+bin/console --env=test doctrine:schema:update --dump-sql   # 期望：Nothing to update
+```
+
+⚠️ `doctrine:schema:create --dump-sql` 生成的 SQL **不能直接抄进迁移**：
+DBAL 会把 `now()` 当字符串字面量输出成 `DEFAULT 'now()'`。它只能当对账参考。
+
+**仓储**：接口在 `Module/<M>/Domain/Repository/`（**不是** `Application/Port/` ——
+Port 的 deptrac 允许列表刻意不含本模块 Domain），实现在
+`Module/<M>/Infrastructure/Doctrine/`。`save()` 直接 `flush()`；
+多次写要原子就在 Application 层包一层
+`Shared\Application\Transaction\TransactionRunnerInterface::run()`
+（`use_savepoints: true` 让嵌套安全）。
 
 ## 分层职责
 
