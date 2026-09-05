@@ -43,13 +43,29 @@ ADR-0012 当时的处理是**悬置**：代码保持通道无关，`MAIL_PROVIDE
 
 ## Decision
 
-**发信通道 = n-cards.de 的域名邮箱，SMTP submission（587 / STARTTLS），托管方 dogado GmbH。**
+**发信通道 = n-cards.de 的域名邮箱，SMTPS submission（465 / implicit TLS），托管方 dogado GmbH。**
 
 - `MAIL_PROVIDER=dogado`（`unset` 这个占位值退役）
-- `MAILER_DSN=smtp://<邮箱账号>:<口令>@<dogado 面板给出的 SMTP 主机>:587`，
-  仍然是凭据，仍然只走 sops(age)
+- `MAILER_DSN=smtps://<邮箱账号>:<口令>@<dogado 面板给出的 SMTP 主机>:465`，
+  仍然是凭据，仍然只走 sops(age)。**scheme 是 `smtps` 不是 `smtp`**，理由见下
 - `MailSenderInterface` 以上**一行代码都不改**。这正是 ADR-0012 决定 4 那两个
   deptrac 图层要保证的事，本次换选型是对那层抽象的第一次真实检验，它通过了
+
+#### 为什么是 `smtps://…:465` 而不是 `smtp://…:587`
+
+面板给的就是 465 / SSL-TLS，本项遵循 runbook「端口以面板为准，不要猜」那条。
+但**即使两个端口都通，也应当选 465**，理由不在配置风格而在失败模式
+（下面三条行号是本仓库装着的 `symfony/mailer` 源码，不是记忆）：
+
+- `Smtp/EsmtpTransport.php:182` —— STARTTLS **只在服务器主动通告时**才尝试。
+- `Smtp/EsmtpTransport.php:193` —— 兜底的 `require_tls` **默认是 `false`**。
+- 合起来：`smtp://…:587` 连上一个不通告 STARTTLS 的服务器时**不会报错**，
+  而是继续用**明文** AUTH 把邮箱口令发上公网，且日志全绿。
+
+465 是 implicit TLS，全程没有明文阶段，不存在这条静默降级路径。
+`smtp://…:465` 其实也能工作（`EsmtpTransport.php:57` 有一条「端口是 465 就开 TLS」
+的启发式），但那是把安全性押在端口号的隐式约定上 —— 写 `smtps` 让意图显式，
+将来有人改端口时也不会静默退化成明文。
 
 ### 三条合规硬要求逐条核对（§8.3，不可放宽）
 

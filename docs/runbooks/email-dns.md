@@ -15,7 +15,7 @@
 
 **Q3 已决（2026-09-05，[ADR-0013](../adr/0013-mail-via-domain-mailbox.md)）：
 发信走 `n-cards.de` 自己的域名邮箱，托管方 dogado GmbH（德国多特蒙德），
-标准 SMTP submission（587 / STARTTLS）。不采购专业 ESP。**
+**SMTPS submission（465 / implicit TLS，面板给的端口）**。不采购专业 ESP。**
 
 `MAIL_PROVIDER=dogado`。这不是对 §3.2 的偏离 —— §3.2 在 v1.1 里已经把
 「专业 ESP 强制」撤销成「**普通商业邮箱服务**，仅要求处理地在 EU/EEA」，
@@ -67,8 +67,11 @@ MX     n-cards.de          MX     10 mx03/mx04.secure-mailgate.com              
 
 - [ ] AVV 已签署并归档，dogado 已列进 §8.3 的子处理者清单与隐私声明
 - [ ] 在 dogado 面板里**建好了发信邮箱**并拿到口令（地址取值见下面的「一个账号」）
-- [ ] 从 dogado 面板 / 帮助中心抄下 **SMTP 主机名与端口**（**不要凭印象猜**，见下）。
-      SPF include 与 DKIM selector 已经实测出来了，见「现状」段
+- [ ] 从 dogado 面板 / 帮助中心抄下 **SMTP 主机名**（**不要凭印象猜**，见下）。
+      端口、SPF include 与 DKIM selector 都已经拿到了，见「现状」段 ——
+      端口是 **465 / SSL-TLS**（面板 2026-09-06），因此 DSN 的 scheme 必须是
+      `smtps://` 而不是 `smtp://`：587 那条路在服务器不通告 STARTTLS 时会
+      **静默退回明文 AUTH**（`require_tls` 默认 false），465 没有这条降级路径
 - [ ] 有 `n-cards.de` 的 DNS 管理权限（DNS 可能也在 dogado，也可能在别处 —— 先确认）
 - [ ] **测过认证账号能否用别名做 `From:`**（见下面的「一个账号 + 只收别名」）
 
