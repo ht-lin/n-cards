@@ -35,6 +35,15 @@ T-102 要交付「邮件通道与双语模板」。落地时有四个决定必�
 
 ### 1. Q3 不在本 PR 内决定；代码保持通道无关
 
+> ⛔ **本决定已被 [ADR-0013](0013-mail-via-domain-mailbox.md) 取代（2026-09-05 当日）。**
+> Q3 已定案：发信走 **n-cards.de 的域名邮箱**（托管方 dogado GmbH），
+> 不引入专业 ESP，`MAIL_PROVIDER=dogado`。
+> 下面这一段保留为决策记录 —— 它解释了「悬置」当时为什么是对的，
+> 以及为什么那个理由在创始人做出选择之后就不再成立。
+>
+> **本 ADR 的其余三个决定（2 / 3 / 4）不受影响，全部仍然生效。**
+> 反过来说，换选型时那三条一行都没动，正是决定 4 那两个 deptrac 图层的意义。
+
 `MAILER_DSN` 走标准 SMTP DSN，`MailSenderInterface` 之后只有 Symfony Mailer，
 没有任何服务商 SDK。`MAIL_PROVIDER` 环境变量默认 `unset`。
 
@@ -151,7 +160,9 @@ Postgres 那边本来就有 WAL 与备份（T-406）。
 
 **负面 / 需要记账**
 
-- Q3 仍未决，两条交付物顺延（见上），其中 4 次手工送达验证是**上线必需项**。
+- ~~Q3 仍未决，两条交付物顺延（见上），其中 4 次手工送达验证是**上线必需项**。~~
+  → 已由 [ADR-0013](0013-mail-via-domain-mailbox.md) 关闭前置阻塞（选型 = dogado 域名邮箱）。
+  DNS 记录现在可以配了；4 次手工送达验证**本身仍然欠着**，且仍是 §15.1 的上线必需项。
 - `messenger_messages` 是本仓库第一张、也是唯一一张不受 ORM 管的表。
   `schema_filter` 的存在意味着它的结构漂移**不会**被 `schema:validate` 发现 ——
   升级 `symfony/doctrine-messenger` 时要人工核对一次 DDL。

@@ -301,9 +301,21 @@ docker compose --profile dev up -d mailpit     # http://localhost:8025
 不起栈也能看四封信 × 两种语言的渲染结果：
 `vendor/bin/phpunit --filter MailTemplateRenderingTest`。
 
-**运维**：换服务商 / R1 触发时的处置（改 `MAILER_DSN` + 重启 worker）、
-SPF / DKIM / DMARC 记录 —— [`docs/runbooks/email-dns.md`](../docs/runbooks/email-dns.md)。
-⚠️ Q3（服务商选型）**仍未决**，DNS 记录与 §3.2 的 4 次手工送达验证都还欠着，
+**通道**：Q3 已决（[ADR-0013](../docs/adr/0013-mail-via-domain-mailbox.md)）——
+发信走 `n-cards.de` 的**域名邮箱**（托管方 dogado GmbH，德国），标准 SMTP，
+**不采购专业 ESP**。`MAIL_PROVIDER=dogado`。换选型时改的只有 `MAILER_DSN` 与
+`MAIL_PROVIDER` 两个环境变量，`MailSenderInterface` 以上一行代码没动。
+
+⚠️ 代价记在 ADR 里，有两条会影响写代码的人：
+① **有发信配额**，超了是被托管商停用账号（R1），所以熔断阈值下调到了
+**200 / 500**（`ncards_mail.yaml`，且那两个数**目前是猜的**）；
+② **没有 bounce / 投诉回路，也没有投递 webhook** —— `email_send_total{result}`
+与 §14.4 的 OTP 转化率告警是仅有的两个送达信号，别指望还有别的地方能看投递结果。
+
+**运维**：R1 触发时的处置、SPF / DKIM / DMARC 记录、配额天花板的判读 ——
+[`docs/runbooks/email-dns.md`](../docs/runbooks/email-dns.md)。
+⚠️ 仍然欠着：dogado 的 DKIM 是否可用（**不支持即为硬阻塞**）、实测配额、
+签 AVV，以及 §3.2 的 4 次手工送达验证（§15.1 上线必需项）——
 见 [`docs/tasks/M1.md`](../docs/tasks/M1.md) 的 T-102 回填块。
 
 ## 持久化约定（Doctrine ORM）

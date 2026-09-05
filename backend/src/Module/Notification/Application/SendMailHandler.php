@@ -44,7 +44,8 @@ final readonly class SendMailHandler
 {
     /**
      * @param non-empty-string $provider §14.4 `email_send_total` 的 provider 标签。
-     *                                   Q3（§17.5）未决前是 `unset`
+     *                                   Q3 已决（ADR-0013）：`dogado`，即
+     *                                   `n-cards.de` 的域名邮箱
      */
     public function __construct(
         private MailTransportInterface $transport,

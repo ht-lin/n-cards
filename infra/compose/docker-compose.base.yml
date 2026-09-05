@@ -293,7 +293,8 @@ services:
       MAILER_DSN: ${MAILER_DSN:-null://null}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-no-reply@n-cards.de}
       MAIL_FROM_NAME: ${MAIL_FROM_NAME:-N-Cards}
-      MAIL_PROVIDER: ${MAIL_PROVIDER:-unset}
+      # Q3 已决（ADR-0013）：n-cards.de 的域名邮箱，托管方 dogado GmbH。
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-dogado}
 
     # 与 app 同一套加固（§7.4）。
     read_only: true

@@ -24,9 +24,12 @@ use Twig\Environment;
  * 而那句话成立的唯一原因是：换服务商 = 改 `MAILER_DSN` 一个环境变量，
  * 本类以上的每一行代码都不用动。
  *
- * 所以这里**不允许**出现任何服务商特有的东西：没有 Brevo/Mailjet/Postmark 的
- * SDK、没有它们的自定义 header、没有按服务商分支的 if。真需要那种东西时，
- * 说明选型本身选错了（Q3 的三条硬要求之一就是「走标准 SMTP 或 API 均可」）。
+ * 所以这里**不允许**出现任何服务商特有的东西：没有服务商 SDK、没有它们的自定义
+ * header、没有按服务商分支的 if。真需要那种东西时，说明选型本身选错了
+ * （Q3 的三条硬要求之一就是「走标准 SMTP 或 API 均可」）。
+ *
+ * Q3 已决（ADR-0013）：通道是 `n-cards.de` 的域名邮箱（dogado GmbH），
+ * 标准 SMTP submission。**换选型时本文件一行都没改** —— 这道墙的第一次真实检验。
  *
  * deptrac 兜底：`Framework.Mail` 与 `Framework.Templating` 两层只加进了
  * `Notification.Infrastructure` 的允许列表，别的地方 import `MailerInterface`
