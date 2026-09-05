@@ -39,9 +39,20 @@
     # ------------------------------------------------------------------
     - name: 部署
       block:
+        # ⚠️ `tags: always` 不是「这一步不可跳过」的意思，是让 `--tags` 能穿进去。
+        # include_role 是**动态**包含：role 内部的 tag（preflight/env/…/health）
+        # 直到运行时才被解析，而 `--tags health` 是在解析期过滤 play 的任务的 ——
+        # 这个 include 自己没 tag，于是先被滤掉，role 根本没被打开，
+        # 里面的 health 也就永远没机会匹配。表现是一个**空的 PLAY RECAP**
+        # （一条任务都没跑过的主机不会出现在 recap 里），看起来像「跑完了、没事」。
+        # 标 always 之后：include 总是被选中，role 内部的 tag 在运行时正常过滤，
+        # `--tags health` / `--skip-tags snapshot` 都按预期工作。
+        # 不用穷举 tag 列表，是因为那份列表会在 main.yml 加新 tag 时悄悄过期 ——
+        # 而过期的表现正是上面那个「空 RECAP」，没有任何报错。
         - name: 执行部署流程
           ansible.builtin.include_role:
             name: ncards_stack
+          tags: [always]
 
       rescue:
         # 走到这里说明某一步**抛错**了（拉不到镜像、compose 起不来、迁移失败…），
