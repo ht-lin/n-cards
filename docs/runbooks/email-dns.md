@@ -14,8 +14,16 @@
 ## 现状（读之前先知道）
 
 **Q3 已决（2026-09-05，[ADR-0013](../adr/0013-mail-via-domain-mailbox.md)）：
-发信走 `n-cards.de` 自己的域名邮箱，托管方 dogado GmbH（德国多特蒙德），
-**SMTPS submission（465 / implicit TLS，面板给的端口）**。不采购专业 ESP。**
+发信走 `n-cards.de` 自己的域名邮箱，托管方 dogado GmbH（德国多特蒙德）。
+不采购专业 ESP。**
+
+**端口 2026-09-06 改为 587 / STARTTLS + `require_tls=true`**（原定 465 / implicit TLS）。
+不是选型变了，是 **Hetzner 封了 465 出站**，实测见 [§2.4](#若报-operation-timed-out)。
+DSN 形态：
+
+```
+smtp://<账号>:<口令>@web246.dogado.net:587?require_tls=true
+```
 
 `MAIL_PROVIDER=dogado`。这不是对 §3.2 的偏离 —— §3.2 在 v1.1 里已经把
 「专业 ESP 强制」撤销成「**普通商业邮箱服务**，仅要求处理地在 EU/EEA」，
@@ -34,10 +42,19 @@
 **2026-09-06 实测的 zone 现状**（`dig` 出来的，不是面板抄的；DNS 会变，重做本文前先复查一遍）：
 
 ```
-SPF    n-cards.de          TXT    "v=spf1 a mx include:secure-mailgate.com ~all"   ← 已自动写入，但是 ~all
+SPF    n-cards.de          TXT    "v=spf1 a mx include:secure-mailgate.com -all"   ← 已收紧到 -all
 DKIM   cloudpit._domainkey TXT    "v=DKIM1; k=rsa; p=MIGf..."                      ← 1024 位 RSA，已在位
-DMARC  _dmarc.n-cards.de   —      不存在                                           ← §2.3 阶段 ① 尚未开始
+DMARC  _dmarc.n-cards.de   TXT    "v=DMARC1; p=none; rua=mailto:dmarc@n-cards.de;
+                                   adkim=s; aspf=s"                                ← §2.3 阶段 ① 已发布
 MX     n-cards.de          MX     10 mx03/mx04.secure-mailgate.com                 ← 邮件托管是活的
+```
+
+**三条记录现在全部在位**（SPF 与 DMARC 是 2026-09-06 当天改的，本文早先的版本记的是
+`~all` + `_dmarc` 不存在）。⚠️ **阶段 ① 的 7 天观察窗口从 DMARC 发布那天起算 ——
+把实际发布日期确认下来填在这里**，它是进入阶段 ② 的判据之一：
+
+```
+DMARC 阶段 ① 发布日：2026-09-06（待确认）→ 最早可进阶段 ②：2026-09-13
 ```
 
 **还欠着的（已记在 `docs/tasks/M1.md` 的 T-102 回填块）：**
@@ -47,7 +64,9 @@ MX     n-cards.de          MX     10 mx03/mx04.secure-mailgate.com              
    `d=n-cards.de`**（见 §2.4），在那之前不要推进 §2.3 的阶段 ②。
 2. 与 dogado **签署 AVV** 并归档（归 T-450）。
 3. 查实**发信配额**，回来校准熔断阈值 —— 见 §4。**这条现在是最大的未知。**
-4. 收紧 SPF 到 `-all`（§2.1）、发布 DMARC 阶段 ①（§2.3）—— 两条都可以现在就做。
+4. ~~收紧 SPF 到 `-all`（§2.1）、发布 DMARC 阶段 ①（§2.3）~~ —— **两条都已做**
+   （2026-09-06 实测）。接下来是**看 `dmarc@n-cards.de` 收到的聚合报告**：
+   判据是「我们自己发的邮件 100% 通过 SPF 或 DKIM 对齐」，见 §2.3 那张表。
 5. §3.2 的 4 次手工送达验证（Gmail / GMX / Web.de / Outlook），§15.1 的**上线必需**项。
 6. 确认**认证账号能否用别名做 `From:`** —— 见 §1，影响发信地址的最终取值。
 
@@ -68,10 +87,9 @@ MX     n-cards.de          MX     10 mx03/mx04.secure-mailgate.com              
 - [ ] AVV 已签署并归档，dogado 已列进 §8.3 的子处理者清单与隐私声明
 - [ ] 在 dogado 面板里**建好了发信邮箱**并拿到口令（地址取值见下面的「一个账号」）
 - [ ] 从 dogado 面板 / 帮助中心抄下 **SMTP 主机名**（**不要凭印象猜**，见下）。
-      端口、SPF include 与 DKIM selector 都已经拿到了，见「现状」段 ——
-      端口是 **465 / SSL-TLS**（面板 2026-09-06），因此 DSN 的 scheme 必须是
-      `smtps://` 而不是 `smtp://`：587 那条路在服务器不通告 STARTTLS 时会
-      **静默退回明文 AUTH**（`require_tls` 默认 false），465 没有这条降级路径
+      SPF include 与 DKIM selector 都已经拿到了，见「现状」段
+- [ ] **确认云厂商放行了你要用的那个出站端口** —— 见下面的「端口取值」。
+      这一条 2026-09-06 之前不在清单里，代价是 T-102 卡了两轮
 - [ ] 有 `n-cards.de` 的 DNS 管理权限（DNS 可能也在 dogado，也可能在别处 —— 先确认）
 - [ ] **测过认证账号能否用别名做 `From:`**（见下面的「一个账号 + 只收别名」）
 
@@ -79,6 +97,41 @@ MX     n-cards.de          MX     10 mx03/mx04.secure-mailgate.com              
 > **SPF include 写错的症状是邮件照发不误、但对齐失败**，只在 DMARC 聚合报告里
 > 才看得出来，而那要等到 §2.3 的阶段 ① 观察窗口结束 —— 一周之后才发现配错，
 > 是本文最贵的一种错误。以面板给出的字面值为准。
+
+### 端口取值：587 / STARTTLS，不是面板给的 465
+
+面板给的是 **465 / SSL-TLS**，ADR-0013 据此定了 `smtps://…:465`。
+**2026-09-06 实测：Hetzner 封了 465 出站**（连 25 一起封，587 是通的），
+于是端口改成 587，scheme 相应从 `smtps://` 改回 `smtp://`：
+
+```
+smtp://<账号>:<口令>@web246.dogado.net:587?require_tls=true
+                                          ^^^^^^^^^^^^^^^^^ 不能省，理由见下
+```
+
+⚠️ **`require_tls=true` 是这条 DSN 里最重要的一个参数，不是可选的调优项。**
+ADR-0013 当初选 465 的理由是 587 有一条**静默降级路径** —— 服务器不通告 STARTTLS 时
+Symfony 不报错，而是继续用**明文 AUTH** 把邮箱口令发上公网，且日志全绿。
+那个顾虑成立，但它的正解不是换端口，是显式断言
+（`backend/vendor/symfony/mailer/Transport/Smtp/EsmtpTransport.php:194`）：
+
+```php
+if (!$tlsStarted && $this->isTlsRequired()) {
+    throw new TransportException('TLS required but neither TLS or STARTTLS are in use.');
+}
+```
+
+关键在于这一段位于 `handleAuth()` **之前**（第 198 行）—— TLS 没起来就直接抛异常，
+**口令根本不会被送出去**。这比 465 更硬：465 靠的是「没有降级路径」这个隐含前提，
+587 + `require_tls` 靠的是一条会响的断言，失败时是异常而不是沉默。
+（`require_tls` 需要 `symfony/mailer` ≥ 7.3；本仓库是 7.4.17，见 `composer.lock`。）
+
+⚠️ scheme 必须是 `smtp://` 而**不是** `smtps://`。`smtps` 强制 implicit TLS，
+套在 587 上是握手失败 —— 587 要先明文连上再 STARTTLS 升级。
+
+dogado 的 587 实测（2026-09-06）：`STARTTLS` → TLSv1.2，证书 `CN=*.dogado.de`，
+SAN 含 `*.dogado.net`（所以 `web246.dogado.net` 校验通得过），升级后通告
+`250-AUTH PLAIN LOGIN`。
 
 ### 一个账号 + 只收别名（这个套餐的硬约束）
 
@@ -116,21 +169,17 @@ dogado 的这个域名套餐只给 **1 个邮箱账号**，其余地址只能是
 
 ### 2.1 SPF
 
-**dogado 已经自动写入了一条**，2026-09-06 实测：
+**✅ 已完成**（dogado 自动写入 + 我们把 `~all` 收紧成 `-all`），2026-09-06 实测：
 
 ```dns
-n-cards.de.    TXT    "v=spf1 a mx include:secure-mailgate.com ~all"     ← 现状
+n-cards.de.    TXT    "v=spf1 a mx include:secure-mailgate.com -all"     ← 现状 = 目标
 ```
 
 `secure-mailgate.com` 就是权威的 include 值（它自己的 SPF 里含 `a:mailcloud.dogado.de`，
 确属 dogado；MX 也指向 `mx03/mx04.secure-mailgate.com`）。**照用，不要改成别的**——
 托管商换机器、换 IP 段时靠改这条 include 平滑过渡，写死 IP 会在某天静默失效。
 
-**要做的唯一一处改动是把 `~all` 收紧成 `-all`：**
-
-```dns
-n-cards.de.    TXT    "v=spf1 a mx include:secure-mailgate.com -all"     ← 目标
-```
+下面几条是**当初为什么这么写**，重做这一节或换托管商时按同一套判据来：
 
 - `-all`（hard fail）而不是 `~all`。一期只有一个发信通道，**没有**别的系统需要
   用这个域发信，所以「不在名单里的一律拒收」是准确的描述。
@@ -201,10 +250,21 @@ cloudpit._domainkey.n-cards.de.    1200    TXT    "v=DKIM1; k=rsa; p=MIGfMA0GCSq
 §3.2 要求 `p=quarantine` → `reject`。中间必须有观察期，否则配错的直接后果是
 **全部登录邮件被拒收**，而那是 R1（影响「致命」）。
 
-**现状（2026-09-06 实测）：`_dmarc.n-cards.de` 不存在，阶段 ① 尚未开始。**
-SPF 与 DKIM 都已在位，所以阶段 ① 现在就可以发布 —— 而且**应该尽早发布**：
-它是唯一能大规模验证对齐的手段，7 天观察窗口是后面两个阶段的前置。
-发布前先建好 `dmarc@n-cards.de` 这个**收信别名**（不受「别名不能发信」约束）。
+**现状（2026-09-06 实测）：阶段 ① 已发布，观察窗口进行中。**
+
+```dns
+_dmarc.n-cards.de.    TXT    "v=DMARC1; p=none; rua=mailto:dmarc@n-cards.de; adkim=s; aspf=s"
+```
+
+⚠️ **现在的动作是「看报告」，不是「往下推」。** 阶段 ② 有两个前置，缺一不可：
+
+1. **≥ 7 天**观察窗口（起算日见「现状」段，需要确认发布日期）；
+2. **§2.4 的实发验证通过** —— 聚合报告能证明对齐率，但证明不了 `d=` 是我们的域
+   （见 §2.2「为什么这条记录同时是证据」那段：`d=dogado.de` 也能让 DKIM `pass`，
+   却过不了 `adkim=s`）。这封信到现在还没发出去，**它才是当前的关键路径**。
+
+`dmarc@n-cards.de` 这个**收信别名**要建好（不受「别名不能发信」约束），
+且 `rua` 收到的报告**必须真的有人看** —— 阶段 ① 的判据全靠它，没人看等于没观察。
 
 | 阶段 | 记录 | 停留时间 | 进入下一阶段的判据 |
 |---|---|---|---|
@@ -217,8 +277,6 @@ _dmarc.n-cards.de.    TXT    "<上表对应阶段的那一串>"
 ```
 
 - `adkim=s` / `aspf=s`（严格对齐）：一期没有任何子域发信，宽松对齐换不来好处。
-- `rua` 收报告的地址**必须真的有人看** —— 阶段 ① 的判据全靠它。
-  它可以是一个普通邮箱，不需要走本系统。
 - ⚠️ **不配 `ruf`**（取证报告）。它会把**真实收件人地址**发给我们，
   等于凭空多一条个人数据流入，而 §8.2 的 ROPA 里没有它的位置。
 
@@ -242,10 +300,108 @@ MTA 真的在给我们的邮件签名（有些托管商只签 webmail 发出的�
 「认证账号能否用别名做 `From:`」。所以特意把 `--from` 指成与 SMTP 账号**不同**的地址：
 
 ```bash
-# 在 staging 上发一封（收件人用团队自己的邮箱，Gmail 最方便看认证结果）
-docker compose exec -T app bin/console mailer:test \
+# 在 staging 主机上发一封（收件人用团队自己的邮箱，Gmail 最方便看认证结果）
+ssh -p 2242 deploy@api.staging.n-cards.de
+cd /opt/ncards
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml
+
+docker compose exec -T worker bin/console mailer:test \
   <团队测试邮箱> --from=no-reply@n-cards.de
 ```
+
+⚠️ **那三个 compose 文件必须显式列出**（`COMPOSE_FILE` 或三个 `-f`）。它们不叫
+`compose.yaml` / `docker-compose.yml`，不在 compose 的默认发现名单里，所以在**任何**
+目录下裸跑 `docker compose` 都只会得到 `no configuration file provided: not found`。
+项目目录由第一个文件的位置决定，`.env`（Ansible 用 `env.j2` 渲染的那份）也从那里读，
+所以 `cd /opt/ncards` 是对的 —— 部署路径下**没有** `compose/` 这个目录，
+compose 文件在 `infra/compose/`。生产主机的叠加链只有前两个文件（没有 `.staging.yml`）。
+
+⚠️⚠️ **必须是 `worker`，不是 `app`。** `MAILER_DSN` 只注入了 `worker` 一个服务
+（见 `docker-compose.base.yml` 与 `.prod.yml`）——`app` 容器里根本没有这个变量，
+Symfony 于是回落到镜像里 `backend/.env` 的 `MAILER_DSN=null://null`，
+而 null 传输**吞掉邮件并返回退出码 0**。命令一声不响地「成功」，信永远不会到。
+这是本节最容易被误读成「dogado 不签 DKIM」或「进了垃圾箱」的一种失败 ——
+它根本没发出去过。
+
+#### 若报 `getaddrinfo ... failed: Try again`
+
+```
+Connection could not be established with host "ssl://web246.dogado.net:465":
+stream_socket_client(): php_network_getaddresses:
+getaddrinfo for web246.dogado.net failed: Try again
+```
+
+**这不是 dogado 的问题，也不是 DNS 抽风，重试没有意义。** `Try again`（EAI_AGAIN）
+是解析器**无法应答**，不是「域名不存在」—— 主机名本身是好的（`dig +short
+web246.dogado.net` 在宿主机上一秒就出 IP）。差别在于容器：worker 原先**只连
+`backing` 这一张网，而它是 `internal: true`，出站被整个掐断**。docker 的内嵌
+DNS（127.0.0.11）遇到非容器名要转发给宿主机的上游解析器，那条转发在 internal
+网络上发不出去，于是超时（注意日志里两条时间戳正好差 5 秒，NXDOMAIN 是立刻返回的）。
+
+修复是给 worker 加一张**只用于出站**的 `egress` 网络（`docker-compose.base.yml`，
+2026-09-06）。`backing` 保持 internal 不变 —— postgres / redis / vault 依旧连不出去。
+拉到主机上重建即可：
+
+```bash
+docker compose up -d --force-recreate worker
+docker compose exec -T worker getent hosts web246.dogado.net   # 应当打印 IP
+```
+
+> 为什么现在才发现：本地栈的 `MAILER_DSN` 指向同在 `backing` 上的 mailpit
+> 或 `null://null`，**根本不需要出站**。这条路径只有在真实 SMTP 上才会走到，
+> 而这是第一次真发。
+
+排除网络之后若仍连不上，往下看。
+
+#### 若报 `Operation timed out`
+
+```
+Connection could not be established with host "ssl://web246.dogado.net:465":
+stream_socket_client(): Unable to connect to ssl://web246.dogado.net:465
+(Operation timed out)
+```
+
+**和上一条是两回事，别混。** 上一条是名字解析不出来（我们自己的网络分层），
+这一条是名字解析对了、TCP 握手没有回音。`timed out` 而不是
+`Connection refused` —— 包被**静默丢弃**，是防火墙 DROP 的签名，
+不是服务器忙、不是重试能好。
+
+两条命令定位，**关键是带对照端口**（`993` / `443` 是同一台 dogado 主机上开着的
+别的服务，用来排除「这个 IP 不可达 / 路由坏了」，把问题钉死在「端口」这一维）：
+
+```bash
+# ① 从主机本身（绕开 docker）
+for p in 465 587 25 993 443; do
+  timeout 8 bash -c "cat < /dev/null > /dev/tcp/31.47.253.149/$p" 2>/dev/null \
+    && echo "host $p OPEN" || echo "host $p BLOCKED"
+done
+
+# ② 从容器里（worker 镜像没有 nc，用 PHP）
+docker compose exec -T worker php -r 'foreach([465,587,993,443] as $p){$t=microtime(true);$s=@stream_socket_client("tcp://31.47.253.149:$p",$e,$m,8);printf("%-4d %s (%.1fs)%s",$p,$s?"OPEN":$m,microtime(true)-$t,PHP_EOL);}'
+```
+
+| ① 目标端口 | ① 对照端口 | ② 容器 | 结论 |
+|---|---|---|---|
+| BLOCKED | OPEN | 与 ① 一致 | **云厂商在网络层封了这个端口**，我们这侧改什么都没用 |
+| OPEN | OPEN | 超时 | 出在 docker 转发 / ufw 的 `FORWARD` 链，不是 provider |
+| 全 BLOCKED | — | — | 主机出站整个不通，先查 ufw 与云控制台的防火墙规则 |
+
+**2026-09-06 在 staging 上的实测结果（第一行）：**
+
+```
+25  BLOCKED    465 BLOCKED    587 OPEN    993 OPEN    443 OPEN
+```
+
+Hetzner 默认封 **25 与 465** 出站，**587 不封**。ADR-0013 否掉「自建 Postfix」那一段
+只写了「Hetzner 默认封 25」，因而假定走托管邮箱的 465 submission 不受影响 ——
+那个假定从来没被测过，直到第一次真发。处置是**改用 587**（见 §1「端口取值」），
+不是等工单：`smtp://…:587?require_tls=true`，改 sops 里的 `MAILER_DSN` 后重建 worker。
+
+> 也可以开工单请 Hetzner 解封 **465/TCP 出站（IPv4 + IPv6）**，用途写明
+> 「认证 SMTP submission 至单一 relay，事务邮件，非群发」。
+> **2026-09-06 决定：暂不开**，587 已经够用，留作 465 真被需要时的后手。
+> ⚠️ 若要开，**只申请 465，不要顺手带上 25** —— 我们是 submission 客户端，
+> 永远用不到 25，而 25 恰是审得最严的那个，写进去只会拖慢审批。
 
 在收件端打开「显示原始邮件 / Original anzeigen」，确认四行：
 
@@ -257,6 +413,11 @@ Return-Path: <no-reply@n-cards.de>
 From: no-reply@n-cards.de
       ^^^^^^^^^^^^^^^^^^^ 若被静默改写成 SMTP 账号地址，见下面第二条
 ```
+
+> `Return-Path`（SMTP 信封发件人，SPF 校验的就是它）**不来自 `--from`**，
+> 而来自 `mailer.yaml` 的 `envelope.sender`，也就是 `MAIL_FROM_ADDRESS`。
+> 两者眼下取值相同，所以这一行对上是应该的 —— 但它**不是**下面那个
+> 「别名能不能做 `From:`」问题的证据，只有 `From:` 那一行是。
 
 ⚠️ **`d=` 那一行**：托管商有时用**自己的域**签名（`d=dogado.de` 之类）。那样 DKIM 本身
 `pass`，但 §2.3 的 `adkim=s`（严格对齐）会判定不对齐，于是 DMARC 只能靠 SPF 撑着 ——
@@ -305,7 +466,10 @@ From: no-reply@n-cards.de
 
 ```bash
 ssh -p 2242 deploy@<主机>
-cd /opt/ncards/compose
+cd /opt/ncards
+# 叠加链的三个文件必须显式给出，否则 `no configuration file provided: not found`。
+# 生产主机去掉最后一个 .staging.yml。
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml
 
 # ① worker 起着吗？
 docker compose ps worker
@@ -329,6 +493,9 @@ docker compose logs --tail=100 worker
 | 死信里是 `CryptoUnavailable` / Vault 相关 | **Vault 封了，不是邮件故障** | 走 [`vault-unseal.md`](vault-unseal.md)。消息还在队列里，unseal 后自动补发 |
 | `queue_name = failed` 有积压但 `default` 是空的 | 故障已过去，只剩历史死信 | 见下面「重投死信」 |
 | worker 容器根本没起来 | 多半是 `MAILER_DSN` 格式错（口令里的特殊字符没 percent-encode） | 修 DSN，同下 |
+| 死信里是 `getaddrinfo ... failed: Try again` | **worker 没有出站**（丢了 `egress` 网络，或 DSN 主机名写错） | 见 [§2.4](#若报-getaddrinfo--failed-try-again)。改 DSN 的口令部分没用 |
+| 死信里是 `Operation timed out`（不是 `refused`） | **出站端口被封**（云厂商网络层），不是通道故障 | 见 [§2.4](#若报-operation-timed-out)。Hetzner 封 25/465，587 通 |
+| 死信里是 `TLS required but neither TLS or STARTTLS are in use` | `require_tls` 挡住了一次明文降级 —— **这是它该干的事，不是 bug** | 别删 `require_tls`。查服务器为什么不通告 STARTTLS（换机器？端口写错？） |
 | 死信里是 SMTP **限额 / 速率**类错误（`4.7.x`、`too many messages`、`quota exceeded` 之类） | **超了 dogado 的发信配额**，不是通道故障 | 走 [§4](#4-发信配额这个通道的天花板)。改 DSN 没用 —— 换个账号发同样超 |
 
 ### 切换步骤
@@ -344,8 +511,9 @@ git commit -am 'ops: 切换发信通道（R1）' && git push
 #       push 到 main 即触发，见 deploy-and-rollback.md
 #    b) 主机上就地改（**只在赶时间时用**，且事后必须补做 a）
 ssh -p 2242 deploy@<主机>
-cd /opt/ncards/compose
-vi .env                                   # 改 MAILER_DSN 那一行
+cd /opt/ncards
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml
+vi infra/compose/.env                     # 改 MAILER_DSN 那一行
 docker compose up -d --force-recreate worker
 ```
 
