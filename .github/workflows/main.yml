@@ -24,17 +24,74 @@ name: main
 on:
   push:
     branches: [main]
+  # 每周一 03:00 UTC 的全量兜底，配合下面 `changes` 的 paths 判断使用：
+  # 合入时按 paths 跳过 instrumentation，靠这一趟保证「整棵树仍然是绿的」。
+  #
+  # ⚠️ 是**每周**不是每夜，这个频率是算过的：instrumentation 实测 25 分钟，
+  # 每夜跑一趟就是 750 分钟/月 —— 比 paths 判断省下来的还多，兜底反而把账吃掉。
+  # 每周 4 趟约 100 分钟，相对 2000 分钟/月的 Free 额度可以忽略。
+  schedule:
+    - cron: '0 3 * * 1'
+  # 发版前想手动过一遍全量（含 instrumentation）时用。
+  # ⚠️ 这个入口**不部署** —— 见 backend-image / deploy-staging 上的 `if`。
+  # 手动部署走 deploy-manual.yml，那边才有 production 的 Environment approval。
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 # 不取消进行中的运行：main 上每个 commit 的镜像都要推上去（tag 带 sha），
 # 取消会在 GHCR 上留下空洞，而 T-012 的部署是按 sha 找镜像的。
+#
+# group 里带 event_name 是为了不让定时/手动的那一趟排在合入前面：两者同组时，
+# 周一 03:00 撞上一次合入，会让 staging 白等一整趟 instrumentation ——
+# 那正是本次要消灭的等待。push 之间仍然共用一个组，序列化语义不变。
 concurrency:
-  group: main-pipeline
+  group: main-pipeline-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
+  # 只服务 instrumentation 一个消费者 —— 另外四条流水线合计 7 分钟，继续无条件全量跑
+  # （顶部那段「合进来之后整棵树仍然是绿的」的理由对它们成立）。25 分钟的模拟器则不然：
+  # #27–#34 连续八次合入（整个 T-012 / T-101 / T-102 段）一个 android 文件都没碰，
+  # 每次照付 25 分钟。
+  #
+  # 过滤清单与 pr.yml 里的 `android` 是同一份，**两处必须一起改**。唯一的差别是
+  # 「本 workflow 自己」那一行：那边是 pr.yml，这里是 main.yml —— 改了编排就该重跑
+  # 一次仪器测试。docs/api/** 与 checkApiClientUpToDate 的理由在 pr.yml:71-74，
+  # 这里同样适用。
+  #
+  # 只在 push 上跑：schedule / workflow_dispatch 没有「上一个 commit」可比，
+  # 而那两个入口本来就要无条件全量跑（见 instrumentation 的 `if`）。
+  #
+  # 不需要 pr.yml 那条 `pull-requests: read`：push 事件上 paths-filter 走本地 git
+  # 比对 `github.event.before`，不走 API。
+  changes:
+    name: changes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # 不显式传 base：默认值是仓库默认分支，而它与被推的分支同名（main），
+          # 这种情况下 paths-filter 比的正是「推送之前的那个 commit」——
+          # squash merge 进来的那一个 commit 的 diff，正是我们要判的东西。
+          filters: |
+            android:
+              - 'android/**'
+              - 'docs/api/**'
+              - '.github/workflows/android.yml'
+              - '.github/workflows/android-release.yml'
+              - '.github/workflows/main.yml'
+              - 'android/app/apk-size-baseline.txt'
+              - 'scripts/ci/check-apk-size.sh'
+
   backend:
     name: backend
     uses: ./.github/workflows/backend.yml
@@ -68,7 +125,19 @@ jobs:
   # 对应任务是 NO-SOURCE，不会启动模拟器。
   instrumentation:
     name: instrumentation
-    needs: android
+    needs: [android, changes]
+    # ⚠️ 这个条件是**故意 fail-open** 的，别「化简」成 `== 'true'`。
+    #
+    # `changes` 挂掉或被跳过时 outputs.android 是空串，空串 != 'false' → 照跑。
+    # 写成 `== 'true'` 的话，changes 一红，instrumentation 就静默跳过、main 照样绿 ——
+    # 与 pr.yml:44-48 记的是同一类失效（CI 全绿但什么都没跑），而且更难发现，
+    # 因为这里没有 pr-gate 那样的汇总去暴露它。
+    #
+    # `always()` 是 `if` 里引用 needs.*.result 的前提；`needs.android.result == 'success'`
+    # 把原来 `needs: android` 的语义显式写回来（android 红了就不必启模拟器）。
+    if: >-
+      always() && needs.android.result == 'success' &&
+      (github.event_name != 'push' || needs.changes.outputs.android != 'false')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -241,6 +310,9 @@ jobs:
   backend-image:
     name: backend-image
     needs: backend
+    # 定时/手动那两趟是「全量测一遍」，不是发布：重推一遍同 sha 的镜像没有意义，
+    # 而且会连带触发下面的 deploy-staging，把 staging 在无人值守的周一凌晨换掉。
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -277,11 +349,17 @@ jobs:
 
   # §14.3：「部署 staging（Ansible over SSH）→ 迁移 → 冒烟测试」。T-012 交付。
   #
-  # needs 沿用 T-011 在这里留的编排。⚠️ 代价要说清楚：instrumentation 实测 26 分钟，
-  # 于是「合入 main 到 staging 可用」端到端约 30 分钟，而 Android 仪器测试与后端
-  # 能不能部署**没有因果关系**。把它从 needs 里拿掉能省 20 多分钟 ——
-  # 但那是改 T-011 已记录在案的编排，不该顺手在 T-012 里做。留给 M1 重估
-  # （docs/tasks/M0.md 的交付产物段记着这条）。
+  # ⚠️ needs 里**没有** instrumentation，这是刻意的，别「补回来」。
+  #
+  # T-011 原本把它串在这里，代价实测 29m35s（M0.md 的 T-012 交付表）——「合入 main
+  # 到 staging 可用」的 30 分钟里，25 分钟是一组跑在模拟器上、与后端能不能部署
+  # **没有因果关系**的 Android 测试。M0.md 把这条记成留给 M1 的公开问题，现在答了：
+  # 拿掉。端到端从约 30 分钟降到约 4 分钟。
+  #
+  # 拿掉**不损失**任何覆盖：instrumentation 仍然在同一条 workflow 里跑、红了照样
+  # 在同一次 run 上可见，只是不再挡着后端部署。它测的是 core:crypto 与 core:database
+  # （Room + SQLCipher，纯本地，不碰后端），所以「先部署后知道仪器测试红了」这个
+  # 时序里，没有一种失败是本可以靠等它来拦住的。
   #
   # 部署逻辑在 reusable 的 deploy.yml 里，与 deploy-manual.yml 共用同一份定义。
   #
@@ -290,7 +368,7 @@ jobs:
   # 处置见 docs/runbooks/vault-unseal.md。
   deploy-staging:
     name: deploy-staging
-    needs: [backend-image, instrumentation]
+    needs: backend-image
     uses: ./.github/workflows/deploy.yml
     with:
       environment: staging

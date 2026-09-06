@@ -151,7 +151,7 @@ API 演进规则（§13.6）：可以新增端点/可选字段/响应字段/枚�
 | 单元测试覆盖 | `core:*` 与 `data:*` ≥ 70%（四条有记录在案的豁免，见 [`Coverage.kt`](android/build-logic/convention/src/main/kotlin/de/ncards/buildlogic/Coverage.kt)；Dagger/Hilt 生成代码不进分母） |
 | 生成代码 diff | 与契约重新生成结果一致 —— `./gradlew :core:network:api:checkApiClientUpToDate` |
 | `assembleRelease` | 成功，且 APK ≤ 基线 + 500 KB（基线入库：`android/app/apk-size-baseline.txt`，涨了在同一 PR 里改并说明） |
-| Instrumentation | Gradle Managed Device，api 26 + api 34。**只在 `main` 合入后跑**（§14.3），PR 上不跑 |
+| Instrumentation | Gradle Managed Device，api 26 + api 34。**只在 `main` 合入后跑**（§14.3），PR 上不跑；且合入时仅当改动触及 `android/**` 或 `docs/api/**`（另有每周兜底，见下） |
 
 | 通用 | 说明 |
 |---|---|
@@ -180,6 +180,21 @@ required check」。完整推理见 [ADR-0008](docs/adr/0008-ci-gate-topology.md
 `main` 合入后跑 [`main.yml`](.github/workflows/main.yml)：全量四条 + 仪器测试
 （Gradle Managed Device，api 26 + 34）+ 后端镜像推 GHCR + AAB 产物
 + **部署 staging**（T-012）。Play 上传属 T-456，在 `main.yml` 末尾留了接法说明。
+
+```
+全量四条 ──┬─► backend-image → deploy-staging          ≈ 4 min
+           └─► instrumentation（GMD，api 26 + 34）      ≈ 25 min，按 paths 跳过
+```
+
+⚠️ **这两条链是并行的，`deploy-staging` 不等 `instrumentation`。** 串行时「合入到
+staging 可用」实测 29m35s，而 Android 仪器测试与后端能不能部署没有因果关系。
+理由完整写在 `main.yml` 的 `deploy-staging` 注释里，**别把 `instrumentation`
+补回它的 `needs`**。
+
+仪器测试还按 paths 跳过：`android/**` 或 `docs/api/**` 没动就不跑（判断在 `main.yml`
+的 `changes` job，**过滤清单与 `pr.yml` 的 `android` 逐条一致，改一处要改两处**）。
+兜底是每周一 03:00 UTC 的定时全量跑；`workflow_dispatch` 可手动触发同样的全量，
+但**不部署**。
 
 部署逻辑在 reusable 的 [`deploy.yml`](.github/workflows/deploy.yml) 里，
 被 `main.yml`（staging，自动）与 [`deploy-manual.yml`](.github/workflows/deploy-manual.yml)

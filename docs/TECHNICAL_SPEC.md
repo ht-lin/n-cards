@@ -2195,14 +2195,21 @@ ADR 模板：`Context / Decision / Consequences / Alternatives considered / Stat
   shared:   spectral(openapi) → gitleaks → openapi-codegen-diff → commitlint
 ```
 
-**main 合入流水线**
+**main 合入流水线**（两条独立的链，并行；不是一条串起来的流水线）
 ```
-全量 PR 检查
-  → android instrumentation (Gradle Managed Device, api 26 + api 34)
-  → 构建后端镜像 → 推 GHCR（tag: sha + main）
-  → 部署 staging（Ansible over SSH）→ 迁移 → 冒烟测试
-  → 构建 Android AAB → 上传 Play Internal Testing
+全量 PR 检查（四条，无 paths 过滤）
+  ├─► 构建后端镜像 → 推 GHCR（tag: sha + main）
+  │     → 部署 staging（Ansible over SSH）→ 迁移 → 冒烟测试     ≈ 4 min
+  ├─► android instrumentation (GMD, api 26 + api 34)             ≈ 25 min
+  │     仅当本次合入触及 android/** 或 docs/api/**；
+  │     另有每周一 03:00 UTC 的全量兜底
+  └─► 构建 Android AAB → 上传 Play Internal Testing
 ```
+
+⚠️ **instrumentation 不在部署链上**，这是 M1 显式决定的（原为串行）。串行时「合入 →
+staging 可用」实测 **29m35s**，其中 25 分钟是一组跑在模拟器上、与后端能不能部署没有
+因果关系的 Android 测试（测的是 `core:crypto` / `core:database`，纯本地）。拆开后
+端到端约 4 分钟，覆盖不变 —— 仪器测试仍在同一次 run 里跑，红了照样可见。
 
 **生产发布**（手动触发 + approval）
 ```
