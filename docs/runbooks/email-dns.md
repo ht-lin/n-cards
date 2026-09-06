@@ -33,7 +33,7 @@ smtp://<账号>:<口令>@web246.dogado.net:587?require_tls=true
 |---|---|---|---|
 | ① | 数据处理在 **EU/EEA** 内 | 收件邮箱地址与邮件内容（OTP 码、安全提醒）是个人数据。第三国传输需要额外法律基础 | ✅ 德国 |
 | ② | 可签 **AVV / DPA** | Art. 28 要求。签不了的服务商不能进 §8.3 的子处理者清单 | ⚠️ **可签，但尚未签** |
-| ③ | 支持**自定义域** SPF / DKIM | 没有它，第 2 节整节做不了，邮件几乎必进垃圾箱 | SPF ✅ **已自动写入** / DKIM ✅ **公钥已在位**（selector `cloudpit`），待实发验证 `d=` 对齐 |
+| ③ | 支持**自定义域** SPF / DKIM | 没有它，第 2 节整节做不了，邮件几乎必进垃圾箱 | SPF ✅ **已自动写入** / DKIM ✅ **已实发验证**：签名真的产生，`d=n-cards.de`（selector `cloudpit`），见 [§2.4](#24-验证) |
 
 > 判据是上面这三条，**不是「是不是 ESP」**。§8.3 禁的是个人 / 消费级免费邮箱账户
 > （Gmail、GMX 个人账户）与美国 SaaS 免费层，理由是「无 AVV 的第三国传输」；
@@ -59,16 +59,22 @@ DMARC 阶段 ① 发布日：2026-09-06（待确认）→ 最早可进阶段 ②
 
 **还欠着的（已记在 `docs/tasks/M1.md` 的 T-102 回填块）：**
 
-1. ~~确认 dogado 是否支持 DKIM 签名并取得 selector~~ —— **已确认**：selector `cloudpit`，
-   公钥已发布在我们自己的 zone 里。§2.2 那个 ⛔ 停止条件不成立。**但仍要实发一封验证
-   `d=n-cards.de`**（见 §2.4），在那之前不要推进 §2.3 的阶段 ②。
+1. ~~确认 dogado 是否支持 DKIM 签名并取得 selector~~ ~~**但仍要实发一封验证 `d=n-cards.de`**~~
+   —— **两条都已完成**（2026-09-06 实发三封，见 [§2.4](#24-验证)）：selector `cloudpit`，
+   签名真的产生在 SMTP submission 上，`d=n-cards.de`。§2.2 那个 ⛔ 停止条件不成立，
+   §2.3 阶段 ② 的第二个前置已满足，**只剩 7 天观察窗口**。
 2. 与 dogado **签署 AVV** 并归档（归 T-450）。
 3. 查实**发信配额**，回来校准熔断阈值 —— 见 §4。**这条现在是最大的未知。**
 4. ~~收紧 SPF 到 `-all`（§2.1）、发布 DMARC 阶段 ①（§2.3）~~ —— **两条都已做**
    （2026-09-06 实测）。接下来是**看 `dmarc@n-cards.de` 收到的聚合报告**：
    判据是「我们自己发的邮件 100% 通过 SPF 或 DKIM 对齐」，见 §2.3 那张表。
 5. §3.2 的 4 次手工送达验证（Gmail / GMX / Web.de / Outlook），§15.1 的**上线必需**项。
-6. 确认**认证账号能否用别名做 `From:`** —— 见 §1，影响发信地址的最终取值。
+   ⚠️ §2.4 那三封发到的是 Gmail 并且**到了**，但那是 `mailer:test` 的裸信、不是 OTP 模板，
+   也没记录落收件箱还是垃圾箱 —— **这一条一次都还没做**，别拿它冲抵。
+6. ~~确认**认证账号能否用别名做 `From:`**~~ —— **已确认可以**（2026-09-06，同一组实发）：
+   `From:` 原样保留传入值，三个地址都没被拒收、也没被改写。§1 那个约束消失。
+   剩下的是 `MAIL_FROM_ADDRESS` 的取值**决定**（ADR-0013 未解决项 f），现值 `no-reply@`
+   继续有效且是倾向值 —— 但这不再是被托管商锁死的，而是我们自己选的。
 
 ⚠️ **域名邮箱与专业 ESP 的三个差别，会贯穿本文后面每一节**，先记住：
 
@@ -91,7 +97,8 @@ DMARC 阶段 ① 发布日：2026-09-06（待确认）→ 最早可进阶段 ②
 - [ ] **确认云厂商放行了你要用的那个出站端口** —— 见下面的「端口取值」。
       这一条 2026-09-06 之前不在清单里，代价是 T-102 卡了两轮
 - [ ] 有 `n-cards.de` 的 DNS 管理权限（DNS 可能也在 dogado，也可能在别处 —— 先确认）
-- [ ] **测过认证账号能否用别名做 `From:`**（见下面的「一个账号 + 只收别名」）
+- [x] ~~**测过认证账号能否用别名做 `From:`**~~ —— dogado 上**已测，可以**（2026-09-06，§2.4）。
+      换托管商时这一格要重新打开：这是服务商行为，不是协议保证
 
 > ⚠️ **SMTP 主机不要猜。** 写错的症状是 worker 起不来（好查）。相比之下
 > **SPF include 写错的症状是邮件照发不误、但对齐失败**，只在 DMARC 聚合报告里
@@ -133,7 +140,7 @@ dogado 的 587 实测（2026-09-06）：`STARTTLS` → TLSv1.2，证书 `CN=*.do
 SAN 含 `*.dogado.net`（所以 `web246.dogado.net` 校验通得过），升级后通告
 `250-AUTH PLAIN LOGIN`。
 
-### 一个账号 + 只收别名（这个套餐的硬约束）
+### 一个账号 + 只收别名（这个套餐的形状）
 
 dogado 的这个域名套餐只给 **1 个邮箱账号**，其余地址只能是**别名**，
 而别名**没有独立的 SMTP 凭据**。后果分两层，别混为一谈：
@@ -141,25 +148,43 @@ dogado 的这个域名套餐只给 **1 个邮箱账号**，其余地址只能是
 - **收信侧不受影响。** `info@` / `kontakt@` / `datenschutz@` / `impressum@` /
   `dmarc@` / `ops@` / `abuse@` / `postmaster@` 想建多少建多少，不占配额、不占账号数。
   Impressum 列一个别名地址完全合规 —— §5 DDG 要求的是地址**真的可达**，不要求它能发信。
-- **发信侧只有一个地址可用**，而它要同时服务两种互相冲突的用途：
-  事务邮件（OTP / Magic Link / 安全提醒，量级是全部发信的 99.9%）
-  与人工回信（GDPR 请求、Impressum 询问，一年个位数）。
+- **发信侧只有一套 SMTP 凭据**，但 ✅ **`From:` 不受它约束**（下面这条已实测）。
 
-⚠️ **但「别名不能发信」很可能只是指「别名没有自己的 SMTP 凭据」，不等于
-「认证为主账号时不能用别名做 `From:`」。** 这是两个不同的限制，很多共享托管只有前者。
+### ✅ 别名可以做 `From:`（2026-09-06 实测，这个约束消失了）
+
+**「别名不能发信」只是指「别名没有自己的 SMTP 凭据」，不等于「认证为主账号时不能用
+别名做 `From:`」。** 这是两个不同的限制，dogado 只有前者 —— §2.4 用同一组实发验证过：
+以主账号认证、`--from` 分别指 `no-reply@` / `dmarc@` / `info@`，三封信的 `From:`
+都**原样保留**了传入值，没有拒收、没有静默改写。
+
 代码这一侧本来就把两者分开了 —— `MAILER_DSN`（认证凭据）与 `MAIL_FROM_ADDRESS`
-（信头 `From:`，见 `infra/compose/docker-compose.base.yml`）是两个独立变量。
-**若托管商接受二者不同，发信地址叫什么就无所谓了**，这个约束基本消失。
-测法见 §2.4 —— 和 DKIM 的验证是同一封信。
+（信头 `From:`，见 `infra/compose/docker-compose.base.yml`）是两个独立变量，
+现在确认这个分离在通道侧也成立。**发信地址叫什么因此是我们自己的选择，不是被锁死的取值。**
 
-若测下来确实锁死（`From:` 必须等于账号地址），则发信地址的取值是一道取舍，
-**倾向保留 `no-reply@`**：事务邮件占了全部发信量的 99.9% 且在 R1 的关键路径上，
-而 `info@` 是反垃圾启发式里典型的群发地址模式；这个项目在送达上**没有任何余量可花**
-（共享出口 IP、无 bounce 回路、无抑制名单、无投递 webhook，唯一信号是事后告警）。
-人工回信从 `no-reply@` 发出、带 `Reply-To:` 指向别名即可 —— 署名难看，但一年几封。
+⚠️ 但**信封发件人（`Return-Path`）仍然只有一个取值**，它来自 `mailer.yaml` 的
+`envelope.sender`（即 `MAIL_FROM_ADDRESS`），**不跟着 `--from` 走** —— 三封实发信的
+`Return-Path` 全是 `<no-reply@n-cards.de>`。所以将来若真让人工回信用 `info@` 做 `From:`，
+邮件的 `From:` 与 `Return-Path` 会是两个不同的本域地址。**这没有副作用**：
+`aspf=s` 比的是**域**，两边都是 `n-cards.de`，对齐照过；Gmail 那个 "via …" 提示也不会
+出现（它比的同样是域，不是 local part）。
+
+⚠️ **只有一个后果要记住：退信跟着 `Return-Path` 走，不跟 `From:` 走。**
+一封 `From: info@` 的人工回信若被退回，退信落在 `no-reply@` 那个**设计上没人看的池子**里，
+而不是回到写信的人手上 —— 于是「GDPR 回复其实没送到」这件事没有任何人会知道，
+而那是有 30 天法定 SLA 的（§8.5）。事务邮件不受影响（退信本来就该进 `email_failed`
+与那个池子）。这条并进 [ADR-0013](../adr/0013-mail-via-domain-mailbox.md) 未解决项 d
+（`no-reply@` 收件箱的处置）一起解决 —— 在那之前，**人工回信优先用
+`Reply-To:` 而不是改 `From:`**。
+
+**仍然倾向把 `no-reply@` 作为 `MAIL_FROM_ADDRESS`**（现值，无需改动）：
+事务邮件占全部发信量的 99.9% 且在 R1 的关键路径上，而 `info@` 是反垃圾启发式里
+典型的群发地址模式；这个项目在送达上**没有任何余量可花**（共享出口 IP、无 bounce
+回路、无抑制名单、无投递 webhook，唯一信号是事后告警）。人工回信**首选**从 `no-reply@`
+发出、带 `Reply-To:` 指向别名（署名难看，但一年几封，且退信仍回到有人处置的路径）；
+`--from=info@` 现在技术上可行，代价是上面那条退信盲区。
 ⛔ **不要**用「别名转发到创始人的 Gmail，从那边回信」来绕：那会把用户往来邮件
 送进 Google，正是 §8.3 禁止、也正是 ADR-0013 选 dogado 想避免的第三国传输。
-转发目标必须同样在 EU/EEA 且有 AVV。决定归 [ADR-0013](../adr/0013-mail-via-domain-mailbox.md) 未解决项 f。
+转发目标必须同样在 EU/EEA 且有 AVV。取值决定归 [ADR-0013](../adr/0013-mail-via-domain-mailbox.md) 未解决项 f。
 
 ---
 
@@ -213,8 +238,12 @@ cloudpit._domainkey.n-cards.de.    1200    TXT    "v=DKIM1; k=rsa; p=MIGfMA0GCSq
 发布在这里就毫无意义。它出现在 `n-cards.de` 自己的 zone 里，本身就指向 `d=n-cards.de`，
 也就是 §2.4 末尾那个坑不太可能发生。**但这是证据，不是证明 —— 仍须实发一封验证。**
 
-⚠️ **公钥在 DNS 里 ≠ 我们的信真的被签名。** 有些托管商只签 webmail 发出的邮件，
-不签 SMTP submission 的。这一条只有 §2.4 的实发验证能回答。
+✅ **已实发验证（2026-09-06）**：三封信的 `DKIM-Signature` 全是 `d=n-cards.de`，
+selector `cloudpit`。两个疑问同时消掉了 —— dogado **确实**签 SMTP submission 发出的邮件
+（不只签 webmail），且**用我们的域签**，`adkim=s` 能对齐。详见 [§2.4](#24-验证)。
+
+⚠️ 这条结论**绑在当前这套密钥与托管商上**。dogado 轮换密钥、我们迁 DNS、或换托管商之后，
+它都要重新验一遍 —— 见下面「两个要记账的小问题」的第二条。
 
 #### 两个要记账的小问题
 
@@ -256,12 +285,13 @@ cloudpit._domainkey.n-cards.de.    1200    TXT    "v=DKIM1; k=rsa; p=MIGfMA0GCSq
 _dmarc.n-cards.de.    TXT    "v=DMARC1; p=none; rua=mailto:dmarc@n-cards.de; adkim=s; aspf=s"
 ```
 
-⚠️ **现在的动作是「看报告」，不是「往下推」。** 阶段 ② 有两个前置，缺一不可：
+⚠️ **现在的动作是「看报告」，不是「往下推」。** 阶段 ② 原本有两个前置：
 
-1. **≥ 7 天**观察窗口（起算日见「现状」段，需要确认发布日期）；
-2. **§2.4 的实发验证通过** —— 聚合报告能证明对齐率，但证明不了 `d=` 是我们的域
-   （见 §2.2「为什么这条记录同时是证据」那段：`d=dogado.de` 也能让 DKIM `pass`，
-   却过不了 `adkim=s`）。这封信到现在还没发出去，**它才是当前的关键路径**。
+1. **≥ 7 天**观察窗口（起算日见「现状」段，需要确认发布日期）—— **仍然欠着，
+   现在它是唯一的关键路径**；
+2. ~~**§2.4 的实发验证通过**~~ —— ✅ **已通过**（2026-09-06）。聚合报告能证明对齐率，
+   但证明不了 `d=` 是我们的域（见 §2.2：`d=dogado.de` 也能让 DKIM `pass`，
+   却过不了 `adkim=s`），所以这一条必须单独验，现在验完了：`d=n-cards.de`。
 
 `dmarc@n-cards.de` 这个**收信别名**要建好（不受「别名不能发信」约束），
 且 `rua` 收到的报告**必须真的有人看** —— 阶段 ① 的判据全靠它，没人看等于没观察。
@@ -296,17 +326,19 @@ dig +short TXT cloudpit._domainkey.n-cards.de
 **记录查得到 ≠ 签名真的生效。** DKIM 尤其如此 —— 公钥在 DNS 里，不代表 dogado 的
 MTA 真的在给我们的邮件签名（有些托管商只签 webmail 发出的信）。必须**实发一封**。
 
-**一封信同时回答三个问题**：DKIM 是否真的签、`d=` 是否对齐、以及 §1 那个
-「认证账号能否用别名做 `From:`」。所以特意把 `--from` 指成与 SMTP 账号**不同**的地址：
+**这一组信同时回答三个问题**：DKIM 是否真的签、`d=` 是否对齐、以及 §1 那个
+「认证账号能否用别名做 `From:`」。所以特意发**三封**，`--from` 分别指向 SMTP 账号地址
+与两个**别名**——单发一封只能证明账号地址能用，证明不了别名能用：
 
 ```bash
-# 在 staging 主机上发一封（收件人用团队自己的邮箱，Gmail 最方便看认证结果）
+# 在 staging 主机上发（收件人用团队自己的邮箱，Gmail 最方便看认证结果）
 ssh -p 2242 deploy@api.staging.n-cards.de
 cd /opt/ncards
 export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml
 
-docker compose exec -T worker bin/console mailer:test \
-  <团队测试邮箱> --from=no-reply@n-cards.de
+docker compose exec -T worker bin/console mailer:test <团队测试邮箱> --from=no-reply@n-cards.de
+docker compose exec -T worker bin/console mailer:test <团队测试邮箱> --from=dmarc@n-cards.de
+docker compose exec -T worker bin/console mailer:test <团队测试邮箱> --from=info@n-cards.de
 ```
 
 ⚠️ **那三个 compose 文件必须显式列出**（`COMPOSE_FILE` 或三个 `-f`）。它们不叫
@@ -428,9 +460,41 @@ From: no-reply@n-cards.de
 
 | 结果 | 含义 | 动作 |
 |---|---|---|
-| `From:` 就是传入的值 | 认证账号可以用任意本域地址发信 | §1 那个约束消失，发信地址随便取 |
+| ✅ **`From:` 就是传入的值** ← **2026-09-06 实测落在这一行** | 认证账号可以用任意本域地址发信 | §1 那个约束消失，发信地址随便取 |
 | SMTP 直接拒收（`550 Sender address rejected` 之类） | 锁死，`From:` 必须等于账号地址 | 按 §1 的取舍定发信地址，记回 ADR-0013 未解决项 f |
 | 发出去了，但 `From:` 被**改写**成账号地址 | 最坏的一种 —— 静默改写 | 同上，且**必须**确认 `MAIL_FROM_ADDRESS` 与账号一致，否则线上信头长期与配置不符 |
+
+#### ✅ 2026-09-06 实测结果（三封全部送达 Gmail）
+
+三封信只有 `--from` 不同，收件端看到的信头如下 —— **变的只有 `From:` 一行**：
+
+| `--from` 传入值 | 收到的 `From:` | `DKIM-Signature` 的 `d=` | `Return-Path:` |
+|---|---|---|---|
+| `no-reply@n-cards.de`（= SMTP 账号地址） | `no-reply@n-cards.de` | `d=n-cards.de` | `<no-reply@n-cards.de>` |
+| `dmarc@n-cards.de`（别名） | `dmarc@n-cards.de` | `d=n-cards.de` | `<no-reply@n-cards.de>` |
+| `info@n-cards.de`（别名） | `info@n-cards.de` | `d=n-cards.de` | `<no-reply@n-cards.de>` |
+
+三条结论，逐条对上前面的疑问：
+
+1. **DKIM 真的在签，而且签的是我们的域。** `d=n-cards.de`（selector `cloudpit`）——
+   §2.2 那两个疑问（「只签 webmail？」「会不会 `d=dogado.de`？」）同时排除，
+   `adkim=s` 严格对齐成立。**§2.3 阶段 ② 的实发前置就此满足，只剩 7 天窗口。**
+2. **别名可以做 `From:`，三次都原样保留**，既没被 `550` 拒收也没被静默改写。
+   §1 的发信地址约束消失，ADR-0013 未解决项 f 从「托管商锁死了取值」降级为
+   「我们自己选一个」。**换托管商时要重测 —— 这是服务商行为，不是协议保证。**
+3. **`Return-Path` 三次不变**，正如前面那段所说：它来自 `envelope.sender`
+   （`MAIL_FROM_ADDRESS`），**不跟着 `--from` 走**。这既印证了配置的形状，
+   也是 `From:` ≠ `Return-Path` 这个组合从此可能出现的原因（见 §1）。
+
+⚠️ **这次没有记录 `Authentication-Results:` 那一行**（`dkim=pass; spf=pass; dmarc=pass`）。
+上表只证明了**对齐关系**成立（`d=` 与 `Return-Path` 的域都是 `n-cards.de`），
+它是 Gmail 判 `pass` 的必要条件，但判定本身是收件方做的 —— 签名过期、body 被中继改写
+之类仍会让 `dkim=fail`。**下次实发（§15.1 那 4 封）顺手把这一行抄下来补上。**
+不阻塞阶段 ②：7 天窗口结束时聚合报告会独立给出对齐率，那是更强的证据。
+
+⚠️ **别拿这三封冲抵 §15.1 的 4 次手工送达验证。** 那 4 封要的是**真实 OTP 模板**、
+四家收件方（Gmail / GMX / Web.de / Outlook）、并且要记录**落收件箱还是垃圾箱**。
+这三封是 `mailer:test` 的裸信，只发了 Gmail，也没记落点。
 
 ---
 
