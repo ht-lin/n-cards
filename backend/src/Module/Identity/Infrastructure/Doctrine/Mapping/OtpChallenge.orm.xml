@@ -5,8 +5,8 @@
     映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
 
     ⚠️ 这张表**没有到 users 的外键**，也没有 user_id 列 —— 存的是 email_hash。
-    理由是 §3.8 的哑挑战（is_decoy）：邮箱不存在时同样要建一条挑战，
-    有外键的话它根本插不进去。详见 OtpChallenge 实体的类注释。
+    ADR-0014 之后理由更硬：otp/request **不查 users**，所以挑战可能先于用户存在
+    （首次验证成功时才建 users 行）。详见 OtpChallenge 实体的类注释。
 -->
 <doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -32,6 +32,20 @@
 
         <field name="emailHash" type="hash_digest" column="email_hash" nullable="false"/>
 
+        <!--
+            收件人密文（vault:v1:…），与 users.email_encrypted 同一把 Transit 密钥。
+            首次验证成功时用它建 users 行（§5.2 / ADR-0014）——
+            那时明文邮箱早已不在系统里，它只在 otp/request 的请求体里活过一次。
+
+            可空：T-104 的迁移之前建的行（含哑挑战）没有这个值。
+            收窄成 NOT NULL 的那一步不会来，理由见 Version20260906120000 的注释。
+        -->
+        <field name="emailEncrypted" type="ciphertext" column="email_encrypted" nullable="true"/>
+
+        <!-- 请求验证码时选的语言；注册时进 users.locale。可空同上。 -->
+        <field name="locale" type="text" column="locale" nullable="true"
+               enum-type="App\Module\Identity\Domain\ValueObject\Locale"/>
+
         <!-- HMAC-SHA256(code, pepper)。§7.1：**不存明文**，比较用 hash_equals。 -->
         <field name="codeHash" type="hash_digest" column="code_hash" nullable="false"/>
 
@@ -52,7 +66,11 @@
 
         <field name="consumedAt" type="datetimetz_immutable" column="consumed_at" nullable="true"/>
 
-        <!-- §3.8 防枚举：邮箱不存在时创建的哑挑战，不发信，验证恒失败。 -->
+        <!--
+            哑挑战。ADR-0014（T-104）之后**已无生产写入方** —— 两条路径合并成恒发码，
+            防枚举改由「otp/request 根本不查 users」保证。
+            列与工厂都留着：库里还有上个版本建的旧行要继续 401，删列归 T-113。
+        -->
         <field name="isDecoy" type="boolean" column="is_decoy" nullable="false">
             <options>
                 <option name="default">false</option>

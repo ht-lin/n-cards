@@ -6,7 +6,8 @@ namespace App\Tests\Unit\Module\Identity\Application\Otp;
 
 use App\Module\Identity\Application\Otp\OtpRequestPayload;
 use App\Module\Identity\Application\Otp\RequestOtpService;
-use App\Module\Identity\Domain\Entity\OtpChallenge;
+use App\Module\Identity\Domain\Repository\UserRepositoryInterface;
+use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Notification\Application\Dto\MailLocale;
 use App\Module\Notification\Application\Dto\MailTemplate;
 use App\Shared\Domain\Crypto\HashDigest;
@@ -17,7 +18,6 @@ use App\Tests\Double\Crypto\InMemoryCryptoService;
 use App\Tests\Double\Crypto\RecordingHmacHasher;
 use App\Tests\Double\Identity\IdentityEntities;
 use App\Tests\Double\Identity\InMemoryOtpChallengeRepository;
-use App\Tests\Double\Identity\InMemoryUserRepository;
 use App\Tests\Double\Metrics\RecordingMetrics;
 use App\Tests\Double\Notification\RecordingMailSender;
 use App\Tests\Double\Random\SequenceRandomness;
@@ -30,12 +30,27 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * ⚠️ 本文件里最重要的不是「码发出去了没有」，而是
- * {@see testBothPathsDoTheSameAmountOfWork()} —— §3.8 的防枚举承重墙。
- * 那条红了就是安全回归，不是测试脆弱。
+ * {@see testTheEndpointCannotTellWhetherTheAddressIsRegistered()} ——
+ * §3.8 的防枚举承重墙。那条红了就是安全回归，不是测试脆弱。
+ *
+ * ============================================================================
+ * ADR-0014 之后这组用例的形状变了
+ * ============================================================================
+ * T-103 交付时这里有「真实路径」与「decoy 路径」两组用例，外加一条
+ * `testBothPathsDoTheSameAmountOfWork()` 断言两者的 Vault / DB 往返次数相等。
+ *
+ * ADR-0014 把两条路径合并成一条（**无论邮箱是否注册都真发码**，否则新用户
+ * 永远收不到码、永远无法注册），于是那种「配平两边」的断言失去了对象。
+ * 取而代之的断言更强也更简单：**被测类根本没有 `UserRepositoryInterface`**，
+ * 它在结构上就无法根据存在性分支。
  */
 #[CoversClass(RequestOtpService::class)]
 final class RequestOtpServiceTest extends TestCase
 {
+    /**
+     * 两个邮箱在**被测类眼里没有任何区别** —— 它不查 users。
+     * 保留两个常量只是为了让「同一个邮箱两次」与「两个不同邮箱」可分。
+     */
     private const REGISTERED = 'anna@example.de';
 
     private const UNKNOWN = 'niemand@example.de';
@@ -51,8 +66,6 @@ final class RequestOtpServiceTest extends TestCase
     private RecordingHmacHasher $hasher;
 
     private InMemoryCryptoService $crypto;
-
-    private InMemoryUserRepository $users;
 
     private InMemoryOtpChallengeRepository $challenges;
 
@@ -76,29 +89,31 @@ final class RequestOtpServiceTest extends TestCase
         $this->equalizer = new RecordingTimeEqualizer();
         $this->metrics = new RecordingMetrics();
         $this->clock = new FrozenClock((new \DateTimeImmutable('2026-09-06T12:00:00+00:00'))->getTimestamp() * 1000);
-
-        // 注册用户的 email_hash 必须与被测代码算出来的一致 —— 用同一个替身算。
-        $this->users = new InMemoryUserRepository(
-            IdentityEntities::user(emailHash: HashDigest::fromRaw($this->hasher->hash(self::REGISTERED))),
-        );
-        $this->hasher->reset();
     }
 
     // ========================================================================
-    // 真实路径
+    // 发信
     // ========================================================================
 
-    public function testSendsExactlyOneMailToARegisteredAddress(): void
+    /**
+     * ⚠️ 用例名里的 "any" 是重点：**未注册的邮箱也会收到码**（ADR-0014）。
+     * 这正是注册路径成立的前提 —— 收不到码就永远走不到
+     * `POST /auth/otp/verify`，而契约里没有第二个注册端点。
+     */
+    #[DataProvider('bothAddresses')]
+    public function testSendsExactlyOneMailToAnyAddress(string $email): void
     {
-        $this->service()->request(self::payload(self::REGISTERED), self::CLIENT_IP);
+        $this->service()->request(self::payload($email), self::CLIENT_IP);
 
         $mail = $this->mail->only();
 
         self::assertSame(MailTemplate::OtpCode, $mail->template);
         self::assertSame(MailLocale::German, $mail->locale);
-        // 收件人用的是**库里已有的密文**，不是新加密的一份 ——
-        // 那既省一次 Vault 往返，也保证同一个用户的密文只有一个来源。
-        self::assertSame(IdentityEntities::ciphertext()->toString(), $mail->recipient->toString());
+
+        // 收件人是**当场加密的那份密文**，不是从 users 里读出来的。
+        // 读 users 会同时打开两个洞：本类又知道了存在性，且已注册路径会少一次
+        // Vault 往返（见 RequestOtpService 类注释里那一整节）。
+        self::assertStringContainsString(base64_encode($email), $mail->recipient->toString());
     }
 
     /**
@@ -168,36 +183,59 @@ final class RequestOtpServiceTest extends TestCase
     }
 
     // ========================================================================
-    // decoy 路径
+    // 注册路径的两个输入（T-104 / ADR-0014）
     // ========================================================================
 
-    public function testSendsNothingForAnUnknownAddress(): void
+    /**
+     * 挑战必须带上收件人密文与语言，否则 `VerifyOtpService` 在首次验证成功时
+     * **建不出 users 行** —— 那时明文邮箱早已不在系统里，它只在本端点的
+     * 请求体里活过一次。
+     *
+     * 这条红了的症状是「新用户能收到码、能验过，但注册失败」。
+     */
+    #[DataProvider('bothAddresses')]
+    public function testTheChallengeCarriesWhatRegistrationWillNeed(string $email): void
     {
-        $this->service()->request(self::payload(self::UNKNOWN), self::CLIENT_IP);
-
-        self::assertSame(0, $this->mail->count(), 'An unregistered address must never receive mail (§3.8).');
-    }
-
-    public function testStillStoresADecoyChallenge(): void
-    {
-        $issued = $this->service()->request(self::payload(self::UNKNOWN), self::CLIENT_IP);
+        $this->service()->request(self::payload($email, 'en'), self::CLIENT_IP);
 
         $challenge = $this->challenges->lastSaved();
 
-        self::assertTrue($challenge->isDecoy());
-        self::assertTrue($challenge->id()->equals($issued->challengeId));
+        self::assertNotNull($challenge->emailEncrypted());
+        self::assertStringContainsString(base64_encode($email), $challenge->emailEncrypted()->toString());
+        // 语言取自请求，不是默认值 —— 收到英文码信却拿到一个 locale=de 的账号
+        // 是用户能看见的 bug。
+        self::assertSame(Locale::English, $challenge->locale());
     }
 
     /**
-     * OtpChallenge::decoy() 的类注释点名的要求：哑挑战也要一个**真实的随机码摘要**。
-     * 常量或全零会让 decoy 在库层可辨认，而 §8.4 的数据导出可能把这个差别泄露出去。
+     * 存进挑战的密文与发信用的收件人是**同一个对象** —— 不是加密两次。
+     *
+     * 加密两次不会有功能症状（Transit 是非确定性的，两份密文都能解开），
+     * 但会凭空多一次 Vault 往返，而这个端点的每一次往返都要付在登录延迟上。
      */
-    public function testTheDecoyCodeHashIsRandomNotAConstant(): void
+    public function testTheStoredCiphertextIsTheOneTheMailWasSentTo(): void
+    {
+        $this->service()->request(self::payload(self::REGISTERED), self::CLIENT_IP);
+
+        self::assertSame(
+            $this->challenges->lastSaved()->emailEncrypted()?->toString(),
+            $this->mail->only()->recipient->toString(),
+        );
+    }
+
+    /**
+     * 码摘要必须是**真实的随机摘要**，不能是常量或全零。
+     *
+     * 这条继承自 T-103 对哑挑战的要求（可预测的值会让某一类挑战在库层可辨认，
+     * 而 §8.4 的数据导出与运维查询都可能把那个差别泄露出去）。
+     * ADR-0014 之后已经没有「另一类挑战」了，但这条性质本身仍然要成立。
+     */
+    public function testTheCodeHashIsRandomNotAConstant(): void
     {
         $first = $this->requestWith(new SequenceRandomness(ints: [111111]), self::UNKNOWN);
         $second = $this->requestWith(new SequenceRandomness(ints: [222222]), self::UNKNOWN);
 
-        self::assertFalse($first->equals($second), 'Two decoys must not share a code hash.');
+        self::assertFalse($first->equals($second), 'Two challenges must not share a code hash.');
         self::assertNotSame(str_repeat("\x00", 32), $first->toRaw());
     }
 
@@ -206,27 +244,49 @@ final class RequestOtpServiceTest extends TestCase
     // ========================================================================
 
     /**
-     * 做功对齐。**这条红了就是安全回归**：两条路径的往返次数一旦不等，
-     * 差值就是一个稳定可测的耗时差，而攻击者对同一个邮箱重复采样取中位数
-     * 就能读出「这个邮箱注册过吗」。
+     * ⚠️ **本文件最重要的一条。** 红了就是安全回归。
      *
-     * 特别注意 Vault 的 4 : 4 是怎么配平的（见 RequestOtpService 里那段注释）：
-     * decoy 分支那次**返回值被丢弃**的 encrypt()，配的是真实路径在
-     * EncryptedMailSerializer 里入队时的那次加密。有人「顺手删掉没用的变量」
-     * 就会让这条红 —— 那正是它存在的意义。
+     * ADR-0014 之前这条断言的形式是「两条路径的往返次数相等」——
+     * 一个必须靠人肉维护、且配错了没有任何症状的账。现在它变成了一条**结构性质**：
+     * 被测类的构造签名里根本没有任何能查用户的东西，所以它无法分支。
+     *
+     * 用反射而不是「读一遍代码」：反射会在有人重新注入 `UserRepositoryInterface`
+     * （或任何别的用户查询出口）的那一刻当场红，哪怕他只是想「顺手做个优化」。
      */
-    public function testBothPathsDoTheSameAmountOfWork(): void
+    public function testTheEndpointCannotTellWhetherTheAddressIsRegistered(): void
+    {
+        $parameters = (new \ReflectionClass(RequestOtpService::class))->getConstructor()?->getParameters() ?? [];
+
+        $types = array_map(
+            static fn (\ReflectionParameter $p): string => (string) $p->getType(),
+            $parameters,
+        );
+
+        self::assertNotContains(
+            UserRepositoryInterface::class,
+            $types,
+            'RequestOtpService must not be able to look users up (§3.8 / ADR-0014).',
+        );
+    }
+
+    /**
+     * 做功对齐的**残余**断言：两个邮箱的账单仍然要逐项相等。
+     *
+     * 今天它几乎是恒真的（没有分支就没有可分的两边），留着是因为它把绝对值
+     * 也钉住了 —— 谁往请求路径上加一次 Vault 或 DB 往返，这条会红，
+     * 而那正是该去重新读一遍 ncards.otp.request_budget_ms 那段校准注释的时刻。
+     */
+    public function testEveryRequestCostsTheSameWork(): void
     {
         $registered = $this->measure(self::REGISTERED);
         $unknown = $this->measure(self::UNKNOWN);
 
-        self::assertSame($registered, $unknown, 'Registered and unregistered addresses must cost the same work.');
+        self::assertSame($registered, $unknown, 'Every address must cost the same work.');
 
-        // 顺带把绝对值也钉住，免得两边**同时**变化时这条断言变成恒真。
-        // Vault 4 次 = hmac(email) + hmac(code) + hmac(ip) + 一次加密
-        // （真实路径在序列化器里，decoy 路径是那次被丢弃的 encrypt）。
+        // Vault 5 次 = hmac(email) + hmac(code) + hmac(ip) + encrypt(收件人)
+        //            + EncryptedMailSerializer 入队时的那一次。
         self::assertSame(
-            ['vault' => 4, 'user_lookups' => 1, 'challenge_ops' => ['invalidate', 'save']],
+            ['vault' => 5, 'challenge_ops' => ['invalidate', 'save']],
             $registered,
         );
     }
@@ -234,7 +294,7 @@ final class RequestOtpServiceTest extends TestCase
     /**
      * 形状对齐：响应对象的字段与类型逐字相同，且**没有**任何能区分两者的字段。
      */
-    public function testBothPathsReturnTheSameShape(): void
+    public function testBothAddressesReturnTheSameShape(): void
     {
         // 同一个 service 实例连发两次 —— 换成两个实例的话，各自的 uuid 生成器
         // 都从头开始，「每次请求拿到自己的 id」那条断言会因为夹具而假绿。
@@ -256,7 +316,7 @@ final class RequestOtpServiceTest extends TestCase
      * 耗时对齐：每次请求都必须领一个预算并结算它。
      * 漏调 = 填充没发生（防线失效）；多调 = 预算翻倍（反而制造出新的可分耗时）。
      */
-    #[DataProvider('bothPaths')]
+    #[DataProvider('bothAddresses')]
     public function testEveryRequestSettlesExactlyOneBudget(string $email): void
     {
         $this->service()->request(self::payload($email), self::CLIENT_IP);
@@ -268,7 +328,7 @@ final class RequestOtpServiceTest extends TestCase
     /**
      * @return iterable<string, array{string}>
      */
-    public static function bothPaths(): iterable
+    public static function bothAddresses(): iterable
     {
         yield 'registered' => [self::REGISTERED];
         yield 'unknown' => [self::UNKNOWN];
@@ -300,10 +360,13 @@ final class RequestOtpServiceTest extends TestCase
     }
 
     /**
-     * ⚠️ 限流必须在**查库之前**。放到之后的话，429 的触发时刻会因为
-     * 「查到了 / 没查到」而不同 —— 刚防住的信息又从限流这条路上漏出去。
+     * ⚠️ 限流必须在**任何写库与发信之前**。
+     *
+     * ADR-0014 让本端点对任意邮箱都真发信，于是 §7.5 的 1/min、5/h、10/day
+     * 从「重要」变成了**唯一**的滥用闸门 —— 它挡的是「用我们的域名给别人的
+     * 收件箱发信」（§7.2 T11）。被限住的请求必须一封信都不发、一行库都不写。
      */
-    public function testRateLimitingHappensBeforeTheUserIsLookedUp(): void
+    public function testAThrottledRequestNeitherWritesNorSends(): void
     {
         $this->limiter->denyWith(new RateLimitExceeded(42, 0, 'otp_request_email'));
 
@@ -314,7 +377,6 @@ final class RequestOtpServiceTest extends TestCase
             self::assertSame(42, $exception->retryAfterSeconds());
         }
 
-        self::assertSame(0, $this->users->findByEmailHashCalls(), 'A throttled request must not touch the user table.');
         self::assertSame([], $this->challenges->operations());
         self::assertSame(0, $this->mail->count());
         // 早于分支点抛出的异常不携带存在性信息，所以不填充 ——
@@ -341,7 +403,7 @@ final class RequestOtpServiceTest extends TestCase
      * §7.1「新建时作废该 email 的旧 challenge」，且顺序必须是先作废后落盘 ——
      * 反过来会把刚建的那条一起作废，用户拿到的码当场失效。
      */
-    #[DataProvider('bothPaths')]
+    #[DataProvider('bothAddresses')]
     public function testInvalidatesPreviousChallengesBeforeSavingTheNewOne(string $email): void
     {
         $this->service()->request(self::payload($email), self::CLIENT_IP);
@@ -385,24 +447,18 @@ final class RequestOtpServiceTest extends TestCase
     }
 
     /**
-     * §14.4 的「OTP 转化率骤降」告警需要请求侧的计数（worker 侧的
-     * email_send_total 看不到 decoy —— decoy 压根不入队）。
+     * §14.4 的「OTP 转化率骤降」告警需要请求侧的计数。
+     *
+     * ⚠️ 标签值对两个邮箱**必须相同**。ADR-0014 之前它是 `issued` / `decoy`，
+     * 而那个区分现在既做不到（本类不知道答案）也不该做 ——
+     * 一个按存在性切分的计数器，等于把防住的信息导出到了指标后端。
      */
-    #[DataProvider('metricLabels')]
-    public function testCountsEveryRequestWithABoundedLabel(string $email, string $expected): void
+    #[DataProvider('bothAddresses')]
+    public function testCountsEveryRequestWithTheSameBoundedLabel(string $email): void
     {
         $this->service()->request(self::payload($email), self::CLIENT_IP);
 
-        self::assertSame([['result' => $expected]], $this->metrics->labelsFor('otp_request_total'));
-    }
-
-    /**
-     * @return iterable<string, array{string, string}>
-     */
-    public static function metricLabels(): iterable
-    {
-        yield 'registered' => [self::REGISTERED, 'issued'];
-        yield 'unknown' => [self::UNKNOWN, 'decoy'];
+        self::assertSame([['result' => 'issued']], $this->metrics->labelsFor('otp_request_total'));
     }
 
     // ========================================================================
@@ -410,14 +466,13 @@ final class RequestOtpServiceTest extends TestCase
     // ========================================================================
 
     /**
-     * 一次请求的「Vault 与 DB 往返账单」。两条路径的账单必须逐项相等。
+     * 一次请求的「Vault 与 DB 往返账单」。
      *
-     * ⚠️ `vault` 一项是 hmac + encrypt 的**总和**，不是分开两项 —— 这是刻意的。
-     * 真实路径与 decoy 路径的构成本来就不同（前者的第 4 次加密发生在
-     * EncryptedMailSerializer 里、不经过这里的替身），能对齐的只有总数。
-     * 单测看不到序列化器那一次，所以这里把它按「发出去了几封信」补上。
+     * ⚠️ `vault` 一项是 hmac + encrypt 的**总和**，不是分开两项：入队时
+     * `EncryptedMailSerializer` 的那次加密不经过这里的替身（单测用的是
+     * RecordingMailSender），所以按「发出去了几封信」补账。
      *
-     * @return array{vault: int, user_lookups: int, challenge_ops: list<string>}
+     * @return array{vault: int, challenge_ops: list<string>}
      */
     private function measure(string $email): array
     {
@@ -430,9 +485,7 @@ final class RequestOtpServiceTest extends TestCase
                 + $this->crypto->encryptCalls()
                 // 每封入队的信在 EncryptedMailSerializer 里恰好被加密一次
                 // （那是为了 messenger_messages.body 里不出现明文邮箱与明文码）。
-                // 单测用的是 RecordingMailSender，走不到序列化器，所以在这儿补账。
                 + $this->mail->count(),
-            'user_lookups' => $this->users->findByEmailHashCalls(),
             'challenge_ops' => $this->challenges->operations(),
         ];
     }
@@ -453,7 +506,6 @@ final class RequestOtpServiceTest extends TestCase
     private function service(?\App\Shared\Domain\Random\RandomnessInterface $random = null): RequestOtpService
     {
         return new RequestOtpService(
-            $this->users,
             $this->challenges,
             $this->hasher,
             $this->crypto,

@@ -6,7 +6,6 @@ namespace App\Module\Identity\Application\Otp;
 
 use App\Module\Identity\Domain\Entity\OtpChallenge;
 use App\Module\Identity\Domain\Repository\OtpChallengeRepositoryInterface;
-use App\Module\Identity\Domain\Repository\UserRepositoryInterface;
 use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Identity\Domain\ValueObject\OtpPurpose;
 use App\Module\Notification\Application\Dto\MailLocale;
@@ -30,33 +29,53 @@ use App\Shared\Domain\Time\ClockInterface;
  * `POST /v1/auth/otp/request` 的编排（§6.3.1、§7.1）。
  *
  * ============================================================================
- * 这个类唯一真正在做的事：让两条路径不可区分
+ * 防枚举：这个类**不知道**邮箱注册过没有（ADR-0014）
  * ============================================================================
- * 功能上它只是「生成一个码、存起来、发出去」。真正的复杂度全部来自 §3.8：
- * **邮箱不存在时也必须走完同样的流程**，只是不发信。响应体、状态码与耗时
- * 三者都不得泄露「这个邮箱注册过吗」。
- *
- * 邮箱不是随便什么标识符：它是跨服务的强身份锚点，字典可以按亿级购买。
+ * §3.8 要求：响应体、状态码与耗时三者都不得泄露「这个邮箱注册过吗」。
+ * 邮箱不是随便什么标识符 —— 它是跨服务的强身份锚点，字典可以按亿级购买。
  * 一个能区分的接口等价于一个可变现的「邮箱有效性验证服务」，
  * 而受害者是我们的用户（钓鱼与撞库的第一步就是确认目标在哪些服务有账号）。
  *
- * 三道防线，缺一不可：
+ * T-103 原本的办法是「两条路径 + 逐项配平」：邮箱不存在时建一条哑挑战
+ * （`is_decoy`）、不发信，再靠数 Vault 往返次数把两条路径的做功拉平。
+ * T-104 发现那个设计**让注册变得不可能**（新用户永远收不到码，而契约里没有
+ * 第二条注册路径），于是按 ADR-0014 把它换成了更强也更简单的一条：
  *
- *   ① **形状**：两条路径都返回 {@see OtpChallengeIssued}，字段与类型逐字相同。
- *   ② **做功**：两条路径的 Vault 往返次数、DB 往返次数相等（见 request() 里的账）。
- *   ③ **耗时**：{@see TimeEqualizerInterface} 把总耗时拉平到固定预算，
- *      兜住 ② 配不平的余数（真实路径那条 messenger_messages 的 INSERT）。
+ *   **无论邮箱是否注册，都真发一封验证码信。**
  *
- * ② 是「今天恰好平了」，③ 是「明天加了新东西也还平」。**两条都要**：
- * 只有 ② 的话，T-104/T-106 每加一步都要重新配平，配错了没有任何症状；
- * 只有 ③ 的话，预算必须开得比最慢路径还大，白白拉高全站登录延迟。
+ * 于是这个类里**一个分支都没有**，连 `UserRepositoryInterface` 都不再注入 ——
+ * 「两条路径不可区分」升级成了「压根不存在第二条路径」。
+ * 首次验证成功时才建 `users` 行（§5.2 / §6.3.1），输入是本类存进挑战的
+ * `email_encrypted` 与 `locale`。
+ *
+ * 三道防线于是收缩成两道半：
+ *
+ *   ① **形状**：只有一种返回，{@see OtpChallengeIssued}。控制器里也没有 `if`。
+ *   ② **做功**：不再需要人肉配平 —— 没有分支就没有可配的两边。
+ *   ③ **耗时**：{@see TimeEqualizerInterface} 保留。今天它兜的不是分支差异，
+ *      而是纵深防御：将来谁往这里加一个 `if`，填充仍然在原地挡着。
+ *
+ * ⚠️ 保留 ③ 而不是顺手删掉，是因为删它没有任何测试会红，而它挡住的那类回归
+ * （新增一个按存在性分支的优化）恰恰是最容易被当成「性能改进」提交的。
+ *
+ * ============================================================================
+ * ⚠️ 收件人**恒为新加密的密文**，不要「优化」成读 users 那一列
+ * ============================================================================
+ * `$recipient = $crypto->encrypt(CryptoKey::Pii, $payload->email)` 每次都真加密一次，
+ * 哪怕这个邮箱已经有 `users.email_encrypted` 可以直接拿。
+ *
+ * 改成 `$user?->emailEncrypted() ?? $crypto->encrypt(...)` 会同时打开两个洞：
+ * 要先查一次 `users`（本类就又知道存在性了），且已注册路径会少一次 Vault 往返 ——
+ * 正是 T-103 花了一整段注释去堵的那条时间侧信道，只是方向反过来。
+ *
+ * 代价是每次请求一次 Transit encrypt。本端点被 §7.5 限到每邮箱 1/min，付得起。
  *
  * ============================================================================
  * 这里**没有**事务
  * ============================================================================
  * 写库只有一处（`invalidateActiveFor` + `save`，同一张表），
  * 而发信是异步入队、失败自带重投。`TransactionRunnerInterface` 是给
- * T-104「建 user + device + session 三步同生共死」那种场景的，这里用不上。
+ * `VerifyOtpService`「建 user + device + session 三步同生共死」那种场景的，这里用不上。
  *
  * ⚠️ 顺序仍然有要求：作废旧挑战必须在 save 新挑战**之前**，否则会把刚建的那条
  * 一起作废掉，用户拿到的码当场失效。
@@ -84,7 +103,6 @@ final readonly class RequestOtpService
      * @param int<1, max> $requestBudgetMillis 恒定耗时预算，见 config/packages/ncards_otp.yaml
      */
     public function __construct(
-        private UserRepositoryInterface $users,
         private OtpChallengeRepositoryInterface $challenges,
         private HmacHasherInterface $hasher,
         private CryptoServiceInterface $crypto,
@@ -116,8 +134,10 @@ final readonly class RequestOtpService
 
         $emailHash = HashDigest::fromRaw($this->hasher->hash($payload->email));
 
-        // ⚠️ 限流必须在**查库之前**。放到查库之后的话，429 的触发时刻会因为
-        // 「查到了 / 没查到」而不同 —— 那等于把刚防住的信息又从限流这条路上放出去。
+        // ⚠️ 限流必须在**任何写库与发信之前**。它是这个端点唯一的滥用闸门：
+        // §7.5 的 1/min、5/h、10/day 就是「对自有邮箱的 OTP 轰炸」这条剩余攻击面
+        // （§7.2 T11）的全部缓解措施。ADR-0014 让本端点对任意邮箱都真发信之后，
+        // 这道闸从「重要」变成了「唯一」—— 它挡的是「用我们的域名给别人的收件箱发信」。
         //
         // 一次 consumeAll 而不是两次 consume：ADR-0005 的「全过才扣」。分开扣的话，
         // 一个把某出口 IP 的 20/h 烧光的攻击者，会顺带把每个被他试过的邮箱的
@@ -128,12 +148,7 @@ final readonly class RequestOtpService
         ]);
 
         $now = $this->clock->now();
-        $user = $this->users->findByEmailHash($emailHash);
 
-        // 哑挑战也要一个**真实的随机码摘要**。传常量或全零的话，decoy 在库层就是
-        // 可辨认的 —— 攻击者拿不到这一列，但 §8.4 的数据导出与将来的运维查询都可能
-        // 把这个差别泄露出去。所以：照常生成、照常算摘要，只是不发信。
-        // （这条要求写在 OtpChallenge::decoy() 的注释里。）
         $code = $this->generateCode();
         $codeHash = HashDigest::fromRaw($this->hasher->hash($code));
 
@@ -143,64 +158,42 @@ final readonly class RequestOtpService
         // 与 email_hash 用 Vault pepper 是同一套论证（HmacHasherInterface 的类注释）。
         $ipHash = HashDigest::fromRaw($this->hasher->hash($clientIp ?? self::IP_FALLBACK));
 
-        // ============================================================
-        // ⚠️ 下面这一行是耗时对齐的承重墙，别「优化」掉
-        // ============================================================
-        // decoy 分支这次 encrypt 的**返回值是被丢弃的**。它存在的唯一理由是配平
-        // 真实路径在别处的一次 Vault 加密 —— `EncryptedMailSerializer` 会在入队时
-        // 对整条消息体做一次 Transit 加密（那是为了 messenger_messages.body 里
-        // 不出现明文邮箱与明文码）。两边的账：
-        //
-        //   真实路径：hmac(email) + hmac(code) + hmac(ip) + 序列化器的 encrypt = 4
-        //   decoy   ：hmac(email) + hmac(code) + hmac(ip) + 这里的 encrypt     = 4
-        //
-        // 删掉它，decoy 就比真实路径少一次 Vault 往返（几毫秒，稳定可测），
-        // §3.8 的时间侧信道当场打开，而所有功能测试仍然全绿。
-        // tests/Api/OtpEnumerationResistanceTest 断言的就是这个账。
-        $recipient = $user?->emailEncrypted() ?? $this->crypto->encrypt(CryptoKey::Pii, $payload->email);
+        // ⚠️ 恒加密一次，**不要**改成读 users 那一列 —— 理由见类注释顶部那一节。
+        // 这个密文有两个用途：这封信的收件人，以及首次验证成功时建 users 行的输入。
+        $recipient = $this->crypto->encrypt(CryptoKey::Pii, $payload->email);
 
-        // §7.1：「单次登录只允许一个活跃 challenge」。两条路径都做 —— 对不存在的
-        // 邮箱同样有旧的哑挑战要作废，而且这一步的 DB 往返次数必须相等。
+        // §7.1：「单次登录只允许一个活跃 challenge」。
         $this->challenges->invalidateActiveFor($emailHash, $now);
 
         $challengeId = $this->uuids->generate();
         $expiresAt = $now->modify(\sprintf('+%d seconds', $this->ttlSeconds));
 
-        $this->challenges->save(
-            null !== $user
-                ? OtpChallenge::issue(
-                    $challengeId,
-                    $emailHash,
-                    $codeHash,
-                    OtpPurpose::Login,
-                    $expiresAt,
-                    // Magic Link 的 token 归 T-106，本端点一期只发数字码。
-                    null,
-                    $ipHash,
-                    $now,
-                )
-                : OtpChallenge::decoy(
-                    $challengeId,
-                    $emailHash,
-                    $codeHash,
-                    OtpPurpose::Login,
-                    $expiresAt,
-                    $ipHash,
-                    $now,
-                ),
-        );
+        $this->challenges->save(OtpChallenge::issue(
+            $challengeId,
+            $emailHash,
+            $recipient,
+            $payload->locale,
+            $codeHash,
+            OtpPurpose::Login,
+            $expiresAt,
+            // Magic Link 的 token 归 T-106，本端点一期只发数字码。
+            null,
+            $ipHash,
+            $now,
+        ));
 
-        if (null !== $user) {
-            $this->send($payload->locale, $recipient, $code);
-        }
+        $this->send($payload->locale, $recipient, $code);
 
         // §14.4 的「OTP 转化率骤降」P1 告警需要请求侧的计数 —— T-102 只给了
-        // worker 侧的 email_send_total，它看不到 decoy（decoy 压根不入队）。
-        // 两条分支都记、只有标签值不同，所以这一步是耗时对称的。
+        // worker 侧的 email_send_total，而那是 worker 消费之后才有的数。
+        //
+        // ⚠️ `result` 标签保留但恒为 `issued`：ADR-0014 之后 `decoy` 这个取值退休了。
+        // 留着标签维度是为了让既有的告警查询不必改写，也为了 T-106 的 Magic Link
+        // 将来能在同一个计数器上分出自己的取值。
         //
         // ⚠️ 请求路径里**不做任何其它** Redis 读写（QueueingMailSender 的类注释
-        // 明令禁止）—— 每多一次都是一次要重新配平的往返。
-        $this->metrics->counter('otp_request_total', ['result' => null !== $user ? 'issued' : 'decoy']);
+        // 明令禁止）。
+        $this->metrics->counter('otp_request_total', ['result' => 'issued']);
 
         $budget->settle();
 

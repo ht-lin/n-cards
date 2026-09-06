@@ -213,11 +213,24 @@ J5 删号
 - 但**必须**在配置中硬编码系统限额常量，并在服务端强制校验（§7.5 限额表）。
 - 全局日发信量超阈值 → 告警 + 自动熔断非关键邮件（保留 OTP）。
 
-**v1.1 更新：垃圾邮件跳板风险已大幅下降。** 取消邮箱邀请与邀请链接后（C2），**用户无法让系统向任意第三方邮箱发信**——外发邮件只剩两类：
-1. **OTP / Magic Link**：收件人只能是请求者自己输入的邮箱，已有每邮箱 1/min、5/h、10/day 的严格限速（§7.5）。
+**v1.1 更新：垃圾邮件跳板风险已大幅下降。** 取消邮箱邀请与邀请链接后（C2），外发邮件只剩两类：
+1. **OTP / Magic Link**：收件人是请求者输入的**任意**邮箱，由每邮箱 1/min、5/h、10/day 的严格限速兜住（§7.5）。
 2. **安全提醒**（新设备登录、refresh 重放检测）：收件人**只能是账号自己**，由系统事件触发，用户无法指定收件人。
 
-因此原"每账号每日 10 封邀请信 + 新账号 24h 冷启动期"的限额**不再需要，已删除**。发信域名被黑仍是 R1 级风险，但攻击面从"任意邮箱轰炸"收缩为"对自有邮箱的 OTP 轰炸"，后者由既有限速覆盖。全局熔断保留不变。
+因此原"每账号每日 10 封邀请信 + 新账号 24h 冷启动期"的限额**不再需要，已删除**。发信域名被黑仍是 R1 级风险。
+
+> ⚠️ **[ADR-0014](adr/0014-otp-always-sends-a-code.md)（2026-09-06）修正了上面第 1 条的措辞。**
+> 本节 v1.1 原文写的是「**用户无法让系统向任意第三方邮箱发信**」，而那句话的前提是
+> 「未注册的邮箱不发信」——那个设计让注册变得不可能（新用户永远收不到码），
+> 已在 T-104 取消。
+>
+> 准确的表述是：**用户可以让系统向任意邮箱发信，但每个邮箱每天最多 10 封，
+> 且内容只可能是一封验证码信。** T11 的攻击面因此是「对任意邮箱、被三个窗口夹住的
+> OTP 轰炸」，而不是原来以为的「仅对自有邮箱」。
+>
+> 这个代价是明知并接受的：三个窗口是 §7.5 原文就有的，ADR-0014 没有放宽任何一个；
+> 而换来的是「注册路径存在」以及一套更强的防枚举（服务端在那条路径上根本不查 `users`）。
+> 全局熔断保留不变，但 §14.4 的 `email_send_total` 阈值校准要把未注册地址的那部分算进去。
 
 > 反过来，新增的枚举/骚扰面转移到了 **username 搜索**（§3.8）与**好友请求**上，这两处必须补限额（§7.5）。风险总量下降，但位置变了——不要因为"邮件风险没了"就放松社交侧限流。
 
@@ -380,13 +393,13 @@ J5 删号
 
 **关于"username 搜索是否构成账号枚举"——是，且这是可接受的**
 
-必须理解这里与邮箱枚举的**本质差别**，不要错误地把邮箱那套"恒定 202 + decoy"照搬过来：
+必须理解这里与邮箱枚举的**本质差别**，不要错误地把邮箱那套"恒定 202"照搬过来：
 
 | | 邮箱枚举 | username 枚举 |
 |---|---|---|
 | 泄露了什么 | 「这个**真实邮箱**注册了 N-Cards」——邮箱是跨服务的强身份标识，可直接用于钓鱼/撞库 | 「`anna_b` 这个**伪名**存在」——伪名是用户为本服务自选的，与真实身份无关联（前提是 UI 已提示勿用真名） |
 | 字典成本 | 极低（可购买亿级真实邮箱表） | 需猜测用户自选的 3–20 字符串 |
-| 能否消除 | 能（decoy challenge，功能不受损） | **不能**——"搜不到就是不存在"是搜索功能的固有语义，返回假的"找到了"会让功能不可用 |
+| 能否消除 | 能（**恒发码**，两条路径合并成一条，功能不受损，见 [ADR-0014](adr/0014-otp-always-sends-a-code.md)） | **不能**——"搜不到就是不存在"是搜索功能的固有语义，返回假的"找到了"会让功能不可用 |
 | 结论 | 必须防护 | **接受，以限速 + 精确匹配 + 伪名化控制风险**（记为 §7.2 T18） |
 
 搜索响应**必须**只返回 `user_id` / `username` **两个**字段（v1.1 移除 `display_name` 后更是如此），**绝不**返回邮箱、注册时间、好友数、卡数等任何附加信息——那才是真正会把枚举变成情报收集的地方。
@@ -725,10 +738,18 @@ Anna App          Backend                              Bob App
 | `attempts` | SMALLINT NOT NULL DEFAULT 0 | ≥5 即作废 |
 | `expires_at` | TIMESTAMPTZ NOT NULL | now() + 10 min |
 | `consumed_at` | TIMESTAMPTZ NULL | |
-| `is_decoy` | BOOLEAN NOT NULL DEFAULT false | 邮箱不存在时创建的哑挑战（防枚举，§3.8） |
+| ~~`is_decoy`~~ | BOOLEAN NOT NULL DEFAULT false | **已废弃**（[ADR-0014](adr/0014-otp-always-sends-a-code.md)）：不再有任何写入方，恒为 false。列保留至 T-113 按 expand–contract 删除 |
+| **`email_encrypted`** | **TEXT NULL** | **T-104 新增**。Vault Transit 密文，与 `users.email_encrypted` 同一把密钥。**首次验证成功时用它建 `users` 行** —— 那时明文邮箱早已不在系统里 |
+| **`locale`** | **TEXT NULL** | **T-104 新增**。请求验证码时选的语言，注册时进 `users.locale`。收到英文码信却拿到 `locale=de` 的账号是用户能看见的 bug |
 | `request_ip_hash` | BYTEA NULL | 限流与滥用分析用，30 天后清理 |
 
-> 哑挑战（`is_decoy`）不发送邮件，验证时永远失败，但耗时与真实路径一致。
+> ⚠️ **ADR-0014 起，本端点对任意邮箱都真发码。** 原来的「哑挑战」（`is_decoy`：
+> 不发信、验证恒失败、耗时与真实路径一致）已取消 —— 它让**注册变得不可能**，
+> 因为新用户永远收不到码，而契约里没有第二条注册路径。
+> 防枚举因此从「配平两条路径」升级成「服务端在这条路径上根本不查 `users`」。
+>
+> ⚠️ 两个新列让这张表从「只有哈希」变成**含加密的个人数据** ——
+> §8.2 的 ROPA 分级与 §8.4 的数据导出要把它算进去（保留期不变，挑战本就短命）。
 
 #### `devices`
 
@@ -1310,9 +1331,9 @@ Client                          API                       Vault      ESP
   ├──────────────────────────────►│
   │                               │ 限流检查（email_hash + IP + 全局）
   │                               │ email_hash = HMAC(email)  ◄──pepper──┤
-  │                               │ 查 users
-  │                               │  ├ 存在 → 建 challenge, 生成 6 位码
-  │                               │  └ 不存在 → 建 challenge(is_decoy=true) 【注1】
+  │                               │ ⚠️ **不查 users** —— 无分支【注1】
+  │                               │ 建 challenge（含 email_encrypted + locale）
+  │                               │ 生成 6 位码
   │                               │ Messenger async: SendOtpEmail
   │◄──────────────────────────────┤ 202 {challenge_id, expires_at, resend_after:60}
   │                               │                                  ├──►│
@@ -1321,8 +1342,7 @@ Client                          API                       Vault      ESP
   │ POST /auth/otp/verify {challenge_id, code, device}
   ├──────────────────────────────►│
   │                               │ 常量时间比较 code_hash
-  │                               │ attempts++；>5 或过期 → 401
-  │                               │ decoy → 恒 401（耗时相同）
+  │                               │ attempts++；>5 或过期 → 401【注3】
   │                               │ 成功 → upsert user（首次即注册）
   │                               │        创建 device + session
   │                               │        签发 JWT(15min) + refresh(90d)
@@ -1339,7 +1359,22 @@ Client                          API                       Vault      ESP
   │◄──────────────────────────────┤ 200 {user}   ← 此后才可访问其他端点
 ```
 
-**注1**：不存在的邮箱也创建 decoy challenge 且**不发信**。若攻击者据"是否收到邮件"判断，那是他自己的邮箱，无信息泄露。
+**注1（v1.1 修订，[ADR-0014](adr/0014-otp-always-sends-a-code.md)）**：**无论邮箱是否注册，都真发一封验证码信。**
+服务端在这条路径上不查 `users`，因此在结构上就无法按存在性分支 —— 这比原来的
+「建哑挑战 + 配平两条路径的做功与耗时」更强，也更难写错。
+
+原设计（哑挑战 `is_decoy`、不发信）取消的直接原因是：**它让注册变得不可能**。
+未注册的邮箱收不到码 → 走不到 verify → 而 §5.2 与本节都规定「首次验证成功即注册」，
+且契约里没有第二条注册路径。
+
+代价是 §3.1 那句「用户无法让系统向任意第三方发信」不再成立，准确的表述变成
+「**只能向任意邮箱发一封 OTP，且每邮箱每天 10 封封顶**」（§7.5 的三个窗口，未放宽）。
+T11 的攻击面因此从「对自有邮箱的轰炸」回到「对任意邮箱、但被三个窗口夹住的轰炸」。
+
+**注3**：五种拒绝形状（码错 / 过期 / 已消费 / 次数耗尽 / 上个版本留下的哑挑战）
+返回**逐字相同**的 401，且做功与耗时相同。ADR-0014 之后攻击面搬到了这里：
+攻击者能对任意邮箱拿到一个真实的 `challenge_id`，再用错码来问
+「这个邮箱注册过吗」。挡它的是「拒绝路径不查 `users`」+ `ncards.otp.verify_budget_ms` 的耗时填充。
 
 **注2（v1.1）**：`otp/verify` 成功即创建用户行，但在 `username` 设定前该用户处于 `onboarding_incomplete`——除 `GET /v1/me`、`POST /v1/me/username`、`POST /v1/auth/logout` 外一律 `403 username_required`（§5.2）。**已注册用户的后续登录不经过 username 步骤**（`username` 已非空）。
 
@@ -1436,7 +1471,7 @@ Bob:  【选择接受或拒绝】
 | T03 | Tampering | 越权修改他人卡 | 数据破坏 | 每个端点强制 `card_members` 校验；集成测试**必须**覆盖每个角色 × 每个端点的矩阵 | ✅ 一期 |
 | T04 | Repudiation | 用户否认共享/删除操作 | 纠纷 | `audit_log` 记录关键动作 12 个月 | ✅ 一期 |
 | T05 | Info Disclosure | DB / 备份泄露 | 全量会员号 | Vault Transit 加密 payload、note、email | ✅ 一期 |
-| T06 | Info Disclosure | **邮箱**枚举（OTP 端点） | 邮箱有效性验证服务 | 恒定 202 + decoy challenge + 常量时间。**v1.1：好友邮箱端点已删除，此面收窄至仅 OTP** | ✅ 一期 |
+| T06 | Info Disclosure | **邮箱**枚举（OTP 端点） | 邮箱有效性验证服务 | 恒定 202 + **服务端不查 users**（ADR-0014，取代原「decoy challenge」）+ verify 侧五种拒绝逐字相同 + 两侧常量时间填充。**v1.1：好友邮箱端点已删除，此面收窄至仅 OTP** | ✅ 一期 |
 | T07 | Info Disclosure | 应用主机 RCE | 全量明文 | ❌ 不防护。缓解：最小攻击面（无文件上传、无反序列化用户输入）、依赖漏洞扫描、容器非 root、只读根文件系统 | ⚠️ 已接受，见 §3.3 |
 | T08 | Info Disclosure | 手机丢失 | 本机全部卡 | SQLCipher + Keystore + `allowBackup=false` + `dataExtractionRules`（含 `device-transfer`）+ 可选生物识别锁 + 远程登出。**边界（§3.4 的有意取舍，T-009 落地）**：Keystore 密钥**不绑定用户认证**（`setUserAuthenticationRequired(false)`），因为 Widget 与 FCM 后台同步必须在无用户交互时读写数据库。因此防护的是「**设备丢失且未解锁**」与「应用间越权」；对**已解锁设备上以本应用 UID 执行代码**的攻击者（已 root、取证工具）**不防护** —— 他能让 Keystore 替他解密。对外文案不得超出这条边界 | ✅ 一期（边界见右） |
 | T09 | Info Disclosure | Widget / 锁屏泄露码值 | 会员号被瞥见 | Widget 不渲染条码（§3.9） | ✅ 一期 |
@@ -1563,6 +1598,7 @@ Bob:  【选择接受或拒绝】
 | 关系 | friendships, card_members | 共享功能 | 关系存续期 | Hetzner DE |
 | 设备 | device id, model, os/app 版本, push_token | 多设备与推送 | 设备撤销后即删 | Hetzner DE |
 | 安全 | ip_hash, audit_log, 限流计数 | 滥用防护 | ip_hash 30 天；audit 12 个月；限流 24 小时 | Hetzner DE / Redis |
+| 认证 | `otp_challenges`：email_hash、**email_encrypted**（Vault Transit）、locale、code_hash、request_ip_hash | 登录与注册（§6.3.1） | 挑战 10 分钟过期，T-113 的每日任务删除；request_ip_hash 30 天 | Hetzner DE |
 | 外发邮件队列 | `messenger_messages.body`：收件邮箱 + OTP 码 / 提醒内容，**整条消息体经 Vault Transit 加密**（`ncards-pii`） | 异步投递登录码与安全提醒 | **消费即删行**；投递失败重投 3 次（约 13 秒）后转入 `failed` 队列，由人工处置后删除 | Hetzner DE |
 | 诊断 | 崩溃栈、`X-Request-Id`、脱敏日志 | 稳定性 | 30 天 | Hetzner DE（自托管 Sentry / Loki） |
 
@@ -2279,7 +2315,7 @@ staging 可用」实测 **29m35s**，其中 25 分钟是一组跑在模拟器上
 
 | 交付 |
 |---|
-| 后端：OTP 请求/验证（含 decoy、限流、常量时间）、Magic Link（POST 消费）、JWT + refresh 轮换与重放检测、设备管理 |
+| 后端：OTP 请求/验证（恒发码、限流、常量时间）、Magic Link（POST 消费）、JWT + refresh 轮换与重放检测、设备管理 |
 | 后端：**username**（`Username` 值对象、保留词、一次性写入端点、`username_required` 全局拦截器、僵尸行清理任务） |
 | 后端：**单一**商业邮件通道集成（`MailSenderInterface` 抽象后置，DSN 可切换）+ 双语邮件模板 + 发送指标（§3.2：不做双活） |
 | 后端：Cards CRUD + Vault 加密 + revision 乐观锁 + 限额校验 |
@@ -2404,18 +2440,20 @@ CREATE TABLE users (
 
 -- otp_challenges
 -- ⚠️ **刻意没有到 users 的外键**，存的是 email_hash 而不是 user_id。
---    §3.8 的哑挑战（is_decoy）是给不存在的邮箱建的，有外键就插不进去，
---    而"响应体与耗时与真实路径不可区分"正是靠它成立的。
+--    ADR-0014 之后理由更硬：otp/request **不查 users**，所以挑战可能
+--    先于用户存在（首次验证成功时才建 users 行）。有外键就插不进去。
 CREATE TABLE otp_challenges (
   id               UUID        PRIMARY KEY,
   email_hash       BYTEA       NOT NULL,
+  email_encrypted  TEXT,                          -- T-104：收件人密文，也是注册时建 users 行的输入
+  locale           TEXT        CHECK (locale IN ('de','en')),  -- T-104：注册时进 users.locale
   code_hash        BYTEA       NOT NULL,          -- HMAC-SHA256(code, pepper)，不存明文
   magic_token_hash BYTEA,                         -- Magic Link 令牌哈希
   purpose          TEXT        NOT NULL,          -- 一期恒为 'login'
-  attempts         SMALLINT    NOT NULL DEFAULT 0,
+  attempts         SMALLINT    NOT NULL DEFAULT 0,  -- 到 §7.1 的上限（5）为止饱和，不无限累加
   expires_at       TIMESTAMPTZ NOT NULL,
   consumed_at      TIMESTAMPTZ,
-  is_decoy         BOOLEAN     NOT NULL DEFAULT false,
+  is_decoy         BOOLEAN     NOT NULL DEFAULT false,  -- ⚠️ ADR-0014 起无写入方，恒 false；T-113 删列
   request_ip_hash  BYTEA,                         -- 30 天后清理（§8.2）
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

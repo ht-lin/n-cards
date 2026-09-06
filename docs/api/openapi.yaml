@@ -100,11 +100,18 @@ paths:
       operationId: requestOtp
       summary: 请求登录用的一次性验证码
       description: |
-        **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。邮箱不存在时
-        服务端创建一个哑挑战（`is_decoy`），不发信、验证时永远失败，但耗时与
-        真实路径一致。客户端**不能**从本接口的响应推断账号是否存在。
+        **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。
+
+        服务端在这条路径上**不查 `users`** —— 它在结构上就不知道邮箱注册过没有，
+        因此对任意地址都生成并发送一个真实的验证码（[ADR-0014](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0014-otp-always-sends-a-code.md)）。
+        这也是**唯一的注册路径**：首次 `POST /auth/otp/verify` 成功即创建 `users` 行。
+
+        客户端**不能**从本接口的响应推断账号是否存在，也**不应该**尝试 ——
+        「这个邮箱要走登录还是注册」对客户端是同一个流程（邮箱 → 验证码 → username）。
 
         限速（§7.5）：按 `email_hash` 1/min、5/h、10/day；按 IP 20/h。
+        这三个窗口是本端点唯一的滥用闸门 —— 它挡的是「用 N-Cards 的域名给别人的
+        收件箱发信」，所以 429 时**不要**自动重试，照 `Retry-After` 退避。
       security: []
       parameters:
         - $ref: '#/components/parameters/XClient'
@@ -1372,7 +1379,8 @@ components:
       additionalProperties: true
       required: [challenge_id, expires_at, resend_after_seconds]
       description: |
-        ⚠️ 无论邮箱是否存在，本对象的形状与耗时都**完全一致**（§3.8 防枚举）。
+        ⚠️ 无论邮箱是否存在，本对象的形状与耗时都**完全一致**（§3.8 防枚举）——
+        服务端在签发它时压根没查过 `users`（ADR-0014）。
         客户端不得据此推断账号是否存在。
       properties:
         challenge_id: { type: string, format: uuid }

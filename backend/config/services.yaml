@@ -213,14 +213,43 @@ services:
     # 同一个做法 —— 把配置耦合进 Application 层的类会让「改一个阈值」变成改代码，
     # 而这四个数字里有两个（resend_after 与 budget）是要按实测回调的。
     #
-    # 这里**没有** max_attempts：那个参数归 T-104 的验证端点，
-    # 在它有消费者之前不接线（接了会得到一个没人用的构造参数）。
+    # 这里**没有** max_attempts：那个参数归 T-104 的验证端点（见下面那条），
+    # 请求侧不消费它。
     App\Module\Identity\Application\Otp\RequestOtpService:
         arguments:
             $codeDigits: '%ncards.otp.code_digits%'
             $ttlSeconds: '%ncards.otp.ttl_seconds%'
             $resendAfterSeconds: '%ncards.otp.resend_after_seconds%'
             $requestBudgetMillis: '%ncards.otp.request_budget_ms%'
+
+    # ------------------------------------------------------------------ T-104
+    # JWT 签发（§7.1：EdDSA / Ed25519，15 分钟）。
+    #
+    # 两个接口都在 Shared\Application、实现都在 Shared\Infrastructure ——
+    # 与 CryptoServiceInterface / HmacHasherInterface 同一套摆法，理由见
+    # CryptoServiceInterface 的类注释（没有任何模块能看见 Shared.Infrastructure）。
+    App\Shared\Application\Token\SigningKeyProviderInterface: '@App\Shared\Infrastructure\Token\VaultKvSigningKeyProvider'
+    App\Shared\Application\Token\AccessTokenSignerInterface: '@App\Shared\Infrastructure\Token\Ed25519AccessTokenSigner'
+
+    # 密钥本身在 Vault KV，这里只有路径与缓存 TTL（config/packages/ncards_jwt.yaml）。
+    #
+    # ⚠️ kvPath 必须与 infra/vault/bootstrap.sh 的 JWT_KV_PATH 逐字相同，
+    # 且 infra/vault/policies/ncards-app.hcl 里要有对应的 read 授权 ——
+    # 三处任何一处改了，另外两处一起改。对不上的症状是「刚建的栈登录不了」。
+    App\Shared\Infrastructure\Token\VaultKvSigningKeyProvider:
+        arguments:
+            $kvPath: '%ncards.jwt.kv_path%'
+            $cacheTtlSeconds: '%ncards.jwt.key_cache_ttl_seconds%'
+
+    # 验证端点的五个标量。`max_attempts` 从 T-103 起就配在 ncards_otp.yaml 里
+    # 等着这一行 —— 它是 §7.5「challenge_id 5 次总计」的唯一强制点。
+    App\Module\Identity\Application\Otp\VerifyOtpService:
+        arguments:
+            $maxAttempts: '%ncards.otp.max_attempts%'
+            $accessTtlSeconds: '%ncards.jwt.access_ttl_seconds%'
+            $refreshTtlSeconds: '%ncards.jwt.refresh_ttl_seconds%'
+            $verifyBudgetMillis: '%ncards.otp.verify_budget_ms%'
+            $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones

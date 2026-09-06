@@ -8,6 +8,7 @@ use App\Shared\Domain\Crypto\CryptoKey;
 use App\Shared\Domain\Crypto\CryptoUnavailable;
 use App\Shared\Infrastructure\Crypto\VaultHmacHasher;
 use App\Shared\Infrastructure\Crypto\VaultTransitCrypto;
+use App\Shared\Infrastructure\Token\VaultKvSigningKeyProvider;
 use App\Shared\Infrastructure\Vault\AppRoleTokenProvider;
 use App\Shared\Infrastructure\Vault\VaultClient;
 use App\Shared\Infrastructure\Vault\VaultTokenProviderInterface;
@@ -40,6 +41,7 @@ use Symfony\Component\HttpClient\HttpClient;
 #[CoversClass(VaultClient::class)]
 #[CoversClass(VaultTransitCrypto::class)]
 #[CoversClass(VaultHmacHasher::class)]
+#[CoversClass(VaultKvSigningKeyProvider::class)]
 final class AppRolePolicyTest extends TestCase
 {
     use RequiresVault;
@@ -81,6 +83,27 @@ final class AppRolePolicyTest extends TestCase
     public function testAppRoleCanComputeHmacs(): void
     {
         self::assertSame(32, \strlen((new VaultHmacHasher($this->appClient))->hash('anna@example.de')));
+    }
+
+    /**
+     * ⚠️ T-104 给 policy 新开的**唯一**一条可读路径，也是这份清单里
+     * 唯一一条让密钥材料离开 Vault 的路径（理由与代价写在 ncards-app.hcl 里）。
+     *
+     * 没有它，`VaultKvSigningKeyProvider` 在生产上会 503，
+     * 而本地与 CI 全绿 —— 那两处走的是 StaticTokenProvider + root token，
+     * policy 对它们完全不起作用。这个类是**唯一**能发现那个差别的地方。
+     */
+    public function testAppRoleCanReadTheJwtSigningKey(): void
+    {
+        $key = (new VaultKvSigningKeyProvider(
+            $this->appClient,
+            new FrozenClock((new \DateTimeImmutable('2026-09-06T12:00:00+00:00'))->getTimestamp() * 1000),
+            'ncards/jwt/current',
+            cacheTtlSeconds: 300,
+        ))->currentKey();
+
+        self::assertSame(32, \strlen($key->seed));
+        self::assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $key->kid);
     }
 
     /**
@@ -168,6 +191,54 @@ final class AppRolePolicyTest extends TestCase
             'transit/encrypt/some-other-key',
             ['plaintext' => ''],
             'policy 是按 key 名逐条授予的，不是给整个 transit/ 挂通配符。',
+        ];
+
+        yield '覆盖 JWT 签名密钥' => [
+            'secret/data/ncards/jwt/current',
+            ['data' => ['private_key' => 'attacker', 'kid' => 'x', 'algorithm' => 'EdDSA']],
+            '⚠️ 只给 read。能写就能把签名密钥换成自己的，然后为任意用户签 token —— '
+            .'那比读走它更糟：受害者的会话不会失效，没有任何症状。',
+        ];
+    }
+
+    /**
+     * KV 那条授权是**逐条路径**给的，不是 `secret/data/ncards/jwt/*`，
+     * 更不是 `secret/data/*`。
+     *
+     * ⚠️ `secret/metadata/*` 尤其不给：那是版本列表与历史版本的读取能力，
+     * 也就是把「拿到当前密钥」升级成「拿到全部曾经用过的密钥」——
+     * 而 §5.3 的 6 个月轮换正是靠「旧密钥退役」来限制一次泄露的时间窗的。
+     *
+     * @param string $path 一条**不该**可读的 KV 路径
+     */
+    #[DataProvider('forbiddenKvPaths')]
+    public function testAppRoleCannotReachNeighbouringKvPaths(string $path, string $why): void
+    {
+        $this->expectException(CryptoUnavailable::class);
+        $this->expectExceptionMessageMatches('/denied|policy/i');
+
+        $this->appClient->read($path);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function forbiddenKvPaths(): iterable
+    {
+        yield '密钥的历史版本' => [
+            'secret/metadata/ncards/jwt/current',
+            '版本列表 + 历史版本 = 全部曾经用过的密钥，那让 §5.3 的轮换失去意义。',
+        ];
+
+        yield 'JWT 命名空间下的别的路径' => [
+            'secret/data/ncards/jwt/previous',
+            '重叠期的旧密钥将来可能出现在这里 —— 到那天要显式加一行，'
+            .'并顺便问一次「验签方真的需要读私钥吗」（不需要，它只要公钥）。',
+        ];
+
+        yield '别的 secret' => [
+            'secret/data/ncards/anything-else',
+            'policy 没有 secret/data/* 通配 —— 将来任何一条新 secret 都要单独授权。',
         ];
     }
 

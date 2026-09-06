@@ -186,8 +186,9 @@ assert 0 "$TODO_SCANNER" "$d" "TODO(#123) 放行，中文裸词不误报"
 echo
 echo "== gitleaks 豁免的边界 =="
 
-# .gitleaks.toml 有两条 regex 豁免和一条按文件的豁免。regex 豁免的风险是写宽了，
-# 按文件的豁免的风险是把整份文件放行 —— 下面两条断言分别守这两件事。
+# .gitleaks.toml 有两条 regex 豁免和若干条按文件的豁免。regex 豁免的风险是写宽了，
+# 按文件的豁免的风险是把整份文件放行 —— 下面每条按文件的豁免都配一对断言守这件事：
+# 「换个文件还拦不拦」+「同一个文件里别的规则还生效不生效」。
 #
 # ⚠️ 夹具里要放**真·凭据形态**（AWS access key ID），不能放 dev-only- 那种占位值：
 # 后者本来就在豁免表里，用它做夹具等于什么都没断言。
@@ -224,6 +225,27 @@ else
         > "$d/infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml"
     seal "$d"
     assert 1 "$SCRIPT_DIR/check-gitleaks.sh" "$d" "被豁免的 secrets.sops.yaml 里的 AWS key 仍被拦下"
+
+    # T-104 的 VaultKvSigningKeyProviderTest.php 豁免了 private-key（夹具是一把
+    # 只存在于那个文件里的 openssl 测试密钥）。这一条守的是「豁免没扩散到别处」——
+    # 同样的私钥块出现在任何别的文件里都必须红。
+    d="$(new_repo gitleaks-signing-key)"
+    mkdir -p "$d/backend/src"
+    cp "$SCRIPT_DIR/../../.gitleaks.toml" "$d/"
+    printf -- '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIF8jlXsvE6MwCvuPU6n9qCKd7qqMn73PBnA11jfQI4je\n-----END PRIVATE KEY-----\n' \
+        > "$d/backend/src/Signing.php"
+    seal "$d"
+    assert 1 "$SCRIPT_DIR/check-gitleaks.sh" "$d" "私钥块出现在测试夹具以外的文件里被拦下"
+
+    # 反向：被豁免的那个文件里，private-key 之外的规则照常生效。
+    # 防的是有人把 targetRules 去掉、变成整份文件放行。
+    d="$(new_repo gitleaks-signing-key-scope)"
+    mkdir -p "$d/backend/tests/Unit/Shared/Infrastructure/Token"
+    cp "$SCRIPT_DIR/../../.gitleaks.toml" "$d/"
+    printf '<?php\n$k = "AKIAZZ4H7XKQ2JVNPLQR";\n' \
+        > "$d/backend/tests/Unit/Shared/Infrastructure/Token/VaultKvSigningKeyProviderTest.php"
+    seal "$d"
+    assert 1 "$SCRIPT_DIR/check-gitleaks.sh" "$d" "被豁免的密钥测试文件里的 AWS key 仍被拦下"
 fi
 
 echo

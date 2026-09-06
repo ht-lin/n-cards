@@ -4,7 +4,18 @@ declare(strict_types=1);
 
 namespace App\Tests\Api\Support;
 
+use App\Module\Identity\Domain\Entity\OtpChallenge;
+use App\Module\Identity\Domain\Entity\User;
+use App\Module\Identity\Domain\Repository\OtpChallengeRepositoryInterface;
+use App\Module\Identity\Domain\Repository\UserRepositoryInterface;
+use App\Module\Identity\Domain\ValueObject\Locale;
+use App\Module\Identity\Domain\ValueObject\OtpPurpose;
+use App\Shared\Application\Crypto\CryptoServiceInterface;
 use App\Shared\Application\Crypto\HmacHasherInterface;
+use App\Shared\Domain\Crypto\CryptoKey;
+use App\Shared\Domain\Crypto\HashDigest;
+use App\Shared\Domain\Identity\UuidGeneratorInterface;
+use App\Shared\Domain\Time\ClockInterface;
 use App\Shared\Infrastructure\Redis\RedisConnectionFactory;
 use Doctrine\DBAL\Connection;
 use Doctrine\ORM\EntityManagerInterface;
@@ -129,5 +140,92 @@ trait RequiresOtpStack
     private static function uniqueEmail(): string
     {
         return 'anna-'.bin2hex(random_bytes(8)).'@example.de';
+    }
+
+    /**
+     * 直接种一条**码已知**的挑战，绕过 `POST /auth/otp/request`。
+     *
+     * ============================================================================
+     * 为什么不走真实的两步流程
+     * ============================================================================
+     * 真码只出现在邮件里，而 test 环境的 `MAILER_DSN=null://null` + 异步 transport
+     * 意味着它躺在 `messenger_messages.body` 里、还被 `EncryptedMailSerializer`
+     * 用 Vault Transit 加密过。为了拿一个六位数字去解一条队列消息，
+     * 会把 verify 的用例绑死在 T-102 的序列化格式上 —— 那条格式一改，
+     * 这里全红，而根因跟 verify 毫无关系。
+     *
+     * 所以这里用与生产**完全相同**的构造路径（同一个 `HmacHasherInterface`、
+     * 同一个 `CryptoServiceInterface`、同一个仓储）自己种一条，只是码由用例指定。
+     * 真实的「request → 收信 → verify」闭环由 T-104 的手工验证覆盖，
+     * 那一步在 docs/tasks/M1.md 的交付回顾里有记录。
+     *
+     * @param string|null $email 省略即随机。已注册与未注册的区别由调用方
+     *                           自己决定要不要先建 users 行
+     */
+    private function seedChallenge(string $code, ?string $email = null, ?\DateTimeImmutable $expiresAt = null): OtpChallenge
+    {
+        $container = static::getContainer();
+
+        /** @var HmacHasherInterface $hasher */
+        $hasher = $container->get(HmacHasherInterface::class);
+        /** @var CryptoServiceInterface $crypto */
+        $crypto = $container->get(CryptoServiceInterface::class);
+        /** @var UuidGeneratorInterface $uuids */
+        $uuids = $container->get(UuidGeneratorInterface::class);
+        /** @var ClockInterface $clock */
+        $clock = $container->get(ClockInterface::class);
+        /** @var OtpChallengeRepositoryInterface $challenges */
+        $challenges = $container->get(OtpChallengeRepositoryInterface::class);
+
+        $now = $clock->now();
+        $email ??= self::uniqueEmail();
+
+        $challenge = OtpChallenge::issue(
+            $uuids->generate(),
+            HashDigest::fromRaw($hasher->hash($email)),
+            $crypto->encrypt(CryptoKey::Pii, $email),
+            Locale::German,
+            HashDigest::fromRaw($hasher->hash($code)),
+            OtpPurpose::Login,
+            $expiresAt ?? $now->modify('+600 seconds'),
+            null,
+            null,
+            $now,
+        );
+
+        $challenges->save($challenge);
+
+        return $challenge;
+    }
+
+    /**
+     * 种一个**已注册**用户，邮箱哈希与 {@see seedChallenge()} 用的一致。
+     */
+    private function seedUser(string $email): User
+    {
+        $container = static::getContainer();
+
+        /** @var HmacHasherInterface $hasher */
+        $hasher = $container->get(HmacHasherInterface::class);
+        /** @var CryptoServiceInterface $crypto */
+        $crypto = $container->get(CryptoServiceInterface::class);
+        /** @var UuidGeneratorInterface $uuids */
+        $uuids = $container->get(UuidGeneratorInterface::class);
+        /** @var ClockInterface $clock */
+        $clock = $container->get(ClockInterface::class);
+        /** @var UserRepositoryInterface $users */
+        $users = $container->get(UserRepositoryInterface::class);
+
+        $user = User::register(
+            $uuids->generate(),
+            HashDigest::fromRaw($hasher->hash($email)),
+            $crypto->encrypt(CryptoKey::Pii, $email),
+            Locale::German,
+            $clock->now(),
+        );
+
+        $users->save($user);
+
+        return $user;
     }
 }

@@ -91,12 +91,18 @@ final class IdentityEntities
         ?HashDigest $magicTokenHash = null,
         ?HashDigest $requestIpHash = null,
         ?\DateTimeImmutable $now = null,
+        ?Ciphertext $emailEncrypted = null,
+        ?Locale $locale = null,
     ): OtpChallenge {
         $now ??= self::now();
 
         return OtpChallenge::issue(
             $id ?? self::id(2),
             $emailHash ?? self::digest(self::EMAIL_HASH_SEED),
+            // T-104：注册路径的两个输入。默认值与 user() 的一致，
+            // 这样「用同一个 challenge 建出来的用户」与 user() 造的那个可比。
+            $emailEncrypted ?? self::ciphertext(),
+            $locale ?? Locale::default(),
             $codeHash ?? self::digest('code'),
             OtpPurpose::Login,
             // §7.1：有效期 10 分钟。
@@ -107,6 +113,12 @@ final class IdentityEntities
         );
     }
 
+    /**
+     * 哑挑战 —— **ADR-0014 之后已无生产写入方**（见 {@see OtpChallenge::decoy()}）。
+     *
+     * 保留它是因为库里还有上个版本建的行：部署窗口内 `VerifyOtpService` 必须
+     * 继续对它们返回 401，而这个工厂是那条用例唯一的输入来源。
+     */
     public static function decoyChallenge(?\DateTimeImmutable $now = null): OtpChallenge
     {
         $now ??= self::now();

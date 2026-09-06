@@ -39,8 +39,8 @@ final class OtpChallengeTest extends TestCase
     {
         $challenge = IdentityEntities::challenge();
 
-        $challenge->recordAttempt();
-        $challenge->recordAttempt();
+        $challenge->recordAttempt(5);
+        $challenge->recordAttempt(5);
 
         self::assertSame(2, $challenge->attempts());
     }
@@ -54,13 +54,33 @@ final class OtpChallengeTest extends TestCase
         $challenge = IdentityEntities::challenge();
 
         for ($i = 0; $i < 4; ++$i) {
-            $challenge->recordAttempt();
+            $challenge->recordAttempt(5);
         }
 
         self::assertTrue($challenge->hasAttemptsLeft(5));
 
-        $challenge->recordAttempt();
+        $challenge->recordAttempt(5);
 
+        self::assertFalse($challenge->hasAttemptsLeft(5));
+    }
+
+    /**
+     * ⚠️ 上限之后**饱和**，不是一直加下去。
+     *
+     * 调用方在上限用完之后仍然会继续调它（「次数耗尽」这种拒绝必须与「码错了」
+     * 做同样多的功，见 VerifyOtpService 的注释）。不封顶的话 `attempts` 是无界的，
+     * 而它是 SMALLINT —— 足够多的源 IP 打同一个 challenge_id 能把它顶过 32767，
+     * 那时 PG 拒绝 UPDATE，于是那条挑战上的每一次请求都变成 500。
+     */
+    public function testTheAttemptCounterSaturatesInsteadOfOverflowing(): void
+    {
+        $challenge = IdentityEntities::challenge();
+
+        for ($i = 0; $i < 500; ++$i) {
+            $challenge->recordAttempt(5);
+        }
+
+        self::assertSame(5, $challenge->attempts());
         self::assertFalse($challenge->hasAttemptsLeft(5));
     }
 

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Module\Identity\Domain\Entity;
 
+use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Identity\Domain\ValueObject\OtpPurpose;
+use App\Shared\Domain\Crypto\Ciphertext;
 use App\Shared\Domain\Crypto\HashDigest;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
@@ -18,18 +20,21 @@ use App\Shared\Domain\Identity\Uuid;
  * ============================================================================
  * ⚠️ 这张表**没有到 `users` 的外键**
  * ============================================================================
- * 看起来像遗漏，其实是 §3.8 防枚举的承重墙。邮箱不存在时 `POST /auth/otp/request`
- * 同样要建一条挑战（`is_decoy = true`）并返回一个哑 `challenge_id`，
- * 好让响应体与**耗时**都与真实路径不可区分。
+ * 看起来像遗漏，其实是 §3.8 防枚举的承重墙 —— 而且 T-104 之后它比原来更重要。
  *
- * 有外键的话这条哑挑战根本插不进去 —— 它指向的用户按定义就不存在。
+ * 原本的理由是哑挑战（`is_decoy`）：邮箱不存在时也要建一条挑战，有外键就插不进去。
+ * ADR-0014 之后**没有哑挑战了**（两条路径合并成一条），但外键仍然不能加，
+ * 理由变成了更根本的一条：`POST /auth/otp/request` **不再查 `users`**，
+ * 它在结构上就不知道这个邮箱注册过没有。挑战因此可能先于用户存在 ——
+ * 首次验证成功时才建 `users` 行（见 {@see emailEncrypted()}）。
+ *
  * 所以这里存的是 `email_hash` 而不是 `user_id`，且没有引用完整性约束。
  *
  * ============================================================================
  * 什么不在这里
  * ============================================================================
  * 这个实体只提供状态迁移，**策略归各自的任务**：
- *   - 6 位码的生成与 `code_hash` 的计算、旧挑战作废、限流三维（T-103）
+ *   - 6 位码的生成与 `code_hash` 的计算、旧挑战作废、限流两维（T-103）
  *   - 「`attempts` 超过 5 即作废整个挑战」的那个 **5**（T-104，§7.1）——
  *     所以下面是 {@see hasAttemptsLeft()} 收一个上限参数，而不是硬编码
  *   - Magic Link 的 `GET` 不消费 / `POST` 才消费（T-106）
@@ -46,6 +51,8 @@ class OtpChallenge
     private function __construct(
         private Uuid $id,
         private HashDigest $emailHash,
+        private ?Ciphertext $emailEncrypted,
+        private ?Locale $locale,
         private HashDigest $codeHash,
         private OtpPurpose $purpose,
         private \DateTimeImmutable $expiresAt,
@@ -57,8 +64,11 @@ class OtpChallenge
     }
 
     /**
-     * 真实挑战 —— 邮箱确实存在，码会发出去。
+     * 一条登录挑战。**不区分邮箱是否已注册** —— 那正是 ADR-0014 的要点。
      *
+     * @param Ciphertext      $emailEncrypted 收件人（`vault:v1:…`）。既用来发这封信，
+     *                                        也是首次验证成功时建 `users` 行的输入
+     * @param Locale          $locale         客户端选的语言，同上两个用途
      * @param HashDigest      $codeHash       `HMAC-SHA256(code, pepper)`，§7.1 明令**不存明文**
      * @param HashDigest|null $magicTokenHash Magic Link 令牌的哈希（T-106），不发 Magic Link 时为 null
      * @param HashDigest|null $requestIpHash  限流与滥用分析用；ROPA §8.2 规定 30 天后清理（T-113）
@@ -66,6 +76,8 @@ class OtpChallenge
     public static function issue(
         Uuid $id,
         HashDigest $emailHash,
+        Ciphertext $emailEncrypted,
+        Locale $locale,
         HashDigest $codeHash,
         OtpPurpose $purpose,
         \DateTimeImmutable $expiresAt,
@@ -76,6 +88,8 @@ class OtpChallenge
         return new self(
             $id,
             $emailHash,
+            $emailEncrypted,
+            $locale,
             $codeHash,
             $purpose,
             $expiresAt,
@@ -87,12 +101,24 @@ class OtpChallenge
     }
 
     /**
-     * 哑挑战（§3.8）—— 邮箱不存在时建的，**不发信，验证时永远失败**。
+     * 哑挑战 —— **T-104（ADR-0014）之后已无生产调用方**。
      *
-     * ⚠️ `codeHash` 仍然要传一个真实的随机摘要，不能传常量或全零。
-     * 攻击者拿不到这一列，但一个可预测的值会让「哑挑战」在库层可辨认，
-     * 而 §8.4 的数据导出与将来的运维查询都可能把这个差别泄露出去。
-     * T-103 的做法是照常生成一个码、照常算摘要，只是不发信。
+     * ============================================================================
+     * ⚠️ 为什么还留着
+     * ============================================================================
+     * 它原本是 §3.8 的第一道防线：邮箱不存在时建一条不发信、验证恒失败的挑战，
+     * 好让 `POST /auth/otp/request` 的响应体与耗时不可区分。
+     *
+     * ADR-0014 把两条路径合并成一条（**恒发码**）之后这个概念失去了意义 ——
+     * 防枚举从「靠配平两条路径」变成了「服务端根本不查 `users`」，更强也更难写错。
+     * 但工厂与 `is_decoy` 列都保留着，因为：
+     *
+     *   1. **库里还有旧行。** 上一个版本建的哑挑战有 10 分钟寿命，
+     *      部署窗口内 `VerifyOtpService` 必须继续对它们返回 401 ——
+     *      所以 {@see isDecoy()} 不是死代码，它是这段窗口的正确性保证。
+     *   2. 删列要走 §13.5 的 expand–contract 三步，归 T-113 的清理任务收尾。
+     *
+     * ⚠️ 新代码**不要**再调它。要表达「这次不发信」，答案是「不存在这种情况」。
      */
     public static function decoy(
         Uuid $id,
@@ -106,6 +132,8 @@ class OtpChallenge
         return new self(
             $id,
             $emailHash,
+            null,
+            null,
             $codeHash,
             $purpose,
             $expiresAt,
@@ -124,6 +152,28 @@ class OtpChallenge
     public function emailHash(): HashDigest
     {
         return $this->emailHash;
+    }
+
+    /**
+     * 收件人密文，也是**首次验证成功时建 `users` 行的输入**（§5.2 / ADR-0014）。
+     *
+     * 为 null 只有一种情形：本列上线（T-104 的迁移）之前建的行，含哑挑战。
+     * 验证侧遇到「查不到用户 且 这里是 null」时返回 401 —— 无法注册，
+     * 而那些行的寿命只有 10 分钟。
+     */
+    public function emailEncrypted(): ?Ciphertext
+    {
+        return $this->emailEncrypted;
+    }
+
+    /**
+     * 请求验证码时客户端选的语言。注册时进 `users.locale`。
+     *
+     * 为 null 的情形同 {@see emailEncrypted()}。
+     */
+    public function locale(): ?Locale
+    {
+        return $this->locale;
     }
 
     public function codeHash(): HashDigest
@@ -147,15 +197,36 @@ class OtpChallenge
     }
 
     /**
-     * 记一次失败的验证尝试。
+     * 记一次验证尝试，**到 `$max` 为止饱和**。
      *
      * ⚠️ **成功的验证也要先记一次**再比对 —— 否则「码错了」与「码对了」在
      * `attempts` 上留下的痕迹不同，而 §3.8 要求两条路径不可区分。
-     * 顺序由 T-104 的处理器负责，这里只提供计数。
+     * 顺序由 `VerifyOtpService` 负责，这里只提供计数。
+     *
+     * ============================================================================
+     * 为什么是饱和加法，而不是一直加下去
+     * ============================================================================
+     * 上限用完之后，调用方**仍然会**继续调它 —— 那是刻意的：
+     * 「次数耗尽」这种拒绝必须与「码错了」做同样多的功（同一次 UPDATE），
+     * 否则两者的耗时可分，而攻击者能用那个差别免费探测「这条挑战被试过几次」。
+     *
+     * 于是这一列会被一条已经死掉的挑战反复写。不封顶的话它是**无界**的：
+     * `attempts` 是 SMALLINT，攻击者用足够多的源 IP 打同一个 `challenge_id`
+     * （每 IP 60/h，挑战活 10 分钟）能把它顶过 32767，那时 PG 会拒绝 UPDATE，
+     * 于是那条挑战上的每一次请求都变成 500 —— 一个由外部输入触发的错误。
+     *
+     * 饱和把那条路径关掉，代价是失去「被打了多少次」这个数。
+     * 那个数本来也不该记在这里：滥用计数归 §14.4 的
+     * `login_total{result}` 与限流器，它们的保留期与聚合方式都是为此设计的。
+     *
+     * @param int $max §7.1 的最大尝试次数（5）。**由调用方传入**：
+     *                 这个数字是策略不是不变量，与 {@see hasAttemptsLeft()} 同源
      */
-    public function recordAttempt(): void
+    public function recordAttempt(int $max): void
     {
-        ++$this->attempts;
+        if ($this->attempts < $max) {
+            ++$this->attempts;
+        }
     }
 
     /**

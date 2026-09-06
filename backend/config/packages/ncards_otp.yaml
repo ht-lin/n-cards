@@ -32,10 +32,11 @@ parameters:
 
     # §7.1「最大尝试 5 次（超过即作废整个 challenge）」。
     #
-    # ⚠️ T-103 **不消费**这个参数 —— attempts 是验证侧的事，归 T-104。
-    # 现在就写在这里，是因为它与上面三个同属 §7.1 那一张表；
-    # 拆成两次提交只会让下一个人怀疑自己漏看了什么。
-    # OtpChallenge::hasAttemptsLeft() 已经收一个 $max 入参在等它。
+    # ⚠️ 它**不是**滑动窗口限流，所以不在 rate_limiter.yaml 里 ——
+    # §7.5 的「challenge_id 5 次总计」是一个生命周期计数，落在
+    # otp_challenges.attempts 这一列上（理由见 rate_limiter.yaml 的页脚：
+    # §8.2 的 ROPA 规定限流计数只留 24 小时，而这个计数要跟着 challenge 走）。
+    # 消费者是 VerifyOtpService，经 OtpChallenge::hasAttemptsLeft($max) 判断。
     ncards.otp.max_attempts: 5
 
     # §7.1「重发间隔 60 秒」。必须与 otp_request_email 的 1/min 窗口一致，见上。
@@ -69,4 +70,41 @@ parameters:
     #
     # 上调这个数是**安全修复**，不是性能回退：本端点被 §7.5 限到每邮箱 1/min，
     # 多睡 100 ms 的代价只落在登录这一次，而调低它等于关掉一道防线。
+    #
+    # ⚠️ ADR-0014 之后 request 侧**已经没有两条路径**（无论邮箱是否注册都真发码），
+    # 所以这个预算今天兜的不是分支差异，而是纵深防御：将来谁往
+    # RequestOtpService 里加一个按存在性分支的「优化」，填充仍然在原地挡着。
     ncards.otp.request_budget_ms: 150
+
+    # ------------------------------------------------------------------------
+    # §3.8 防枚举的恒定耗时预算 —— verify 侧（毫秒）
+    # ------------------------------------------------------------------------
+    # ⚠️ 与 request 侧不同，**这一条今天就在挡一条真实的侧信道**。
+    #
+    # 要挡的是这一对比较：
+    #   「未注册邮箱的 challenge + 错码 → 401」
+    #   「已注册邮箱的 challenge + 错码 → 401」
+    # 攻击者可以对任意邮箱走完 request（恒 202、恒发信、他看不到信），
+    # 再拿一个随便编的码来 verify。两次 401 的耗时若有稳定差异，
+    # 「这个邮箱注册过吗」就从 verify 这一侧漏出去了 ——
+    # ADR-0014 在 request 侧焊死的那扇门，会从这里重新打开。
+    #
+    # 今天两条路径的做功天然相等（都是 hmac(code)×1 + findById + save，
+    # 都不查 users、不加密、不发信），所以这个预算兜的是余数。
+    # VerifyOtpServiceTest::testEveryRejectionShapeDoesTheSameAmountOfWork() 钉住前半句。
+    #
+    # 慢路径（失败路径）的构成：
+    #   1 次 Vault Transit 往返（hmac(code)）
+    #   2 次 Postgres 往返（findById + attempts 的 UPDATE）
+    #   1 次 Redis 往返（otp_verify_ip 的限流）
+    # 比 request 侧少，所以预算也小一档。同样是**保守起始值，不是实测值**，
+    # 校准方法与上面那条逐字相同。
+    #
+    # ⚠️ **成功路径不填充**（VerifyOtpService 只在 401 分支调 settle()）：
+    # 200 要建 user + device + session、签一次 JWT、入队一封信，必然越过这个预算，
+    # 硬填只会让 MonotonicTimeBudget 在每一次成功登录上打一行
+    # "Constant-time budget overrun" —— 而那行是 §3.8 的安全告警，
+    # 被正常流量淹掉之后就再也没有信号价值了。
+    # 「200 与 401 耗时不同」本身不是泄漏：走到 200 需要先拿到正确的 6 位码，
+    # 也就是攻击者已经能读那个邮箱了。
+    ncards.otp.verify_budget_ms: 120

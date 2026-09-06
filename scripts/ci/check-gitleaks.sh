@@ -53,11 +53,16 @@ git ls-files -z | tar --null --files-from=- -cf - | tar -xf - -C "$WORK"
 # 报告里的 File 也是绝对路径（/tmp/tmp.XXXX/docs/api/…），于是 .gitleaks.toml 里
 # 按 `paths` 写的豁免一条都匹配不上，而 gitleaks 不会为此报任何错 —— 表现是
 # 豁免「写了但没生效」。
+# `-v` 是必须的：不给它，gitleaks 只会打一行 `leaks found: 4`，**不说在哪个文件**，
+# 于是 CI 红了却什么线索都没有，只能本地重跑一遍这个脚本才知道要改什么。
+# 配 --redact 一起用是安全的 —— 明细里的 Finding/Secret 两行会被替换成 REDACTED，
+# 留下的是 RuleID / File / Line，正好是需要的那部分。
 cd "$WORK"
 gitleaks dir . \
     --config "$ROOT/.gitleaks.toml" \
     --redact \
     --no-banner \
+    -v \
     --exit-code 1
 cd "$ROOT"
 

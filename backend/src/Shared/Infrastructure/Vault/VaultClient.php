@@ -102,9 +102,10 @@ final class VaultClient
     /**
      * 对 Vault 的一个路径发 GET。
      *
-     * 加解密路径上**用不到**它 —— Transit 的 encrypt/decrypt/hmac 全是 POST，
-     * 而 §17.4 的 ncards-app policy 也没有授予任何可读路径。
-     * 它存在是给两类调用方：
+     * 加解密路径上**用不到**它 —— Transit 的 encrypt/decrypt/hmac 全是 POST。
+     * 调用方有三类：
+     *   - `VaultKvSigningKeyProvider` 读 `secret/data/ncards/jwt/current`（T-104）——
+     *     生产路径上唯一的一个，也是 ncards-app policy 里唯一的可读路径
      *   - 运维/测试读 `auth/approle/role/ncards-app/role-id` 这类元数据
      *   - T-404 读 `transit/keys/<name>` 判断 rewrap 进度（那用的是 ncards-ops 身份）
      *

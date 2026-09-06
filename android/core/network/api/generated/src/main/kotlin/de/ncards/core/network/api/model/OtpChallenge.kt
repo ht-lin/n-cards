@@ -34,7 +34,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
 /**
- * ⚠️ 无论邮箱是否存在，本对象的形状与耗时都**完全一致**（§3.8 防枚举）。 客户端不得据此推断账号是否存在。 
+ * ⚠️ 无论邮箱是否存在，本对象的形状与耗时都**完全一致**（§3.8 防枚举）—— 服务端在签发它时压根没查过 `users`（ADR-0014）。 客户端不得据此推断账号是否存在。 
  *
  * @param challengeId 
  * @param expiresAt 10 分钟后（§7.1）。
