@@ -202,6 +202,26 @@ services:
         tags:
             - {name: messenger.message_handler, bus: mail.bus}
 
+    # ------------------------------------------------------------------ T-103
+    # §3.8 的恒定耗时预算。接口在 Shared\Application\Timing，实现用单调时钟
+    # （不是 ClockInterface —— NTP 步进会让填充算错，见实现类的注释）。
+    App\Shared\Application\Timing\TimeEqualizerInterface: '@App\Shared\Infrastructure\Timing\MonotonicTimeEqualizer'
+
+    # §7.1 的 OTP 参数（config/packages/ncards_otp.yaml）。
+    #
+    # ⚠️ 显式列参数而不是在类里写 #[Autowire]：与 LimitEnforcer / MailCircuitBreaker
+    # 同一个做法 —— 把配置耦合进 Application 层的类会让「改一个阈值」变成改代码，
+    # 而这四个数字里有两个（resend_after 与 budget）是要按实测回调的。
+    #
+    # 这里**没有** max_attempts：那个参数归 T-104 的验证端点，
+    # 在它有消费者之前不接线（接了会得到一个没人用的构造参数）。
+    App\Module\Identity\Application\Otp\RequestOtpService:
+        arguments:
+            $codeDigits: '%ncards.otp.code_digits%'
+            $ttlSeconds: '%ncards.otp.ttl_seconds%'
+            $resendAfterSeconds: '%ncards.otp.resend_after_seconds%'
+            $requestBudgetMillis: '%ncards.otp.request_budget_ms%'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
 
@@ -227,17 +247,14 @@ when@test:
         App\Tests\Fixture\:
             resource: '../tests/Fixture/'
 
-        # ------------------------------------------------------------- T-102
-        # 邮件通道的对外入口在测试容器里设为 public。
+        # ------------------------------------------------------------- T-103
+        # 这里原本有一条 MailSenderInterface 的 `public: true` 别名（T-102 加的）。
         #
-        # ⚠️ 这不是「测试图省事」，是**本 PR 没有生产调用方**的必然结果：
-        # T-102 交付通道，第一个消费它的是 T-103 的 POST /auth/otp/request。
-        # 在那之前没有任何服务注入 MailSenderInterface，于是
-        # RemoveUnusedDefinitionsPass 会把这条 alias 连同整条实现链一起删掉 ——
-        # QueuedMailPipelineTest 从容器 get() 会拿到 ServiceNotFoundException。
-        # （dev/prod 容器里同样被删，那是对的：没人用的服务不该被实例化。）
+        # 它存在的理由是 T-102 那个 PR 里**没有任何生产调用方**：没人注入
+        # MailSenderInterface，RemoveUnusedDefinitionsPass 就会把别名连同整条实现链
+        # 一起删掉，QueuedMailPipelineTest 从容器 get() 会拿到 ServiceNotFoundException。
+        # 当时的注释写着「T-103 落地后这几行可以删」。
         #
-        # T-103 落地后这几行**可以删**，届时那条 alias 自然有了消费者。
-        App\Module\Notification\Application\Port\MailSenderInterface:
-            alias: App\Module\Notification\Infrastructure\Messenger\QueueingMailSender
-            public: true
+        # 现在 RequestOtpService 注入了它，服务不再是孤儿，测试容器
+        # （test.service_container 能取到**未被移除**的私有服务）照样能 get() 到，
+        # 于是那条别名如约删掉了。

@@ -1,0 +1,72 @@
+# §7.1「OTP 参数（MUST）」那张表的落地（T-103）。
+#
+# ============================================================================
+# 为什么单独一个文件，而不是并进 ncards_limits.yaml
+# ============================================================================
+# 那个文件装的是 §7.5 第一张表 ——「**系统限额**」，语义是「一个绝对的存量上限，
+# 重试永远不会成功，超了返回 422 limit_exceeded」（见该文件抬头与 T-006 的实现要点）。
+#
+# 下面这四个数字一个都不是那种东西：它们是**协议参数**，超不超限无从谈起。
+# 混进去的代价是 SystemLimit 枚举与 LimitEnforcer 会被迫长出一堆没有 max 语义的
+# 成员，而 §7.5 那张表与代码的一一对应（RateLimitPolicyCoverageTest 与
+# LimitEnforcer 的边界值单测都靠它）就此模糊。
+#
+# ============================================================================
+# resend_after_seconds 与 rate_limiter.yaml 是**同一个数**的两个面
+# ============================================================================
+# 它直接进响应体，客户端照它倒计时；而真正拦住第二次请求的是
+# config/packages/rate_limiter.yaml 里 `otp_request_email` 的 `{limit: 1, window: 60}`。
+# 两处不一致的症状很难查：客户端按 60 秒重试却吃到 429，日志里看不出任何异常，
+# 而**没有任何既有测试会红**。所以
+# tests/Unit/Module/Identity/Application/Otp/OtpPolicyConsistencyTest 显式钉住这一对。
+#
+# 改其中一个就必须改另一个 —— 这不是重复，是一个数字的两种用途
+# （告诉客户端 vs 强制执行），而它们分属两个不同的配置维度。
+parameters:
+    # §7.1「码长 6 位数字（random_int，CSPRNG）」。
+    ncards.otp.code_digits: 6
+
+    # §7.1「有效期 10 分钟」。也决定邮件模板里的 `expires_in_minutes`
+    # （RequestOtpService 用 ttl / 60 算，不另配一个数）。
+    ncards.otp.ttl_seconds: 600
+
+    # §7.1「最大尝试 5 次（超过即作废整个 challenge）」。
+    #
+    # ⚠️ T-103 **不消费**这个参数 —— attempts 是验证侧的事，归 T-104。
+    # 现在就写在这里，是因为它与上面三个同属 §7.1 那一张表；
+    # 拆成两次提交只会让下一个人怀疑自己漏看了什么。
+    # OtpChallenge::hasAttemptsLeft() 已经收一个 $max 入参在等它。
+    ncards.otp.max_attempts: 5
+
+    # §7.1「重发间隔 60 秒」。必须与 otp_request_email 的 1/min 窗口一致，见上。
+    ncards.otp.resend_after_seconds: 60
+
+    # ------------------------------------------------------------------------
+    # §3.8 防枚举的恒定耗时预算（毫秒）
+    # ------------------------------------------------------------------------
+    # 每次 POST /v1/auth/otp/request 都会被 MonotonicTimeEqualizer 拉长到这个总耗时，
+    # 好让「已注册」与「未注册」两条路径在墙钟上不可区分。
+    #
+    # ⚠️⚠️ **这个数必须大于慢路径的 p99**。小于的话 settle() 不睡，
+    # 差值原样暴露 —— 也就是**防线静默失效**：功能测试全绿，泄露悄悄打开。
+    # 唯一的信号是 MonotonicTimeBudget 在越界时记的那行 warning
+    # （"Constant-time budget overrun"），T-405 接上告警后应该盯它。
+    #
+    # 慢路径的构成（都在一次请求里）：
+    #   4 次 Vault Transit 往返（hmac×3 + encrypt×1）
+    #   2 次 Postgres 往返（作废旧挑战的 UPDATE + 插新挑战）
+    #   1 次 messenger_messages 的 INSERT（真实路径才有）
+    #   2 次 Redis 往返（限流 consumeAll 的两阶段）
+    #
+    # ⛔ **150 是保守起始值，不是实测值。** 本地 compose（Vault 与 PG 都在同一台
+    # docker 网络里）跑出来远低于它，但 staging 的 Vault 在另一个容器、
+    # 生产还要加上 TLS 握手 —— 那两处的 p99 才是判据。
+    #
+    # 校准方法（落地后照做一次，把实测数字写回本注释）：
+    #   1. staging 上关掉填充跑 200 次（真实邮箱与不存在的邮箱各半），取 p99；
+    #   2. budget = p99 × 1.5，向上取整到 10 ms；
+    #   3. 打开填充复跑，确认日志里没有 "budget overrun"。
+    #
+    # 上调这个数是**安全修复**，不是性能回退：本端点被 §7.5 限到每邮箱 1/min，
+    # 多睡 100 ms 的代价只落在登录这一次，而调低它等于关掉一道防线。
+    ncards.otp.request_budget_ms: 150
