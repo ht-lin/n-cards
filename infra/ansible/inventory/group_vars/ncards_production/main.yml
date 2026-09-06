@@ -42,3 +42,12 @@ ncards_mail_from_name: N-Cards
 # 熔断阈值因此从 3000/10000 下调到 200/500，且那两个数**目前是猜的** ——
 # 实测配额与校准公式见 docs/runbooks/email-dns.md §4。
 ncards_mail_provider: dogado
+
+# ---------------------------------------------------------- 公开链接（T-104）
+# 信里那些指回 App 的链接的基地址（新设备登录提醒的「这不是我」，
+# 以及 T-106 的 Magic Link）。结尾不带斜杠。
+#
+# Android 侧注册的 App Links 是 `https://app.n-cards.de/l/*`（§7.1 + assetlinks.json），
+# 装了 App 的用户点信里的链接会直接拉起 App，没装的落到 Web 落地页。
+# 改这个域名要同步改 Android 的 intent-filter 与 assetlinks.json，缺一边链接就不拉起。
+ncards_app_public_base_url: https://app.n-cards.de

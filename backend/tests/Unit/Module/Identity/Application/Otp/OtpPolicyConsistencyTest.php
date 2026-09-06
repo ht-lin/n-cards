@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Module\Identity\Application\Otp;
 
+use App\Module\Identity\Application\Otp\VerifyOtpService;
 use PHPUnit\Framework\Attributes\CoversNothing;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Yaml;
 
@@ -40,7 +42,7 @@ final class OtpPolicyConsistencyTest extends TestCase
         'ncards.otp.code_digits' => 6,
         // 有效期 10 分钟
         'ncards.otp.ttl_seconds' => 600,
-        // 最大尝试 5 次（T-104 消费）
+        // 最大尝试 5 次（VerifyOtpService 消费，见下方那条断言）
         'ncards.otp.max_attempts' => 5,
         // 重发间隔 60 秒
         'ncards.otp.resend_after_seconds' => 60,
@@ -50,6 +52,16 @@ final class OtpPolicyConsistencyTest extends TestCase
      * §7.5 的 `POST /auth/otp/request | email_hash | 1/min`。
      */
     private const RESEND_POLICY = 'otp_request_email';
+
+    /**
+     * §7.1 那张表之外的两个耗时预算 —— 它们是防枚举的填充参数，不是协议常量。
+     *
+     * @var list<string>
+     */
+    private const TIMING_BUDGETS = [
+        'ncards.otp.request_budget_ms',
+        'ncards.otp.verify_budget_ms',
+    ];
 
     public function testEveryOtpParameterMatchesTheSpec(): void
     {
@@ -63,7 +75,7 @@ final class OtpPolicyConsistencyTest extends TestCase
     public function testTheConfigCarriesNothingBeyondTheSpecAndTheTimingBudget(): void
     {
         self::assertSame(
-            [...array_keys(self::SPEC), 'ncards.otp.request_budget_ms'],
+            [...array_keys(self::SPEC), ...self::TIMING_BUDGETS],
             array_keys(self::otpParameters()),
         );
     }
@@ -91,9 +103,43 @@ final class OtpPolicyConsistencyTest extends TestCase
      * 0 或负数会让 MonotonicTimeBudget 永远走「越界」分支，
      * 也就是**填充静默失效**，而没有任何功能测试会红。
      */
-    public function testTheTimingBudgetIsPositive(): void
+    #[DataProvider('timingBudgets')]
+    public function testEveryTimingBudgetIsPositive(string $parameter): void
     {
-        self::assertGreaterThan(0, self::otpParameters()['ncards.otp.request_budget_ms']);
+        self::assertGreaterThan(0, self::otpParameters()[$parameter]);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function timingBudgets(): iterable
+    {
+        foreach (self::TIMING_BUDGETS as $parameter) {
+            yield $parameter => [$parameter];
+        }
+    }
+
+    /**
+     * `max_attempts` 从 T-103 起就配着、却一直没有消费者。T-104 接上了它 ——
+     * 这条断言钉住那次接线。
+     *
+     * ⚠️ 它是 §7.5「`POST /auth/otp/verify` | challenge_id | 5 次总计」的
+     * **唯一**强制点：那一条刻意不在 rate_limiter.yaml 里（它是生命周期计数，
+     * 不是滑动窗口，且 §8.2 的 ROPA 只给限流计数 24 小时保留期）。
+     * 没有这条断言，谁把 services.yaml 里那一行删掉都不会有测试红，
+     * 而症状是「验证码可以无限次猜」。
+     */
+    public function testTheAttemptCeilingIsWiredIntoTheVerifyService(): void
+    {
+        $path = __DIR__.'/../../../../../../config/services.yaml';
+        self::assertFileExists($path);
+
+        /** @var array{services?: array<string, array{arguments?: array<string, string>}>} $parsed */
+        $parsed = Yaml::parseFile($path);
+
+        $arguments = $parsed['services'][VerifyOtpService::class]['arguments'] ?? [];
+
+        self::assertSame('%ncards.otp.max_attempts%', $arguments['$maxAttempts'] ?? null);
     }
 
     /**

@@ -6,6 +6,7 @@ namespace App\Tests\Integration\Module\Identity\Doctrine;
 
 use App\Module\Identity\Domain\Entity\OtpChallenge;
 use App\Module\Identity\Domain\Repository\OtpChallengeRepositoryInterface;
+use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Identity\Domain\ValueObject\OtpPurpose;
 use App\Module\Identity\Infrastructure\Doctrine\DoctrineOtpChallengeRepository;
 use App\Tests\Double\Identity\IdentityEntities;
@@ -74,6 +75,91 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
         self::assertTrue($loaded->emailHash()->equals(IdentityEntities::digest('anna')));
         self::assertTrue($loaded->codeHash()->equals(IdentityEntities::digest('anna-code')));
         self::assertNotNull($loaded->requestIpHash());
+    }
+
+    /**
+     * T-104 新加的两列 —— **注册路径的全部输入**。
+     *
+     * `email_encrypted` 走 `CiphertextType`（TEXT），`locale` 走带 `enum-type`
+     * 的 TEXT。两者都是「单测喂什么读回什么、真库经过一次类型转换」的形状，
+     * 而这条往返正是那层转换的唯一检验。
+     *
+     * 这条红了的症状是「新用户能收到码、能验过，但注册失败」——
+     * 因为 `VerifyOtpService::register()` 读到 null 就返回 401。
+     */
+    public function testRoundTripsTheRecipientAndLocaleThatRegistrationNeeds(): void
+    {
+        $challenge = OtpChallenge::issue(
+            IdentityEntities::id(91),
+            IdentityEntities::digest('anna'),
+            IdentityEntities::ciphertext(),
+            Locale::English,
+            IdentityEntities::digest('anna-code'),
+            OtpPurpose::Login,
+            IdentityEntities::now()->modify('+10 minutes'),
+            null,
+            null,
+            IdentityEntities::now(),
+        );
+
+        $this->repository->save($challenge);
+        $this->entityManager->clear();
+
+        $loaded = $this->repository->findById($challenge->id());
+
+        self::assertNotNull($loaded);
+        self::assertSame(IdentityEntities::ciphertext()->toString(), $loaded->emailEncrypted()?->toString());
+        self::assertSame(Locale::English, $loaded->locale());
+    }
+
+    /**
+     * 两列都可空，且**这不是过渡态**（见 Version20260906120000 的注释）：
+     * 哑挑战天然没有收件人，而本次迁移之前建的行也没有。
+     *
+     * 读侧（`VerifyOtpService::register()`）对 null 显式返回 401 ——
+     * 所以库层必须真的允许它，否则那条分支根本走不到，却仍然要为覆盖率买单。
+     */
+    public function testBothNewColumnsAreNullableForLegacyAndDecoyRows(): void
+    {
+        $decoy = OtpChallenge::decoy(
+            IdentityEntities::id(92),
+            IdentityEntities::digest('legacy'),
+            IdentityEntities::digest('legacy-code'),
+            OtpPurpose::Login,
+            IdentityEntities::now()->modify('+10 minutes'),
+            null,
+            IdentityEntities::now(),
+        );
+
+        $this->repository->save($decoy);
+        $this->entityManager->clear();
+
+        $loaded = $this->repository->findById($decoy->id());
+
+        self::assertNotNull($loaded);
+        self::assertNull($loaded->emailEncrypted());
+        self::assertNull($loaded->locale());
+    }
+
+    /**
+     * `chk_otp_challenges_locale` 挡住取值域之外的东西。
+     *
+     * ⚠️ 走裸 SQL 而不是实体：PHP 侧的 enum 根本造不出一个非法值，
+     * 而这条约束防的正是「绕过 ORM 的写入」（运维手工修数据、将来的批量导入）。
+     */
+    public function testTheLocaleCheckConstraintRejectsAnUnknownValue(): void
+    {
+        $this->expectException(\Doctrine\DBAL\Exception::class);
+
+        $this->entityManager->getConnection()->executeStatement(
+            'INSERT INTO otp_challenges (id, email_hash, code_hash, purpose, expires_at, locale)'
+            ." VALUES (?, ?, ?, 'login', now(), 'fr')",
+            [
+                IdentityEntities::id(93)->toString(),
+                IdentityEntities::digest('fr')->toRaw(),
+                IdentityEntities::digest('fr-code')->toRaw(),
+            ],
+        );
     }
 
     /**
@@ -184,6 +270,8 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
         $expired = OtpChallenge::issue(
             IdentityEntities::id(7),
             IdentityEntities::digest('anna'),
+            IdentityEntities::ciphertext(),
+            Locale::German,
             IdentityEntities::digest('anna-code'),
             OtpPurpose::Login,
             $now->modify('-1 second'),
@@ -202,8 +290,11 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
     }
 
     /**
-     * decoy 与真实挑战一视同仁 —— 不存在的邮箱同样会攒下旧的哑挑战，
-     * 而两条路径的 DB 往返次数必须相等（§3.8）。
+     * decoy 与真实挑战一视同仁。
+     *
+     * ADR-0014 之后已无生产写入方（`RequestOtpService` 恒建真实挑战），
+     * 但库里还有上个版本留下的哑挑战 —— 它们同样要能被作废，
+     * 否则那个邮箱的下一次登录会撞上「已有活跃挑战」。
      */
     public function testInvalidatesDecoysToo(): void
     {
@@ -241,6 +332,8 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
         return OtpChallenge::issue(
             IdentityEntities::id($nth),
             IdentityEntities::digest($seed),
+            IdentityEntities::ciphertext(),
+            Locale::German,
             IdentityEntities::digest($seed.'-code'),
             OtpPurpose::Login,
             $now->modify('+10 minutes'),

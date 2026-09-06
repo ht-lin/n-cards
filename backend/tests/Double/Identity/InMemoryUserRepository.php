@@ -82,4 +82,9 @@ final class InMemoryUserRepository implements UserRepositoryInterface
     {
         return $this->findByEmailHashCalls;
     }
+
+    public function count(): int
+    {
+        return \count($this->users);
+    }
 }

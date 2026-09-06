@@ -73,4 +73,5 @@
 | [0011](0011-doctrine-orm-xml-mapping-and-module-owned-foreign-keys.md) | Doctrine ORM 用 XML 映射、实体非 final、外键只在模块内部建成 ORM 关联 | Accepted |
 | [0012](0012-mail-channel-topology.md) | 邮件通道：~~Q3 悬置~~（决定 1 已被 0013 取代）、Doctrine 队列、消息体加密、发信收敛在两个新 deptrac 图层之后 | Accepted（决定 1 除外） |
 | [0013](0013-mail-via-domain-mailbox.md) | **Q3 定案**：发信走 n-cards.de 的域名邮箱（dogado GmbH），不引入专业 ESP | Accepted |
+| [0014](0014-otp-always-sends-a-code.md) | OTP 请求对**任意**邮箱都真发码，取消 decoy challenge —— 否则不存在任何注册路径 | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。
