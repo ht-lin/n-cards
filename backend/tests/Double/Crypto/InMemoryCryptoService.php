@@ -47,6 +47,15 @@ final class InMemoryCryptoService implements CryptoServiceInterface
     private ?CryptoFailed $failure = null;
 
     /**
+     * encrypt() 被调用的次数（T-103 加）。
+     *
+     * §3.8 要求 `POST /v1/auth/otp/request` 的两条路径**Vault 往返次数相同**，
+     * 而那条断言只能靠计数来写 —— 墙钟在 CI 上不可靠。
+     * 见 RequestOtpServiceTest::testBothPathsDoTheSameAmountOfWork()。
+     */
+    private int $encryptCalls = 0;
+
+    /**
      * 让调用方模拟 Vault 不可达（EncryptedMailSerializer 对
      * CryptoUnavailable 与 CryptoFailed 的处理**刻意不同**，两条都要测）。
      */
@@ -63,6 +72,8 @@ final class InMemoryCryptoService implements CryptoServiceInterface
     public function encrypt(CryptoKey $key, string $plaintext): Ciphertext
     {
         $this->maybeFail();
+
+        ++$this->encryptCalls;
 
         // key 也编进去：解密时校验，于是「用 Card 的 key 解 Pii 的密文」
         // 这种错误在测试里会被抓住，而不是悄悄成功。
@@ -92,6 +103,11 @@ final class InMemoryCryptoService implements CryptoServiceInterface
         }
 
         return $decoded;
+    }
+
+    public function encryptCalls(): int
+    {
+        return $this->encryptCalls;
     }
 
     private function maybeFail(): void
