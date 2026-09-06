@@ -31,6 +31,10 @@
 # backing  app ↔ postgres/redis/vault。`internal: true` —— 这个网络连出站都没有，
 #          三个后端服务不可能被误暴露，也不可能主动往外连。
 #          §7.4 只要求「不映射宿主机端口」，internal 是顺手多加的一道。
+# egress   **只给 worker**：出站到 dogado 的 SMTP（T-102）。没有入站、没有端口映射，
+#          也不连接任何别的服务 —— 它存在的唯一理由是 worker 必须能拨出去。
+#          worker 只连 backing 是不行的：那个网络 internal，**连 DNS 都出不去**，
+#          症状见下面 worker 的注释。
 
 name: ncards
 
@@ -306,10 +310,23 @@ services:
     volumes:
       - ../../backend:/app:ro
 
-    # ⚠️ 只连 backing，**不连 edge**。worker 不收 HTTP 请求，
-    # 把它放进 edge 网络只会平白多一条从反向代理到它的路径。
+    # ⚠️ 不连 edge。worker 不收 HTTP 请求，把它放进 edge 网络只会平白多一条
+    # 从反向代理到它的路径。
+    #
+    # ⚠️⚠️ 但**必须**有 egress —— backing 是 internal: true，出站被整个掐断，
+    # 而 worker 的本职工作就是拨号到 dogado 的 SMTP。只连 backing 的症状不是
+    # 「连不上那个端口」，而是**域名根本解析不出来**：docker 的内嵌 DNS(127.0.0.11)
+    # 要把非容器名的查询转发给宿主机的上游解析器，internal 网络上那条转发发不出去，
+    # 于是 5 秒后超时返回 EAI_AGAIN：
+    #     getaddrinfo for web246.dogado.net failed: Try again
+    # 这条信息读起来像「dogado 的 DNS 抽风了，等会儿再试」，实际是我们自己网络分层
+    # 的必然结果，重试一万次都是同一个结果。本地不会暴露它 —— 本地 MAILER_DSN 指向
+    # 同在 backing 上的 mailpit（或 null://null），压根不需要出站。
+    #
+    # mailpit（dev profile）仍然走 backing，跨这两个网络不冲突。
     networks:
       - backing
+      - egress
 
     # ⚠️⚠️ 必须显式关掉，别删这三行。
     #
@@ -378,6 +395,10 @@ networks:
     driver: bridge
     # 无出站、无宿主机映射。
     internal: true
+  # 只有 worker 连这一张。**不要**为了图省事把别的服务挂上来 —— postgres / redis /
+  # vault 一旦上了这张网，backing 的 internal 就白设了。
+  egress:
+    driver: bridge
 
 volumes:
   pg_data:
