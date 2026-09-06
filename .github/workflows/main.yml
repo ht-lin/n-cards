@@ -56,8 +56,10 @@ jobs:
   # #27–#34 连续八次合入（整个 T-012 / T-101 / T-102 段）一个 android 文件都没碰，
   # 每次照付 25 分钟。
   #
-  # 过滤清单与 pr.yml 里的 `android` 逐条一致，**两处必须一起改** —— 那边的
-  # docs/api/** 与 checkApiClientUpToDate 的理由在 pr.yml:71-74，这里同样适用。
+  # 过滤清单与 pr.yml 里的 `android` 是同一份，**两处必须一起改**。唯一的差别是
+  # 「本 workflow 自己」那一行：那边是 pr.yml，这里是 main.yml —— 改了编排就该重跑
+  # 一次仪器测试。docs/api/** 与 checkApiClientUpToDate 的理由在 pr.yml:71-74，
+  # 这里同样适用。
   #
   # 只在 push 上跑：schedule / workflow_dispatch 没有「上一个 commit」可比，
   # 而那两个入口本来就要无条件全量跑（见 instrumentation 的 `if`）。
