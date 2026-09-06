@@ -63,11 +63,17 @@ description = """
 
 那个 AKIA… 是随手编的 20 字符，不对应任何账号。
 
-只豁免 aws-access-token 一条规则、只在这一个文件里 —— 别的规则在这个文件里
+private-key 同理（T-104）：下面那条「私钥块换个文件仍被拦」的断言，夹具必须是
+一个真的 PEM 私钥块 —— 它就是 VaultKvSigningKeyProviderTest.php 里那把
+一次性测试密钥，搬到 backend/src/ 下面去证明豁免没有扩散。armour 拆开写
+（把 BEGIN 行和 base64 分成两个字符串）能骗过规则，但那是在跟门禁躲猫猫，
+夹具也就不再是「真·凭据形态」了。
+
+只豁免这两条规则、只在这一个文件里 —— 别的规则在这个文件里
 照样生效，而 scripts/ci/check-todo-issue-refs.sh 里有一条形态相同的豁免
 （同一个文件，同样的理由）。
 """
-targetRules = ["aws-access-token"]
+targetRules = ["aws-access-token", "private-key"]
 paths = ['^scripts/ci/sensitive-scan-selftest\.sh$']
 
 [[allowlists]]
