@@ -91,7 +91,7 @@ interface AuthApi {
     /**
      * POST auth/otp/request
      * 请求登录用的一次性验证码
-     * **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。邮箱不存在时 服务端创建一个哑挑战（&#x60;is_decoy&#x60;），不发信、验证时永远失败，但耗时与 真实路径一致。客户端**不能**从本接口的响应推断账号是否存在。  限速（§7.5）：按 &#x60;email_hash&#x60; 1/min、5/h、10/day；按 IP 20/h。 
+     * **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。  服务端在这条路径上**不查 &#x60;users&#x60;** —— 它在结构上就不知道邮箱注册过没有， 因此对任意地址都生成并发送一个真实的验证码（[ADR-0014](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0014-otp-always-sends-a-code.md)）。 这也是**唯一的注册路径**：首次 &#x60;POST /auth/otp/verify&#x60; 成功即创建 &#x60;users&#x60; 行。  客户端**不能**从本接口的响应推断账号是否存在，也**不应该**尝试 —— 「这个邮箱要走登录还是注册」对客户端是同一个流程（邮箱 → 验证码 → username）。  限速（§7.5）：按 &#x60;email_hash&#x60; 1/min、5/h、10/day；按 IP 20/h。 这三个窗口是本端点唯一的滥用闸门 —— 它挡的是「用 N-Cards 的域名给别人的 收件箱发信」，所以 429 时**不要**自动重试，照 &#x60;Retry-After&#x60; 退避。 
      * Responses:
      *  - 202: 挑战已创建（无论邮箱是否存在）
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
