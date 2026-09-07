@@ -23,7 +23,7 @@ use Psr\Log\LoggerInterface;
  * ============================================================================
  * 两条阈值，三档行为
  * ============================================================================
- * | 当日累计   | Critical（OTP / Magic Link） | Advisory（两封安全提醒） |
+ * | 当日累计   | Critical（OTP 码 + Magic Link） | Advisory（两封安全提醒） |
  * |-----------|----------------------------|------------------------|
  * | < warn    | 发                          | 发                      |
  * | ≥ warn    | 发 + error 日志（告警信号）    | 发 + error 日志          |
@@ -110,7 +110,8 @@ final readonly class MailCircuitBreaker
             return true;
         }
 
-        // 熔断已生效。保留 OTP 与 Magic Link（§3.1 括号里那半句）。
+        // 熔断已生效。保留登录信（§3.1 括号里那半句）——
+        // ADR-0016 之后它同时载着 6 位码与 Magic Link，是同一封。
         return MailCriticality::Critical === self::criticalityOf($template);
     }
 
@@ -134,8 +135,8 @@ final readonly class MailCircuitBreaker
     private static function criticalityOf(MailTemplate $template): MailCriticality
     {
         return match ($template) {
-            // 用户正卡在登录流程上等这两封。
-            MailTemplate::OtpCode, MailTemplate::MagicLink => MailCriticality::Critical,
+            // 用户正卡在登录流程上等这一封（码与 Magic Link 都在里面，ADR-0016）。
+            MailTemplate::OtpCode => MailCriticality::Critical,
             // 事后知情；§7.1 规定同一件事同时还会走推送，邮件不是唯一通道。
             MailTemplate::NewDeviceLogin, MailTemplate::RefreshReplay => MailCriticality::Advisory,
         };

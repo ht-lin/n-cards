@@ -106,6 +106,48 @@ final class RouteInventoryTest extends WebTestCase
     }
 
     /**
+     * ⚠️ **T-106 的验收标准前半条**：「`GET` 与 `HEAD` 不改变 `consumed_at`」。
+     *
+     * 任务卡把它写成一条集成测试，但落地页根本不在后端 —— 它是一份由 Caddy
+     * 直接吐出的静态 HTML（`infra/caddy/site/l/`，ADR-0016）。于是那条要求
+     * 在这里变成一条更强的断言：**后端在 `/l/` 下没有任何路由**，
+     * 所以「GET 消费了令牌」在结构上无法发生，不是靠某条用例守着。
+     *
+     * `/l/*` 是 App Links 的域（`APP_PUBLIC_BASE_URL`），今天有三个用途：
+     * `/l/magic/<token>`（T-106）、`/l/devices`（T-104 的「这不是我」）、
+     * `/l/security`（T-105 的安全提醒）。三者都必须是静态的：
+     * 企业邮件安全网关会自动 GET 邮件里的每一个链接（§7.1）。
+     *
+     * ⚠️ 真要在后端加一条 `/l/` 路由的话，先读 ADR-0016 的 Alternatives，
+     * 那里写了为什么它被否掉。
+     */
+    public function testTheBackendServesNothingUnderTheAppLinksPath(): void
+    {
+        self::createClient();
+
+        /** @var RouterInterface $router */
+        $router = self::getContainer()->get('router');
+
+        $offenders = [];
+
+        foreach ($router->getRouteCollection() as $name => $route) {
+            if (str_starts_with($route->getPath(), '/l/')) {
+                $offenders[$name] = $route->getPath();
+            }
+        }
+
+        self::assertSame(
+            [],
+            $offenders,
+            "以下路由落在 App Links 的 /l/ 域下：\n"
+            .json_encode($offenders, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR)
+            ."\n\n那个域只放静态落地页（infra/caddy/site/l/）。邮件安全网关会自动 GET"
+            ."\n邮件里的每个链接（§7.1）—— 后端一旦在那里有代码，「GET 不改变状态」"
+            ."\n就从结构保证退化成了一条要靠人记住的约定。理由见 ADR-0016。",
+        );
+    }
+
+    /**
      * 探活端点必须留在 `/health/` 下 —— §6.2 明确要求它们不在 `/v1` 下，
      * 而 compose 的 healthcheck 与 Caddy 都按这个路径硬编码。
      */

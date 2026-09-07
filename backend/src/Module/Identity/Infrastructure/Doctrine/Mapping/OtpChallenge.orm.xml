@@ -25,6 +25,28 @@
             <index name="idx_otp_challenges_email_hash" columns="email_hash"/>
         </indexes>
 
+        <unique-constraints>
+            <!--
+                T-106：Magic Link 的查找键（findByMagicTokenHash）。
+                名字必须与 Version20260907140000 的 CREATE UNIQUE INDEX 逐字相同。
+
+                ⚠️ **不是**部分索引，尽管这一列大多数行是 NULL。
+                `WHERE magic_token_hash IS NOT NULL` 在功能上更好（PG 的普通唯一
+                索引把每个 NULL 当作互不相等的值逐个存进索引），但 DBAL 读不回
+                索引定义里的 WHERE 子句，于是 `schema:validate` 会**永远**报
+                「不同步」而 `schema:update` 每次都吐同一对 DROP + CREATE。
+                实测过，不是猜的；完整论证见 Version20260907140000 的文件头。
+                在这张表上代价可以忽略：挑战 10 分钟过期、T-113 每日清理，
+                任何时刻的行数都是分钟级的登录量。
+
+                UNIQUE 不只是完整性约束：碰撞时 getOneOrNullResult() 会抛
+                NonUniqueResult（500），而没有这个约束时最容易被写出来的实现是
+                「随手挑一行」—— 那意味着一个人的链接可能把另一个人登进去。
+                与 uq_sessions_refresh_token_hash 同一条论证。
+            -->
+            <unique-constraint name="uq_otp_challenges_magic_token_hash" columns="magic_token_hash"/>
+        </unique-constraints>
+
         <!-- id 即返回给客户端的 challenge_id（§5.2）。 -->
         <id name="id" type="uuid" column="id">
             <generator strategy="NONE"/>

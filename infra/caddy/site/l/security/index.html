@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    <title>Sicherheitshinweis · N-Cards</title>
+    <link rel="stylesheet" href="/assets/base.css">
+</head>
+<!--
+  refresh 重放（§7.1 判定为令牌被窃）提醒信里那个链接的落点
+  （T-105 的 SUPPORT_PATH）。同样不带令牌、同样没有可做的动作。
+-->
+<body>
+<main>
+    <p class="brand">N-Cards</p>
+
+    <h1>Ein Gerät wurde abgemeldet</h1>
+
+    <p>
+        Wir haben festgestellt, dass ein bereits verwendeter Anmelde-Token noch einmal
+        eingesetzt wurde. Das kann zwei Ursachen haben: eine abgebrochene Verbindung
+        auf deinem eigenen Gerät — oder jemand anderes hat den Token in die Hände
+        bekommen. Weil wir die beiden Fälle nicht unterscheiden können, haben wir
+        <strong>dieses eine Gerät</strong> abgemeldet. Deine anderen Geräte bleiben
+        angemeldet.
+    </p>
+
+    <p>Du kannst dich auf dem betroffenen Gerät einfach neu anmelden.</p>
+
+    <p class="muted">
+        Wenn du diese Nachricht mehrfach bekommst, ohne dass du dich neu angemeldet
+        hast, prüfe zuerst dein E-Mail-Postfach: die Anmeldung bei N-Cards läuft
+        ausschließlich darüber.
+    </p>
+
+    <hr class="divider">
+
+    <h1>A device was signed out</h1>
+
+    <p>
+        We saw an already-used sign-in token being presented a second time. That can
+        mean a dropped connection on your own device — or that somebody else obtained
+        the token. Since we cannot tell the two apart, we signed out
+        <strong>that one device</strong>. Your other devices stay signed in.
+    </p>
+
+    <p>Just sign in again on the affected device.</p>
+
+    <p class="muted">
+        If you keep getting this message without signing in yourself, check your email
+        account first: signing in to N-Cards only ever goes through your mailbox.
+    </p>
+</main>
+</body>
+</html>

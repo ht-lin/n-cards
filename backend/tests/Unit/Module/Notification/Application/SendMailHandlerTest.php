@@ -111,7 +111,7 @@ final class SendMailHandlerTest extends TestCase
             'otp_code',
             'fr',
             $this->recipient(),
-            ['code' => '123456', 'expires_in_minutes' => '10'],
+            ['code' => '123456', 'expires_in_minutes' => '10', 'magic_link_url' => 'https://app.n-cards.de/l/magic/MAGICTOKENSAMPLE'],
         ));
 
         self::assertSame([], $this->transport->sent);
@@ -126,7 +126,7 @@ final class SendMailHandlerTest extends TestCase
             $template,
             'de',
             $this->recipient(),
-            $variables ?? ['code' => '481502', 'expires_in_minutes' => '10'],
+            $variables ?? ['code' => '481502', 'expires_in_minutes' => '10', 'magic_link_url' => 'https://app.n-cards.de/l/magic/MAGICTOKENSAMPLE'],
         );
     }
 

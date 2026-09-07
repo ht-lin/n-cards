@@ -14,10 +14,10 @@ use App\Shared\Domain\Identity\Uuid;
  * 放 `Domain/Repository/` 而不是 `Application/Port/` 的理由见
  * {@see UserRepositoryInterface} 的类注释。
  *
- * ⚠️ 方法集刻意窄。T-103 补上了「作废该邮箱的旧挑战」；
- * T-106 需要「按 magic_token_hash 查」、T-113 需要「删过期的」——
- * 那两个方法各自的语义（要不要带事务、按哪个时间点判过期、批量还是逐条）
- * 只有写那些任务时才知道，现在猜是猜不对的。
+ * ⚠️ 方法集刻意窄。T-103 补上了「作废该邮箱的旧挑战」，
+ * T-106 补上了「按 magic_token_hash 查」；T-113 还需要「删过期的」——
+ * 那个方法的语义（按哪个时间点判过期、批量还是逐条）只有写那个任务时才知道，
+ * 现在猜是猜不对的。
  */
 interface OtpChallengeRepositoryInterface
 {
@@ -32,6 +32,23 @@ interface OtpChallengeRepositoryInterface
      * 那个 id（§5.2），`POST /auth/otp/verify` 拿它回来找挑战。
      */
     public function findById(Uuid $id): ?OtpChallenge;
+
+    /**
+     * Magic Link 的入口（T-106）：`POST /auth/magic/consume` 拿信里那个令牌的
+     * 摘要回来找挑战。
+     *
+     * ⚠️ **实现必须加行锁**（`PESSIMISTIC_WRITE`）。消费是读-改-写：
+     * 查到挑战 → 判 `consumed_at IS NULL` → 写 `consumed_at`。两个并发 POST
+     * 不加锁会双双通过那个判空，于是**一个令牌换到两个会话**，
+     * 而库里只留下一条看起来完全正常的记录。
+     * 这与 T-105 的 `findByRefreshTokenHash()` 是同一个坑，代价也一样：
+     * 一条挑战上的并发是个位数量级，付得起。
+     *
+     * ⚠️ 传进来的摘要是**本地 SHA-256**，不是 Vault HMAC ——
+     * 与 `code_hash` 不同口径，理由见 {@see \App\Module\Identity\Application\Magic\ConsumeMagicLinkService::consume()}。
+     * 本接口不关心是哪一种，但写迁移与写测试的人需要知道。
+     */
+    public function findByMagicTokenHash(HashDigest $magicTokenHash): ?OtpChallenge;
 
     /**
      * 作废该邮箱**全部仍然活跃**的挑战（未消费且未过期）。

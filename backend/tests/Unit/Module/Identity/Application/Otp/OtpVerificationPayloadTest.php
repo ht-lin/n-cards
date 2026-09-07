@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Module\Identity\Application\Otp;
 
 use App\Module\Identity\Application\Otp\OtpVerificationPayload;
+use App\Module\Identity\Application\Session\DeviceDescriptor;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Domain\Error\FieldError;
@@ -19,6 +20,8 @@ use PHPUnit\Framework\TestCase;
  * 与 {@see OtpRequestPayloadTest} 同一套结构，多了一层嵌套对象（`device`）。
  */
 #[CoversClass(OtpVerificationPayload::class)]
+// T-106：`device` 那半的校验搬去了 DeviceDescriptor，两个请求体共用一份。
+#[CoversClass(DeviceDescriptor::class)]
 final class OtpVerificationPayloadTest extends TestCase
 {
     private const CHALLENGE_ID = '0192f3a1-b2c3-7d4e-8f01-23456789abcd';
@@ -31,12 +34,12 @@ final class OtpVerificationPayloadTest extends TestCase
 
         self::assertSame(self::CHALLENGE_ID, $payload->challengeId->toString());
         self::assertSame('418396', $payload->code);
-        self::assertSame(self::DEVICE_ID, $payload->deviceId->toString());
+        self::assertSame(self::DEVICE_ID, $payload->device->id->toString());
         // platform 今天只有 android 一个取值，断言它是恒真的（PHPStan 会直接报出来）。
         // 真正在验解析的是下面 provider 里的 `device.platform unknown`。
-        self::assertSame('Pixel 7a', $payload->model);
-        self::assertSame('14', $payload->osVersion);
-        self::assertSame('1.4.0', $payload->appVersion);
+        self::assertSame('Pixel 7a', $payload->device->model);
+        self::assertSame('14', $payload->device->osVersion);
+        self::assertSame('1.4.0', $payload->device->appVersion);
     }
 
     /**
@@ -50,9 +53,9 @@ final class OtpVerificationPayloadTest extends TestCase
 
         $payload = OtpVerificationPayload::fromArray($body);
 
-        self::assertNull($payload->model);
-        self::assertNull($payload->osVersion);
-        self::assertNull($payload->appVersion);
+        self::assertNull($payload->device->model);
+        self::assertNull($payload->device->osVersion);
+        self::assertNull($payload->device->appVersion);
     }
 
     /**
@@ -64,7 +67,7 @@ final class OtpVerificationPayloadTest extends TestCase
         $body = self::body();
         $body['device']['model'] = '   ';
 
-        self::assertNull(OtpVerificationPayload::fromArray($body)->model);
+        self::assertNull(OtpVerificationPayload::fromArray($body)->device->model);
     }
 
     /**
@@ -75,11 +78,11 @@ final class OtpVerificationPayloadTest extends TestCase
     {
         $body = self::body();
         // 100 个汉字 = 100 字符 / 300 字节。按字节判的实现会在这里拒绝。
-        $body['device']['model'] = str_repeat('红', OtpVerificationPayload::MODEL_MAX_LENGTH);
+        $body['device']['model'] = str_repeat('红', DeviceDescriptor::MODEL_MAX_LENGTH);
 
         self::assertSame(
-            str_repeat('红', OtpVerificationPayload::MODEL_MAX_LENGTH),
-            OtpVerificationPayload::fromArray($body)->model,
+            str_repeat('红', DeviceDescriptor::MODEL_MAX_LENGTH),
+            OtpVerificationPayload::fromArray($body)->device->model,
         );
     }
 
@@ -184,12 +187,12 @@ final class OtpVerificationPayloadTest extends TestCase
         ];
 
         yield 'device.model too long' => [
-            self::bodyWithDeviceField('model', str_repeat('a', OtpVerificationPayload::MODEL_MAX_LENGTH + 1)),
+            self::bodyWithDeviceField('model', str_repeat('a', DeviceDescriptor::MODEL_MAX_LENGTH + 1)),
             [['device.model', FieldErrorCode::TooLong->value]],
         ];
 
         yield 'device.os_version too long' => [
-            self::bodyWithDeviceField('os_version', str_repeat('a', OtpVerificationPayload::VERSION_MAX_LENGTH + 1)),
+            self::bodyWithDeviceField('os_version', str_repeat('a', DeviceDescriptor::VERSION_MAX_LENGTH + 1)),
             [['device.os_version', FieldErrorCode::TooLong->value]],
         ];
 

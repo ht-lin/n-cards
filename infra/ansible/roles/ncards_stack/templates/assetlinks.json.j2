@@ -1,0 +1,25 @@
+{#
+  Digital Asset Links（T-106 / §7.1）—— App Links 校验的那一份声明。
+
+  Android 在安装 App 时会拉 `https://<域>/.well-known/assetlinks.json`，
+  确认这个域确实授权了那个包名 + 签名证书。校验通过之后，点邮件里的
+  `https://app.n-cards.de/l/magic/<token>` 会**直接拉起 App**，不经过浏览器。
+
+  ⚠️ 指纹为空时这份文件仍然合法，只是不授权任何 App —— 效果是链接落到
+  Web 落地页而不是拉起 App。功能不坏，少一步而已。填指纹归 T-151 / M4：
+  那时 release keystore 才存在，Android 侧的 intent-filter 与 autoVerify
+  也才一起落地。两边缺一边，链接都不会拉起。
+
+  ⚠️ 这里面**没有秘密**：包名与证书指纹是公开信息（它们就发布在那个 URL 上），
+  所以变量在 group_vars/main.yml 里而不是 secrets.sops.yaml 里。
+#}
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": {{ ncards_android_package_name | to_json }},
+      "sha256_cert_fingerprints": {{ ncards_android_cert_fingerprints | to_json }}
+    }
+  }
+]

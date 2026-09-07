@@ -9,8 +9,10 @@ use App\Module\Identity\Domain\Repository\OtpChallengeRepositoryInterface;
 use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Identity\Domain\ValueObject\OtpPurpose;
 use App\Module\Identity\Infrastructure\Doctrine\DoctrineOtpChallengeRepository;
+use App\Shared\Domain\Crypto\HashDigest;
 use App\Tests\Double\Identity\IdentityEntities;
 use App\Tests\Integration\Support\RequiresIdentitySchema;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -327,7 +329,7 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
         );
     }
 
-    private function issue(string $seed, \DateTimeImmutable $now, int $nth = 1): OtpChallenge
+    private function issue(string $seed, \DateTimeImmutable $now, int $nth = 1, ?HashDigest $magicTokenHash = null): OtpChallenge
     {
         return OtpChallenge::issue(
             IdentityEntities::id($nth),
@@ -337,10 +339,87 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
             IdentityEntities::digest($seed.'-code'),
             OtpPurpose::Login,
             $now->modify('+10 minutes'),
-            null,
+            $magicTokenHash,
             IdentityEntities::digest('ip'),
             $now,
         );
+    }
+
+    // ========================================================================
+    // T-106：Magic Link 的查找键
+    // ========================================================================
+
+    /**
+     * 与 `invalidateActiveFor()` 同一条理由：`magic_token_hash` 是 BYTEA，
+     * 参数必须以 `hash_digest` 类型绑定。绑错了不会报错，而是**一行都匹配不上** ——
+     * 症状是「每一个 Magic Link 都 401」，而单测里的内存替身按 PHP 逻辑比较，
+     * 一定看不见这层。
+     */
+    public function testFindsAChallengeByItsMagicTokenHash(): void
+    {
+        $hash = IdentityEntities::digest('magic-token');
+        $challenge = $this->issue('anna', IdentityEntities::now(), magicTokenHash: $hash);
+
+        $this->repository->save($challenge);
+        $this->entityManager->clear();
+
+        $loaded = $this->connection->isTransactionActive()
+            ? $this->repository->findByMagicTokenHash($hash)
+            : null;
+
+        self::assertNotNull($loaded, 'FOR UPDATE 要求在事务里 —— RequiresIdentitySchema 已经开了一个。');
+        self::assertTrue($loaded->id()->equals($challenge->id()));
+    }
+
+    /** 查不到就是 null —— 调用方据此返回 401，不是抛。 */
+    public function testReturnsNullForAnUnknownMagicTokenHash(): void
+    {
+        $this->repository->save($this->issue('anna', IdentityEntities::now(), magicTokenHash: IdentityEntities::digest('magic-token')));
+        $this->entityManager->clear();
+
+        self::assertNull($this->repository->findByMagicTokenHash(IdentityEntities::digest('some-other-token')));
+    }
+
+    /**
+     * 绝大多数历史行在这一列上是 NULL，而**它们不能被一个 NULL 查出来**。
+     *
+     * ⚠️ 这条看着像凑数，其实钉的是唯一索引的取舍：索引是普通 UNIQUE
+     * （不是部分索引，理由见 Version20260907140000），所以库里会同时存在
+     * 多行 `magic_token_hash IS NULL`。PG 的 NULLS DISTINCT 让它们互不冲突，
+     * 而查询侧走的是 `= :hash`，对 NULL 恒不匹配 —— 两者合起来才成立。
+     */
+    public function testChallengesWithoutAMagicTokenAreNeverFound(): void
+    {
+        $now = IdentityEntities::now();
+
+        // 两行都没有 Magic Link。唯一索引若不是 NULLS DISTINCT，第二次 save 就会炸。
+        $this->repository->save($this->issue('anna', $now, nth: 1));
+        $this->repository->save($this->issue('bea', $now, nth: 2));
+        $this->entityManager->clear();
+
+        self::assertSame(2, (int) $this->connection->fetchOne(
+            'SELECT count(*) FROM otp_challenges WHERE magic_token_hash IS NULL',
+        ));
+    }
+
+    /**
+     * `uq_otp_challenges_magic_token_hash`：一个令牌只能对应一条挑战。
+     *
+     * 碰撞的概率是 2^-256，所以这条不是在防随机碰撞 —— 它防的是**代码 bug**
+     * （比如把令牌生成挪到循环外、或者错误地复用了上一条挑战的令牌）。
+     * 那种 bug 的后果是「一个人的链接把另一个人登进去」，
+     * 而没有这个约束的话它在库里看起来完全正常。
+     */
+    public function testTheSameMagicTokenCannotBeIssuedTwice(): void
+    {
+        $now = IdentityEntities::now();
+        $hash = IdentityEntities::digest('magic-token');
+
+        $this->repository->save($this->issue('anna', $now, nth: 1, magicTokenHash: $hash));
+
+        $this->expectException(UniqueConstraintViolationException::class);
+
+        $this->repository->save($this->issue('bea', $now, nth: 2, magicTokenHash: $hash));
     }
 
     private function reload(OtpChallenge $challenge): OtpChallenge

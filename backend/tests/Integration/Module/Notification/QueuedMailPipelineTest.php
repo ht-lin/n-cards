@@ -209,7 +209,7 @@ final class QueuedMailPipelineTest extends KernelTestCase
             MailTemplate::OtpCode,
             MailLocale::German,
             $this->crypto()->encrypt(CryptoKey::Pii, self::RECIPIENT),
-            ['code' => self::OTP_CODE, 'expires_in_minutes' => '10'],
+            ['code' => self::OTP_CODE, 'expires_in_minutes' => '10', 'magic_link_url' => 'https://app.n-cards.de/l/magic/MAGICTOKENSAMPLE'],
         );
     }
 

@@ -13,6 +13,7 @@ Caddy 反向代理配置。**T-003 交付最小可用版，T-012 完善。**
 | 禁 `Server` / `X-Powered-By` / `Via` | T-003 ✅ |
 | ACME 账户邮箱与目录（`ACME_EMAIL` / `ACME_CA`） | T-012 ✅ |
 | Grafana 的 basic auth 反代 | T-405 ⏳ |
+| **App Links 域（`app.n-cards.de`）的第二个站点块** | **T-106 ✅** |
 
 > **静态法律页（§8.6）从 T-012 移出了。** 两个原因：
 > ① 这个站点的 `Content-Security-Policy: default-src 'none'` 与 HTML 页面直接冲突 ——
@@ -21,6 +22,15 @@ Caddy 反向代理配置。**T-003 交付最小可用版，T-012 完善。**
 > 都不是 M0 能定的。
 > 它属于 `n-cards.de` 的站点任务（同时要承载 Play 要求的站外
 > `https://n-cards.de/delete-account`），**不属于 `api.` 这个子域**。
+
+> **T-106 加了第二个站点块**（`{$CADDY_APP_SITE_ADDRESS}`），服务 App Links 域下的
+> Magic Link 落地页与 `assetlinks.json`。它**只 `file_server`，不 `reverse_proxy`** ——
+> 邮件安全网关会自动 GET 邮件里的每个链接，让那些 GET 落在静态文件上，
+> 「GET 不消费令牌」就是结构保证而不是约定。内容与取舍见
+> [`site/README.md`](site/README.md) 与 `docs/adr/0016-magic-link-delivery-and-landing-page.md`。
+>
+> 它的 CSP 与 API 那个块**不同**（那边 `default-src 'none'`，这边真的有 HTML），
+> 这正是 M0 把静态法律页移出 `api.` 子域时说的那个冲突 —— 解法同样是「另开一个站点块」。
 
 `ACME_CA` 排练时可指向 Let's Encrypt 的 staging 目录避开速率限制
 （同一域名每周 5 张证书，首签调不通时很容易撞上）。⚠️ 那时签出来的证书**不受公共

@@ -127,7 +127,7 @@ final class MailTemplateRenderingTest extends KernelTestCase
         $samples = [
             'code' => '481502',
             'expires_in_minutes' => '10',
-            'magic_link_url' => 'https://app.n-cards.de/l/MAGICTOKENSAMPLE',
+            'magic_link_url' => 'https://app.n-cards.de/l/magic/MAGICTOKENSAMPLE',
             'device_model' => 'Pixel 7a',
             'occurred_at' => '2026-09-05 18:30 UTC',
             'approximate_region' => 'Bayern, DE',

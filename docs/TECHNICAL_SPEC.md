@@ -225,7 +225,13 @@ J5 删号
 > 已在 T-104 取消。
 >
 > 准确的表述是：**用户可以让系统向任意邮箱发信，但每个邮箱每天最多 10 封，
-> 且内容只可能是一封验证码信。** T11 的攻击面因此是「对任意邮箱、被三个窗口夹住的
+> 且内容只可能是一封验证码信。**
+>
+> ⚠️ **[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md)（2026-09-07）
+> 给「那封信」补了一句**：它同时带 6 位码与一个 Magic Link（同一条挑战、
+> 同一个 `consumed_at`）。**仍然是一封** —— 发两封会让上面那个「10 封」实际
+> 变成 20 条消息，而 ADR-0013 的域名邮箱配额至今没有实测。
+> 外发邮件的清单因此从四封变成**三封**（`magic_link` 模板已退休）。 T11 的攻击面因此是「对任意邮箱、被三个窗口夹住的
 > OTP 轰炸」，而不是原来以为的「仅对自有邮箱」。
 >
 > 这个代价是明知并接受的：三个窗口是 §7.5 原文就有的，ADR-0014 没有放宽任何一个；
@@ -733,7 +739,7 @@ Anna App          Backend                              Bob App
 | `id` | UUID PK | 即 `challenge_id`，返回给客户端 |
 | `email_hash` | BYTEA NOT NULL | 索引 |
 | `code_hash` | BYTEA NOT NULL | HMAC-SHA256(code, pepper) |
-| `magic_token_hash` | BYTEA NULL | Magic Link 令牌哈希 |
+| `magic_token_hash` | BYTEA NULL | Magic Link 令牌哈希。**T-106 起有写入方**：每条挑战都签发一个。⚠️ 存的是**本地 SHA-256**，与同一行上 Vault HMAC 的 `code_hash` 口径不同 —— 6 位码可全枚举、pepper 是它唯一的防线，而 32 字节 CSPRNG 没有可枚举的字典（[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md)）。**不要顺手统一** |
 | `purpose` | TEXT NOT NULL | `login`（一期仅此一种） |
 | `attempts` | SMALLINT NOT NULL DEFAULT 0 | ≥5 即作废 |
 | `expires_at` | TIMESTAMPTZ NOT NULL | now() + 10 min |
@@ -1227,7 +1233,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 |---|---|---|
 | `POST` | `/v1/auth/otp/request` | body `{email, locale}` → **恒** `202 {challenge_id, expires_at, resend_after_seconds}` |
 | `POST` | `/v1/auth/otp/verify` | body `{challenge_id, code, device:{id,platform,model,os_version,app_version}}` → `200 {access_token, expires_in, refresh_token, user}` |
-| `POST` | `/v1/auth/magic/consume` | body `{token}`（Magic Link 落地页 **POST** 消费，见 §7.1） |
+| `POST` | `/v1/auth/magic/consume` | body `{token, device}`（Magic Link 消费，见 §7.1）。⚠️ 契约要求 `device` —— 它签发的是一次真实登录，所以**调用方是 App 而不是落地页**（[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md)） |
 | `POST` | `/v1/auth/token/refresh` | body `{refresh_token}` → 轮换后的新令牌对 |
 | `POST` | `/v1/auth/logout` | 需 Bearer。撤销当前会话 |
 
@@ -1446,6 +1452,26 @@ Bob:  【选择接受或拒绝】
 3. 落地页对 `HEAD`、预取（`Purpose: prefetch`）请求不做任何状态变更。
 4. Android 端注册 App Links（`https://app.n-cards.de/l/*`，配合 `assetlinks.json`），已安装 App 直接拉起。
 
+> **[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md)（T-106 落地）把上面四条钉死成了具体形态：**
+>
+> - **落地页是一份静态 HTML**，由 Caddy 上一个独立的 `app.n-cards.de` 站点块
+>   `file_server` 出去，**没有 `reverse_proxy`**。后端在 `/l/` 下不注册任何路由，
+>   `tests/Api/RouteInventoryTest` 断言这一点。于是第 1 与第 3 条不再是「要记得
+>   别在那儿改状态」的约定，而是**没有代码可以违反**的结构事实 ——
+>   与 ADR-0014 把防枚举升级成「服务端根本没查」是同一步棋。
+> - **POST 的发起者是 App，不是落地页。** 落地页的按钮是一次 `intent://` 交接。
+>   浏览器构造不出合法请求体：`device.platform` 的取值域只有 `android`，
+>   `device.id` 是安装级的客户端生成 UUID，而 refresh token 按本节只存在
+>   EncryptedSharedPreferences 里。
+> - **令牌与 6 位码在同一条挑战上**（`otp_challenges` 一行同时挂 `code_hash` 与
+>   `magic_token_hash`，共用一个 `consumed_at`）。它们是同一次登录的两个入口，
+>   不是两次机会：用掉任何一个，另一个立刻 401。
+> - **消费端点不做恒定耗时填充，也没有 `attempts` 计数。** 两者在这里都没有对象：
+>   令牌 2^256 种，编不出来；而猜错的令牌**找不到任何一行**可以累加。
+>   完整论证见 ADR-0016 的 Alternatives ⑤。
+> - `magic_token_hash` 存的是**本地 SHA-256**，不是 Vault HMAC —— 与同一行上的
+>   `code_hash` 口径不同，理由与 `sessions.refresh_token_hash` 相同（§17.1 的注释）。
+
 **令牌**
 
 | 令牌 | 格式 | 有效期 | 存储 |
@@ -1559,6 +1585,7 @@ Bob:  【选择接受或拒绝】
 | `POST /auth/otp/request` | IP | 20/h |
 | `POST /auth/otp/verify` | challenge_id | 5 总计 |
 | `POST /auth/otp/verify` | IP | 60/h |
+| **`POST /auth/magic/consume`** | **IP** | **60/h**（T-106；**没有** challenge 维度的次数上限 —— 令牌是 32 字节 CSPRNG，猜错的令牌找不到任何行可以累加） |
 | `POST /auth/token/refresh` | session | 60/h |
 | `GET /v1/sync` | device | 60/min |
 | **`GET /v1/users/lookup`** | **user** | **30/min，300/day**（v1.1，抑制 username 枚举 T18） |
@@ -2267,7 +2294,8 @@ staging 可用」实测 **29m35s**，其中 25 分钟是一组跑在模拟器上
 | `sync_changes_returned` | histogram | — |
 | `vault_operation_duration_seconds` | histogram | `op`(encrypt/decrypt/rewrap), `batch_size_bucket` |
 | `otp_requests_total` / `otp_verifications_total` | counter | `result` |
-| `email_send_total` | counter | `provider`, `template`, `result` |
+| `login_total` | counter | `result`(registered/success/rejected)。⚠️ [ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md) 之后它**聚合两条登录入口**（`otp/verify` 与 `magic/consume`）。语义仍是「一次登录尝试的结果」，但分不出用户走的哪条 —— 要分的话加一个 `method` 标签，那会改变既有序列的形状，归 T-405 决定 |
+| `email_send_total` | counter | `provider`, `template`, `result`。⚠️ `template` 的取值域是 `MailTemplate` 的 case 名，[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md) 之后**没有** `magic_link`（码与链接同一封信）——「OTP 邮件量骤降」那条告警看的是总量趋势，不受影响 |
 | `fcm_send_total` | counter | `result` |
 | `outbox_messages_pending` | gauge | `transport` |
 | `card_count_total` / `user_count_total` | gauge | 业务健康度 |
@@ -2448,7 +2476,7 @@ CREATE TABLE otp_challenges (
   email_encrypted  TEXT,                          -- T-104：收件人密文，也是注册时建 users 行的输入
   locale           TEXT        CHECK (locale IN ('de','en')),  -- T-104：注册时进 users.locale
   code_hash        BYTEA       NOT NULL,          -- HMAC-SHA256(code, pepper)，不存明文
-  magic_token_hash BYTEA,                         -- Magic Link 令牌哈希
+  magic_token_hash BYTEA,                         -- Magic Link 令牌哈希（本地 SHA-256，不是 Vault HMAC —— ADR-0016）
   purpose          TEXT        NOT NULL,          -- 一期恒为 'login'
   attempts         SMALLINT    NOT NULL DEFAULT 0,  -- 到 §7.1 的上限（5）为止饱和，不无限累加
   expires_at       TIMESTAMPTZ NOT NULL,
@@ -2458,6 +2486,12 @@ CREATE TABLE otp_challenges (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_otp_challenges_email_hash ON otp_challenges (email_hash);
+-- T-106：Magic Link 的查找键。UNIQUE 是安全不变量的库层兜底（一个令牌只能
+-- 对应一条挑战）；碰撞概率是 2^-256，所以它真正防的是代码 bug，而那种 bug
+-- 没有约束时在库里看起来完全正常。
+-- ⚠️ 刻意**不是**部分索引（`WHERE magic_token_hash IS NOT NULL` 更省，但 DBAL
+--    读不回 WHERE 子句，schema:validate 会永久报「不同步」——实测）。
+CREATE UNIQUE INDEX uq_otp_challenges_magic_token_hash ON otp_challenges (magic_token_hash);
 
 -- devices（id 由客户端生成：安装级唯一，重装即新设备）
 CREATE TABLE devices (

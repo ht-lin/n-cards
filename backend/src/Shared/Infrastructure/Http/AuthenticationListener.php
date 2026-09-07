@@ -79,13 +79,14 @@ final readonly class AuthenticationListener
      * ⚠️ 这里是路由名（`#[Route(name: ...)]`），不是路径。
      * 见类注释：用路径前缀会把 `auth_logout` 一起放过去。
      *
-     * ⚠️ T-106 落地 `POST /v1/auth/magic/consume` 时要往这里加一行
-     * （契约里它已经是 `security: []`）。`AuthenticationCoverageTest`
-     * 只对**已注册的**路由对账，所以在那之前这里少一行不会红。
+     * ⚠️ `AuthenticationCoverageTest` 只对**已注册的**路由对账 ——
+     * 一条契约里写了 `security: []`、但路由还不存在的操作，在这里少一行不会红。
+     * 加端点的人要自己记得来加（T-106 的 `auth_magic_consume` 就是这么来的）。
      */
     public const PUBLIC_ROUTES = [
         'auth_otp_request',
         'auth_otp_verify',
+        'auth_magic_consume',
         'auth_token_refresh',
     ];
 

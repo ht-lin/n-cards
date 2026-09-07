@@ -6,6 +6,7 @@ namespace App\Tests\Unit\Module\Identity\Application\Otp;
 
 use App\Module\Identity\Application\Otp\OtpVerificationPayload;
 use App\Module\Identity\Application\Otp\VerifyOtpService;
+use App\Module\Identity\Application\Session\SessionIssuer;
 use App\Module\Identity\Domain\Entity\OtpChallenge;
 use App\Module\Identity\Domain\Entity\User;
 use App\Module\Identity\Domain\ValueObject\Locale;
@@ -46,6 +47,9 @@ use PHPUnit\Framework\TestCase;
  * 成功路径的三张表写入（注册 / 设备 / 会话），以及副作用（令牌 claim、提醒信）。
  */
 #[CoversClass(VerifyOtpService::class)]
+// T-106：签发那一半搬去了 SessionIssuer，但从 verify 这条入口看到的行为
+// 一个字都没变 —— 本文件仍然是它最厚的一层覆盖（注册、设备四分支、提醒信）。
+#[CoversClass(SessionIssuer::class)]
 final class VerifyOtpServiceTest extends TestCase
 {
     private const CODE = '418396';
@@ -827,25 +831,41 @@ final class VerifyOtpServiceTest extends TestCase
     private function service(): VerifyOtpService
     {
         return new VerifyOtpService(
-            $this->users,
             $this->challenges,
-            $this->devices,
-            $this->sessions,
             $this->hasher,
-            // 每次登录恰好取一次 32 字节。给足 8 次，够任何一条用例连发。
-            new SequenceRandomness(bytes: array_fill(0, 8, self::REFRESH_BYTES)),
-            self::uuids(),
             $this->clock,
             $this->limiter,
             $this->equalizer,
             $this->metrics,
+            $this->issuer(),
+            maxAttempts: self::MAX_ATTEMPTS,
+            verifyBudgetMillis: self::BUDGET_MS,
+        );
+    }
+
+    /**
+     * T-106：签发那一半搬去了 {@see SessionIssuer}，两个端点共用。
+     *
+     * ⚠️ 本文件仍然测它 —— 从 verify 这条入口看到的行为一个字都没变，
+     * 而「搬家没搬坏」正是这些用例现在的价值。magic consume 那条入口
+     * 由 tests/Api/MagicConsumeEndpointTest 覆盖。
+     */
+    private function issuer(): SessionIssuer
+    {
+        return new SessionIssuer(
+            $this->users,
+            $this->challenges,
+            $this->devices,
+            $this->sessions,
+            // 每次登录恰好取一次 32 字节。给足 8 次，够任何一条用例连发。
+            new SequenceRandomness(bytes: array_fill(0, 8, self::REFRESH_BYTES)),
+            self::uuids(),
+            $this->metrics,
             $this->mail,
             $this->signer,
             $this->transactions,
-            maxAttempts: self::MAX_ATTEMPTS,
             accessTtlSeconds: self::ACCESS_TTL,
             refreshTtlSeconds: self::REFRESH_TTL,
-            verifyBudgetMillis: self::BUDGET_MS,
             appBaseUrl: self::BASE_URL,
         );
     }

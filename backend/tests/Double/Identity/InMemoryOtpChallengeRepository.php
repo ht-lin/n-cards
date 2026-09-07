@@ -52,6 +52,23 @@ final class InMemoryOtpChallengeRepository implements OtpChallengeRepositoryInte
         return null;
     }
 
+    /**
+     * ⚠️ 这里**没有**行锁，而生产实现靠 `PESSIMISTIC_WRITE` 挡住
+     * 「一个令牌换到两个会话」。单测因此证明不了那条不变量 ——
+     * 它只能由真 Postgres 证明，断言在
+     * tests/Integration/Module/Identity/Doctrine/DoctrineOtpChallengeRepositoryTest。
+     */
+    public function findByMagicTokenHash(HashDigest $magicTokenHash): ?OtpChallenge
+    {
+        foreach ($this->challenges as $challenge) {
+            if ($challenge->magicTokenHash()?->equals($magicTokenHash) ?? false) {
+                return $challenge;
+            }
+        }
+
+        return null;
+    }
+
     public function invalidateActiveFor(HashDigest $emailHash, \DateTimeImmutable $now): int
     {
         $this->operations[] = 'invalidate';

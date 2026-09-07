@@ -59,6 +59,18 @@ final class RequestOtpServiceTest extends TestCase
 
     private const RESEND_AFTER = 60;
 
+    /**
+     * ⚠️ 客户端域（App Links），不是 API 域 —— 与 `.env.test` 的
+     * `APP_PUBLIC_BASE_URL` 同一个口径。结尾不带斜杠。
+     */
+    private const APP_BASE_URL = 'https://app.staging.n-cards.de';
+
+    /**
+     * T-106 起每次请求还要取一次 32 字节（Magic Link 的令牌）。
+     * 给替身排够料，否则 SequenceRandomness 会在第二次请求上抛「用完了」。
+     */
+    private const MAGIC_BYTES = 'MAGIC-TOKEN-BYTES-32-CHARS-LONG!';
+
     private const BUDGET_MS = 150;
 
     private const CLIENT_IP = '203.0.113.7';
@@ -130,6 +142,33 @@ final class RequestOtpServiceTest extends TestCase
         self::assertSame(MailTemplate::OtpCode->requiredVariables(), array_keys($variables));
         self::assertMatchesRegularExpression('/^\d{6}$/', $variables['code']);
         self::assertSame('10', $variables['expires_in_minutes']);
+
+        // T-106：链接指向**落地页**（APP_PUBLIC_BASE_URL + /l/magic/<token>），
+        // 不是 API 域上的 POST 端点 —— 企业邮件安全网关会自动 GET 它（§7.1）。
+        // 令牌是 base64url，所以路径里不能出现 `+` `/` `=`。
+        self::assertMatchesRegularExpression(
+            '#^'.preg_quote(self::APP_BASE_URL, '#').'/l/magic/[A-Za-z0-9_-]{43}$#',
+            $variables['magic_link_url'],
+        );
+    }
+
+    /**
+     * 信里的是**明文**令牌，库里的是它的 SHA-256 —— 与 §7.1 对 refresh token
+     * 的要求同一条。写反了（存明文）功能测试照样全绿，而一份库备份就等于
+     * 一把能登进任何账号的万能钥匙。
+     */
+    public function testStoresOnlyTheHashOfTheMagicToken(): void
+    {
+        $this->service()->request(self::payload(self::REGISTERED), self::CLIENT_IP);
+
+        $url = $this->mail->only()->variables['magic_link_url'];
+        $token = substr($url, strrpos($url, '/') + 1);
+
+        $stored = $this->challenges->lastSaved()->magicTokenHash();
+
+        self::assertNotNull($stored);
+        self::assertStringNotContainsString($token, $stored->toRaw());
+        self::assertSame(hash('sha256', $token, true), $stored->toRaw());
     }
 
     #[DataProvider('locales')]
@@ -164,8 +203,8 @@ final class RequestOtpServiceTest extends TestCase
         // 返回给客户端的 challenge_id 就是这条挑战的主键（§5.2）。
         self::assertTrue($challenge->id()->equals($issued->challengeId));
         self::assertSame(self::RESEND_AFTER, $issued->resendAfterSeconds);
-        // Magic Link 归 T-106，本端点不签发。
-        self::assertNull($challenge->magicTokenHash());
+        // T-106：同一条挑战上还挂着 Magic Link 的令牌摘要。
+        self::assertNotNull($challenge->magicTokenHash());
     }
 
     /**
@@ -232,8 +271,8 @@ final class RequestOtpServiceTest extends TestCase
      */
     public function testTheCodeHashIsRandomNotAConstant(): void
     {
-        $first = $this->requestWith(new SequenceRandomness(ints: [111111]), self::UNKNOWN);
-        $second = $this->requestWith(new SequenceRandomness(ints: [222222]), self::UNKNOWN);
+        $first = $this->requestWith(new SequenceRandomness(ints: [111111], bytes: [self::MAGIC_BYTES]), self::UNKNOWN);
+        $second = $this->requestWith(new SequenceRandomness(ints: [222222], bytes: [self::MAGIC_BYTES]), self::UNKNOWN);
 
         self::assertFalse($first->equals($second), 'Two challenges must not share a code hash.');
         self::assertNotSame(str_repeat("\x00", 32), $first->toRaw());
@@ -417,7 +456,7 @@ final class RequestOtpServiceTest extends TestCase
      */
     public function testPadsShortCodesWithLeadingZeros(): void
     {
-        $this->service(new SequenceRandomness(ints: [7]))->request(self::payload(self::REGISTERED), self::CLIENT_IP);
+        $this->service(new SequenceRandomness(ints: [7], bytes: [self::MAGIC_BYTES]))->request(self::payload(self::REGISTERED), self::CLIENT_IP);
 
         self::assertSame('000007', $this->mail->only()->variables['code']);
     }
@@ -509,7 +548,14 @@ final class RequestOtpServiceTest extends TestCase
             $this->challenges,
             $this->hasher,
             $this->crypto,
-            $random ?? new SequenceRandomness(ints: array_fill(0, 8, 418396)),
+            $random ?? new SequenceRandomness(
+                ints: array_fill(0, 8, 418396),
+                // 每次请求取一次 32 字节做 Magic Link 令牌（T-106）。
+                // ⚠️ 八份**互不相同** —— 用同一份的话
+                // uq_otp_challenges_magic_token_hash 在真库上会挡住第二次请求，
+                // 而单测用的是内存替身，那个冲突要到集成测试才显形。
+                bytes: array_map(static fn (int $n): string => str_pad('magic-token-'.$n, 32, '.'), range(1, 8)),
+            ),
             self::uuids(),
             $this->clock,
             $this->limiter,
@@ -520,6 +566,7 @@ final class RequestOtpServiceTest extends TestCase
             ttlSeconds: self::TTL_SECONDS,
             resendAfterSeconds: self::RESEND_AFTER,
             requestBudgetMillis: self::BUDGET_MS,
+            appBaseUrl: self::APP_BASE_URL,
         );
     }
 
