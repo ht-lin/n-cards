@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    <title>Geräte verwalten · N-Cards</title>
+    <link rel="stylesheet" href="/assets/base.css">
+</head>
+<!--
+  「新设备登录」提醒信里那个「这不是我」链接的落点（T-104 的 REVOKE_PATH）。
+
+  ⚠️ 这个链接**不带令牌**，所以这一页没有任何可做的事 —— 撤销走的是
+  App 里的 `DELETE /v1/me/devices/{id}`，需要 Bearer。
+  它存在的意义是：在 T-106 之前，这个地址在 DNS 层就打不开，
+  而它已经出现在真实用户收到的邮件里了。
+-->
+<body>
+<main>
+    <p class="brand">N-Cards</p>
+
+    <h1>Geräte verwalten</h1>
+
+    <p>
+        Du hast eine E-Mail über eine Anmeldung auf einem neuen Gerät bekommen und
+        das warst nicht du? Öffne die N-Cards-App und geh zu
+        <strong>Einstellungen → Geräte</strong>. Dort kannst du jedes Gerät einzeln
+        abmelden.
+    </p>
+
+    <p class="muted">
+        Wenn du keinen Zugriff mehr auf dein Postfach hast, hilft das Abmelden allein
+        nicht — melde dich zuerst bei deinem E-Mail-Anbieter ab und ändere dort das
+        Passwort. Die Anmeldung bei N-Cards läuft ausschließlich über deine E-Mail-Adresse.
+    </p>
+
+    <hr class="divider">
+
+    <h1>Manage devices</h1>
+
+    <p>
+        Got an email about a sign-in on a new device that wasn't you? Open the
+        N-Cards app and go to <strong>Settings → Devices</strong>. You can sign out
+        each device individually there.
+    </p>
+
+    <p class="muted">
+        If you have lost access to your mailbox, signing devices out is not enough —
+        secure your email account first. Signing in to N-Cards only ever goes through
+        your email address.
+    </p>
+</main>
+</body>
+</html>

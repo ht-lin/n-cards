@@ -66,6 +66,18 @@ parameters:
             windows:
                 - {limit: 60, window: 3600}
 
+        # T-106：Magic Link 的消费侧。与 otp_verify_ip 同形、同数值，
+        # 但**是另一个桶** —— 两个端点各有各的配额。
+        #
+        # ⚠️ 这里没有对应 `otp_verify` 的「challenge_id 5 次总计」那一维：
+        # 那个计数器是给可猜的 6 位码准备的，而 magic token 有 2^256 种，
+        # 猜错的令牌根本找不到任何一行去累加。完整论证在
+        # ConsumeMagicLinkService 的类注释「也没有 attempts」一节。
+        magic_consume_ip:
+            dimension: ip
+            windows:
+                - {limit: 60, window: 3600}
+
         token_refresh:
             dimension: session
             windows:

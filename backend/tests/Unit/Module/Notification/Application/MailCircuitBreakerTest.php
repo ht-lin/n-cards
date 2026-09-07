@@ -34,7 +34,7 @@ final class MailCircuitBreakerTest extends TestCase
     public static function volumeMatrix(): iterable
     {
         foreach (MailTemplate::cases() as $template) {
-            $critical = \in_array($template, [MailTemplate::OtpCode, MailTemplate::MagicLink], true);
+            $critical = MailTemplate::OtpCode === $template;
 
             yield $template->value.' 低于告警阈值 → 发' => [$template, 1, true];
             yield $template->value.' 越过告警阈值但未熔断 → 仍然发' => [$template, self::WARN, true];

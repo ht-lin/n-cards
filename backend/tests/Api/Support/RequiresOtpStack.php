@@ -162,7 +162,7 @@ trait RequiresOtpStack
      * @param string|null $email 省略即随机。已注册与未注册的区别由调用方
      *                           自己决定要不要先建 users 行
      */
-    private function seedChallenge(string $code, ?string $email = null, ?\DateTimeImmutable $expiresAt = null): OtpChallenge
+    private function seedChallenge(string $code, ?string $email = null, ?\DateTimeImmutable $expiresAt = null, ?string $magicToken = null): OtpChallenge
     {
         $container = static::getContainer();
 
@@ -188,7 +188,11 @@ trait RequiresOtpStack
             HashDigest::fromRaw($hasher->hash($code)),
             OtpPurpose::Login,
             $expiresAt ?? $now->modify('+600 seconds'),
-            null,
+            // T-106：Magic Link 的令牌摘要。⚠️ 本地 SHA-256，**不是** Vault HMAC ——
+            // 与同一行上的 code_hash 口径不同，理由见 ConsumeMagicLinkService。
+            // 用替身自己算而不是走 otp/request：与 code 同一个理由，
+            // 真实的令牌只在那封加密入队的信里存在。
+            null === $magicToken ? null : HashDigest::fromRaw(hash('sha256', $magicToken, true)),
             null,
             $now,
         );

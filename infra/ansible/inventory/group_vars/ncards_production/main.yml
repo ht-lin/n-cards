@@ -51,3 +51,26 @@ ncards_mail_provider: dogado
 # 装了 App 的用户点信里的链接会直接拉起 App，没装的落到 Web 落地页。
 # 改这个域名要同步改 Android 的 intent-filter 与 assetlinks.json，缺一边链接就不拉起。
 ncards_app_public_base_url: https://app.n-cards.de
+
+# T-106：同一个域名，但这一条是给 **Caddy** 的（站点块的地址），
+# 上一条是给 **backend** 的（邮件里写什么）。
+#
+# ⚠️ 两者必须指向同一个地方。分成两个变量不是冗余：一个带 scheme
+# （拼进邮件正文的 URL），一个不带（裸域名才会触发 Caddy 的自动 TLS 与
+# 80→443 重定向，见 .env.example 的注释）。合成一个的话，
+# 要么邮件里少了 https://，要么 Caddy 不签证书 —— 两种都不会有测试发现。
+#
+# ⚠️ 上线前提：`app.n-cards.de` 的 A 记录必须已经存在，Caddy 才签得出证书。
+# 那是一个仓库外的人工动作，见 docs/adr/0016-magic-link-delivery-and-landing-page.md。
+ncards_app_site_address: app.n-cards.de
+
+# T-106：`/.well-known/assetlinks.json` 的内容。
+#
+# ⚠️ 今天是**空列表**：仓库里还没有 release keystore，拿不到
+# `sha256_cert_fingerprints`。空列表是合法 JSON，效果是 App Links 验证不通过 ——
+# 也就是点信里的链接会落到 Web 落地页而不是直接拉起 App。功能不坏，只是少一步。
+# 填它归 T-151 / M4（那时 Android 侧的 intent-filter 与 autoVerify 才一起落地）。
+#
+# 指纹是**公开信息**（它就发布在那个 URL 上），所以不进 sops。
+ncards_android_package_name: de.ncards
+ncards_android_cert_fingerprints: []

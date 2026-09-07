@@ -62,3 +62,78 @@
 		header_up X-Forwarded-Proto {scheme}
 	}
 }
+
+# ============================================================================
+# App Links 域（T-106 / ADR-0016）—— app.n-cards.de
+# ============================================================================
+# 与上面那个 API 站点块是**两个**站点，共用一个 Caddy 进程。
+#
+# ⚠️ 这里**没有 reverse_proxy**，而且不该有。
+#
+# 邮件里的 Magic Link 指向 `/l/magic/<token>`，而企业邮件安全网关
+# （Microsoft Defender、Barracuda …）会自动 GET 邮件里的每一个链接做扫描。
+# 若那个 GET 打到应用上、而应用哪天「顺手」在那儿消费了令牌，用户还没点开
+# 就已失效（§7.1）。让它落在 file_server 上，「GET 不改变状态」就不再是一条
+# 要靠人记住的约定，而是一条结构事实 —— 后端在 `/l/` 下压根没有路由，
+# `tests/Api/RouteInventoryTest::testTheBackendServesNothingUnderTheAppLinksPath()`
+# 钉着它。真正的消费是 App 发的 `POST /v1/auth/magic/consume`。
+#
+# 本地默认 `http://localhost:8081`（compose 映射了那个端口）；
+# staging / prod 由 ncards_app_site_address 给出真实域名，Caddy 自动签证书。
+# ⚠️ 那个值必须与 backend 的 `APP_PUBLIC_BASE_URL` 逐字对应 ——
+# 前者决定这些页面**在哪儿**，后者决定邮件里**写哪儿**。对不上就是死链。
+{$CADDY_APP_SITE_ADDRESS:http://localhost:8081} {
+	root * /srv/app-site
+
+	header {
+		# ⚠️ 与 API 站点块的 `default-src 'none'` 不同：这里真的有 HTML。
+		# 但脚本与样式都在独立文件里（没有内联），所以能停在 'self'，
+		# 不必退到 'unsafe-inline'。这几页是登录流程的一部分，值得收紧。
+		#
+		# 没有 connect-src：落地页**不联网**（magic.js 里没有 fetch）。
+		# 缺省回落到 default-src 'none'，于是「哪天有人加了个信标」会当场被拦下。
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		# ⚠️ no-referrer 在这里是**安全要求**，不是隐私偏好：令牌在 URL 路径里，
+		# 而落地页上有一个指向 Play 商店的外链。默认策略会把整条 URL 当作
+		# Referer 发过去 —— 等于把一次性登录令牌交给第三方。
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		# 带令牌的 URL 绝不能进任何索引。页面里的 <meta robots> 是第二道。
+		X-Robots-Tag "noindex, nofollow, noarchive"
+
+		-Server
+		-X-Powered-By
+		-Via
+	}
+
+	@https expression {scheme} == "https"
+	header @https Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+	# ⚠️ 令牌在路径里，所以这些响应绝不能被任何中间层缓存下来。
+	@magic path /l/magic/*
+	header @magic Cache-Control "no-store"
+
+	# `/l/magic/<token>` 全部落到同一份静态页，令牌由页面自己从
+	# location.pathname 里读（assets/magic.js）。
+	handle /l/magic/* {
+		rewrite * /l/magic/index.html
+		file_server
+	}
+
+	# assetlinks.json 必须以 application/json 返回，否则 Android 的校验器
+	# 直接判失败。Caddy 按扩展名猜得对，这里只是把它显式钉住。
+	handle /.well-known/assetlinks.json {
+		header Content-Type "application/json"
+		# ⚠️ 与上面的 no-store 相反：这份文件是公开的、极少变，
+		# 而 Android 的校验器会反复拉它。
+		header Cache-Control "public, max-age=3600"
+		file_server
+	}
+
+	# `/l/devices`、`/l/security`、`/assets/*`。
+	handle {
+		try_files {path} {path}/index.html
+		file_server
+	}
+}

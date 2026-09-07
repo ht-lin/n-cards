@@ -222,6 +222,9 @@ services:
             $ttlSeconds: '%ncards.otp.ttl_seconds%'
             $resendAfterSeconds: '%ncards.otp.resend_after_seconds%'
             $requestBudgetMillis: '%ncards.otp.request_budget_ms%'
+            # T-106：信里 Magic Link 的前缀。指向**客户端**域（App Links），
+            # 不是 API 域 —— 与 SessionIssuer / RefreshTokenService 同一个值。
+            $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
 
     # ------------------------------------------------------------------ T-104
     # JWT 签发（§7.1：EdDSA / Ed25519，15 分钟）。
@@ -251,14 +254,23 @@ services:
             $previousKvPath: '%ncards.jwt.previous_kv_path%'
             $cacheTtlSeconds: '%ncards.jwt.key_cache_ttl_seconds%'
 
-    # 验证端点的五个标量。`max_attempts` 从 T-103 起就配在 ncards_otp.yaml 里
+    # 验证端点的两个标量。`max_attempts` 从 T-103 起就配在 ncards_otp.yaml 里
     # 等着这一行 —— 它是 §7.5「challenge_id 5 次总计」的唯一强制点。
+    #
+    # ⚠️ 三个令牌相关的标量（access/refresh TTL、appBaseUrl）T-106 起归
+    # SessionIssuer —— 本类只剩鉴别，签发那一半搬走了。
     App\Module\Identity\Application\Otp\VerifyOtpService:
         arguments:
             $maxAttempts: '%ncards.otp.max_attempts%'
+            $verifyBudgetMillis: '%ncards.otp.verify_budget_ms%'
+
+    # ------------------------------------------------------------------ T-106
+    # 「挑战鉴别通过之后」的那一段，otp/verify 与 magic/consume 共用
+    # （SessionIssuer 的类注释解释了为什么不能各写一份）。
+    App\Module\Identity\Application\Session\SessionIssuer:
+        arguments:
             $accessTtlSeconds: '%ncards.jwt.access_ttl_seconds%'
             $refreshTtlSeconds: '%ncards.jwt.refresh_ttl_seconds%'
-            $verifyBudgetMillis: '%ncards.otp.verify_budget_ms%'
             $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
 
     # ------------------------------------------------------------------ T-105

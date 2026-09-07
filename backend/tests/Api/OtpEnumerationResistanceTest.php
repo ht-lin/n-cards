@@ -155,7 +155,7 @@ final class OtpEnumerationResistanceTest extends WebTestCase
 
         // 每一列都必须「同样地被填上」。email_encrypted 与 locale 是 T-104 加的 ——
         // 它们是注册路径的输入，未注册那条**尤其**不能为空（正是它要用来建 users 行）。
-        foreach (['code_hash', 'request_ip_hash', 'expires_at', 'created_at', 'purpose', 'email_encrypted', 'locale'] as $column) {
+        foreach (['code_hash', 'magic_token_hash', 'request_ip_hash', 'expires_at', 'created_at', 'purpose', 'email_encrypted', 'locale'] as $column) {
             self::assertNotNull($known[$column], $column.' 在已注册路径上不该为空');
             self::assertNotNull($unknown[$column], $column.' 在未注册路径上不该为空 —— 空值让这一行在库层可辨认');
         }
@@ -172,9 +172,12 @@ final class OtpEnumerationResistanceTest extends WebTestCase
         self::assertSame(\strlen($known['code_hash']), \strlen($unknown['code_hash']));
         self::assertNotSame($known['code_hash'], $unknown['code_hash']);
 
-        // Magic Link 归 T-106：两条路径现在都不签发，所以这一列都得是 NULL。
-        self::assertNull($known['magic_token_hash']);
-        self::assertNull($unknown['magic_token_hash']);
+        // T-106 起两条路径都签发 Magic Link，所以这一列与 code_hash 同一个要求：
+        // 长度相同、值不同。⚠️ 若哪天只给已注册地址发链接，这条会红 ——
+        // 那正是它存在的理由（「未注册的收不到链接」与「未注册的收不到码」
+        // 是同一个枚举信道，ADR-0014 的整篇论证对两者同时成立）。
+        self::assertSame(\strlen($known['magic_token_hash']), \strlen($unknown['magic_token_hash']));
+        self::assertNotSame($known['magic_token_hash'], $unknown['magic_token_hash']);
     }
 
     /**

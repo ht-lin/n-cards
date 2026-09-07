@@ -49,6 +49,11 @@ on:
         description: '冒烟测试的目标，带 scheme'
         type: string
         required: true
+      app_site_url:
+        description: 'App Links 域的冒烟测试目标，带 scheme（T-106）。留空则跳过那一步。'
+        type: string
+        required: false
+        default: ''
       run_migrations:
         description: '是否执行 Doctrine 迁移'
         type: boolean
@@ -154,3 +159,14 @@ jobs:
       - name: 冒烟测试
         working-directory: .
         run: scripts/ci/smoke-staging.sh "${{ inputs.site_url }}"
+
+      # T-106：App Links 域是**另一个**域名（app.*），有自己的证书与自己的 CSP。
+      #
+      # ⚠️ `if` 让它在 app_site_url 还没配的环境上跳过，而不是红。
+      # 那个域的 A 记录是一个仓库外的人工前置条件（见 ADR-0016）——
+      # 在它就位之前，用一条硬失败去挡住整条部署流水线是不划算的。
+      # 反过来，一旦填了 url，这一步就必须绿。
+      - name: 冒烟测试（App Links 域）
+        if: inputs.app_site_url != ''
+        working-directory: .
+        run: scripts/ci/smoke-app-site.sh "${{ inputs.app_site_url }}"

@@ -122,6 +122,12 @@ paths:
         客户端**不能**从本接口的响应推断账号是否存在，也**不应该**尝试 ——
         「这个邮箱要走登录还是注册」对客户端是同一个流程（邮箱 → 验证码 → username）。
 
+        发出去的那封信里同时有**两样东西**：6 位码，以及一个免输码的 Magic Link
+        （[ADR-0016](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0016-magic-link-delivery-and-landing-page.md)）。
+        两者挂在**同一条**挑战上、共用一个 `consumed_at`，所以它们是同一次登录的
+        两个入口而不是两次机会 —— 用掉任何一个，另一个立刻失效。
+        链接的消费走 `POST /auth/magic/consume`。
+
         限速（§7.5）：按 `email_hash` 1/min、5/h、10/day；按 IP 20/h。
         这三个窗口是本端点唯一的滥用闸门 —— 它挡的是「用 N-Cards 的域名给别人的
         收件箱发信」，所以 429 时**不要**自动重试，照 `Retry-After` 退避。
@@ -231,6 +237,17 @@ paths:
         会自动 `GET` 邮件里的所有链接做扫描——如果 Magic Link 是 `GET` 即消费，
         用户还没点开就已失效（§7.1）。邮件里的链接指向落地页，`GET` 只渲染
         「点击继续登录」按钮，实际消费走本端点。
+
+        ⚠️ **调用方是 App，不是落地页**（[ADR-0016](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0016-magic-link-delivery-and-landing-page.md)）。
+        落地页是一份静态 HTML，它的按钮通过 App Links / `intent://` 把令牌交给 App，
+        由 App 带上自己的 `device` 发本请求。浏览器构造不出合法的请求体 ——
+        `device.platform` 的取值域只有 `android`，`device.id` 是安装级的客户端生成 UUID。
+
+        令牌与 `POST /auth/otp/request` 那封信里的 6 位码挂在**同一条**挑战上：
+        用掉任何一个，另一个立刻 401。重复消费同一个令牌同样 401。
+
+        限速（§7.5）：按 IP 60/h。**没有**按挑战的次数上限 —— 令牌是 32 字节
+        CSPRNG，猜错的令牌找不到任何一行可以累加。
       security: []
       parameters:
         - $ref: '#/components/parameters/XClient'

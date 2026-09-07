@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!--
+      ⚠️ robots: 这些 URL 带一次性登录令牌，绝不能进任何索引。
+      Caddy 的站点块还会发 X-Robots-Tag，这里是第二道。
+    -->
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    <!--
+      ⚠️ referrer: 令牌在**路径**里。默认策略会把整条 URL 作为 Referer
+      发给任何被点击的外链（这里是 Play 商店），等于把令牌交给第三方。
+    -->
+    <meta name="referrer" content="no-referrer">
+    <title>Anmeldung fortsetzen · N-Cards</title>
+    <link rel="stylesheet" href="/assets/base.css">
+</head>
+<!--
+  ============================================================================
+  这一页**不消费令牌**，它甚至不联网（T-106 / ADR-0016）
+  ============================================================================
+  企业邮件安全网关（Microsoft Defender、Barracuda …）会自动 GET 邮件里的每一个
+  链接做扫描。若 GET 即消费，令牌在用户看到那封信之前就已失效（§7.1）。
+
+  所以这里是一份**静态文件**，由 Caddy 直接吐出：后端在 `/l/` 下没有任何路由
+  （`tests/Api/RouteInventoryTest::testTheBackendServesNothingUnderTheAppLinksPath()`
+  钉这一条）。GET / HEAD / 预取全都只是读一个文件。
+
+  ============================================================================
+  按钮是一次「交给 App」，不是一次 API 调用
+  ============================================================================
+  真正的消费是 `POST /v1/auth/magic/consume`，而它的请求体要求一个
+  `device` 对象（`platform` 的取值域只有 `android`，`id` 是安装级的客户端生成
+  UUID）。浏览器构造不出合法的请求，也没地方放拿回来的 refresh token
+  （§7.1 规定它只存在 EncryptedSharedPreferences 里）。
+
+  所以：装了 App 且 App Links 已验证的用户，点信里的链接时 Android 直接拉起
+  App —— **这一页根本不会加载**。走到这里的是「没装 App」「App Links 没验证过」
+  「在桌面上打开」三种情形，按钮对第二种有效（intent:// 显式指定包名），
+  另外两种落到 Play 商店或下面那句「改用 6 位码」。
+-->
+<body>
+<main>
+    <p class="brand">N-Cards</p>
+
+    <h1>Anmeldung fortsetzen</h1>
+
+    <!-- JS 解析出令牌后才放出来，见 magic.js 顶部的注释。 -->
+    <div id="handoff" hidden>
+        <p>Tippe auf den Button, um dich in der N-Cards-App anzumelden.</p>
+
+        <p><a id="open-app" class="button" href="#">In der App öffnen</a></p>
+
+        <p class="muted">
+            Der Link ist 10 Minuten gültig und kann nur einmal verwendet werden.
+            Er wird erst eingelöst, wenn sich die App öffnet — dass du diese Seite
+            siehst, verbraucht ihn nicht.
+        </p>
+    </div>
+
+    <!-- 没有令牌（有人直接打开 /l/magic/）或 JS 关着时的唯一出路。 -->
+    <div id="fallback">
+        <p>
+            Öffne diese E-Mail auf dem Handy, auf dem N-Cards installiert ist —
+            oder tippe den <strong>6-stelligen Code</strong> aus der E-Mail
+            direkt in der App ein. Beides führt zur selben Anmeldung.
+        </p>
+    </div>
+
+    <hr class="divider">
+
+    <h1>Continue sign-in</h1>
+
+    <div id="handoff-en" hidden>
+        <p>Tap the button above to sign in with the N-Cards app.</p>
+    </div>
+
+    <div id="fallback-en">
+        <p>
+            Open this email on the phone that has N-Cards installed — or type the
+            <strong>6-digit code</strong> from the email into the app. Both lead
+            to the same sign-in.
+        </p>
+    </div>
+
+    <p class="muted">
+        Du hast keine Anmeldung angefordert? Dann schließe diese Seite einfach.
+        Solange der Link nicht in der App geöffnet wird, passiert nichts.<br>
+        Didn't request a sign-in? Just close this page. Nothing happens until the
+        link is opened in the app.
+    </p>
+</main>
+
+<script src="/assets/magic.js"></script>
+</body>
+</html>

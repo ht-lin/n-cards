@@ -7,9 +7,22 @@
        保证两边都渲染得出来，保证不了两边说的是同一件事。 #}
     <p style="margin: 0 0 20px 0; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #18181b;">{{ code }}</p>
 
-    <p style="margin: 0 0 20px 0;">The code is valid for <strong>{{ expires_in_minutes }} minutes</strong> and can only be used once.</p>
+    <p style="margin: 0 0 24px 0;">The code is valid for <strong>{{ expires_in_minutes }} minutes</strong> and can only be used once.</p>
 
-    <p style="margin: 0;">Didn't request a sign-in? Just ignore this email. Without the code, nobody can sign in with your address.</p>
+    {# ⚠️ T-106: This link does NOT consume the token (§7.1). See de/otp_code.html.twig
+       for the full reasoning — enterprise mail gateways auto-GET every link, so the
+       link points at a static landing page and the actual POST comes from the app. #}
+    <p style="margin: 0 0 20px 0;">On your phone you can skip the typing:</p>
+
+    <p style="margin: 0 0 24px 0;">
+        <a href="{{ magic_link_url }}" style="display: inline-block; padding: 12px 24px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">Continue sign-in</a>
+    </p>
+
+    <p style="margin: 0 0 20px 0; color: #71717a; font-size: 13px; word-break: break-all;">{{ magic_link_url }}</p>
+
+    <p style="margin: 0 0 20px 0;">The code and the link belong to the same sign-in — once you have used one of them, the other stops working.</p>
+
+    <p style="margin: 0;">Didn't request a sign-in? Just ignore this email. Without the code and without the link, nobody can sign in with your address.</p>
 {% endblock %}
 
 {% block footer %}

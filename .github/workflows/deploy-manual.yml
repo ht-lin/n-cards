@@ -54,6 +54,7 @@ jobs:
       packages: read
     outputs:
       site_url: ${{ steps.resolve.outputs.site_url }}
+      app_site_url: ${{ steps.resolve.outputs.app_site_url }}
     steps:
       # ⚠️ 这一条**替代**的是 production Environment 上的 required reviewers ——
       # 那条保护规则在 Free 计划的私有仓库上建不出来（API 明确回
@@ -140,10 +141,14 @@ jobs:
         id: resolve
         run: |
           set -euo pipefail
+          # ⚠️ 两个域，不是一个：api.* 是后端，app.* 是 App Links 落地页
+          # （T-106 / ADR-0016）。它们的证书、CSP 与冒烟断言都不一样。
           if [ "${{ inputs.environment }}" = "production" ]; then
             echo "site_url=https://api.n-cards.de" >> "$GITHUB_OUTPUT"
+            echo "app_site_url=https://app.n-cards.de" >> "$GITHUB_OUTPUT"
           else
             echo "site_url=https://api.staging.n-cards.de" >> "$GITHUB_OUTPUT"
+            echo "app_site_url=https://app.staging.n-cards.de" >> "$GITHUB_OUTPUT"
           fi
 
   deploy:
@@ -153,6 +158,7 @@ jobs:
       environment: ${{ inputs.environment }}
       image_tag: ${{ inputs.image_tag }}
       site_url: ${{ needs.guard.outputs.site_url }}
+      app_site_url: ${{ needs.guard.outputs.app_site_url }}
       run_migrations: ${{ inputs.run_migrations }}
     # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret
     # 都递给被调用的 workflow，包括将来才加的那些。

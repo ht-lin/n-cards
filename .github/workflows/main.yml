@@ -374,6 +374,9 @@ jobs:
       environment: staging
       image_tag: ${{ github.sha }}
       site_url: https://api.staging.n-cards.de
+      # T-106：App Links 落地页在另一个域上。deploy.yml 里那一步带 `if`，
+      # 所以在 app.staging 的 A 记录就位之前留空也不会红。
+      app_site_url: https://app.staging.n-cards.de
       run_migrations: true
     # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret 递下去，
     # 包括将来才加的那些。

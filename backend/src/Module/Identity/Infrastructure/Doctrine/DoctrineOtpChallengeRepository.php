@@ -9,6 +9,7 @@ use App\Module\Identity\Domain\Repository\OtpChallengeRepositoryInterface;
 use App\Shared\Domain\Crypto\HashDigest;
 use App\Shared\Domain\Identity\Uuid;
 use App\Shared\Infrastructure\Doctrine\HashDigestType;
+use Doctrine\DBAL\LockMode;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
 
@@ -32,6 +33,39 @@ final readonly class DoctrineOtpChallengeRepository implements OtpChallengeRepos
     public function findById(Uuid $id): ?OtpChallenge
     {
         return $this->entityManager->find(OtpChallenge::class, $id);
+    }
+
+    public function findByMagicTokenHash(HashDigest $magicTokenHash): ?OtpChallenge
+    {
+        // 走 uq_otp_challenges_magic_token_hash（部分唯一索引，
+        // `WHERE magic_token_hash IS NOT NULL` —— 绝大多数行在这一列上是 NULL）。
+        //
+        // ============================================================
+        // ⚠️ PESSIMISTIC_WRITE：这一行查出来就是为了改
+        // ============================================================
+        // 消费是读-改-写。两个并发 POST 拿同一个令牌进来，不加锁的话各自读到
+        // consumed_at IS NULL、各自通过 OtpChallenge::consume() 的判空、
+        // 各自 UPDATE 同一行 —— **一个令牌换到两个会话**，而库里只留下一条
+        // 看起来完全正常的记录。这与 {@see DoctrineSessionRepository::findByRefreshTokenHash()}
+        // 是同一个坑。
+        //
+        // 用 DQL + setLockMode() 而不是 findOneBy()：后者不接受锁模式。
+        //
+        // ⚠️ FOR UPDATE 要求在事务里。调用方
+        // （{@see \App\Module\Identity\Application\Magic\ConsumeMagicLinkService::consume()}）
+        // 把查询与消费一起包在 TransactionRunnerInterface::run() 里 —— 不包的话
+        // Doctrine 会抛 TransactionRequiredException，那是**接线错误**，
+        // 应该当场炸而不是悄悄退化成无锁。
+        $query = $this->entityManager->createQuery(
+            \sprintf('SELECT c FROM %s c WHERE c.magicTokenHash = :hash', OtpChallenge::class),
+        );
+
+        // 显式给 DBAL 类型，理由同 invalidateActiveFor()：HashDigest 刻意没有
+        // 实现 Stringable，不给类型的话 DBAL 会在 __toString 上炸掉。
+        $query->setParameter('hash', $magicTokenHash, HashDigestType::NAME);
+        $query->setLockMode(LockMode::PESSIMISTIC_WRITE);
+
+        return $query->getOneOrNullResult();
     }
 
     /**

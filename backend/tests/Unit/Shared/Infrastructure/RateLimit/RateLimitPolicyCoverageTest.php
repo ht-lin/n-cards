@@ -47,6 +47,8 @@ final class RateLimitPolicyCoverageTest extends TestCase
         'otp_request_ip' => ['ip', [[20, 3600]], true],
         // `POST /auth/otp/verify` | IP | 60/h
         'otp_verify_ip' => ['ip', [[60, 3600]], true],
+        // `POST /auth/magic/consume` | IP | 60/h（T-106）
+        'magic_consume_ip' => ['ip', [[60, 3600]], true],
         // `POST /auth/token/refresh` | session | 60/h
         'token_refresh' => ['session', [[60, 3600]], true],
         // `GET /v1/sync` | device | 60/min

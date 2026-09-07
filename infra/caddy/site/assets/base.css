@@ -1,0 +1,94 @@
+/*
+  App Links 落地页的全部样式（T-106 / ADR-0016）。
+
+  ⚠️ 单独一个文件，不是 <style> 内联 —— 那样站点块的 CSP 才能是
+  `style-src 'self'` 而不是 `'unsafe-inline'`。同理 magic.js。
+  这几页是登录流程的一部分，值得为它们把 CSP 收紧到实际可执行的程度。
+
+  ⚠️ 不引任何外部字体或图标：这些页面会被企业邮件安全网关抓取，
+  也会在没有网络的地铁里被打开。system-ui 栈在两种情形下都成立。
+*/
+
+:root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #18181b;
+    --muted: #71717a;
+    --border: #e4e4e7;
+    --accent: #18181b;
+    --accent-fg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #09090b;
+        --fg: #fafafa;
+        --muted: #a1a1aa;
+        --border: #27272a;
+        --accent: #fafafa;
+        --accent-fg: #18181b;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 32px 20px 64px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main {
+    max-width: 34rem;
+    margin: 0 auto;
+}
+
+h1 {
+    margin: 0 0 8px;
+    font-size: 1.5rem;
+    line-height: 1.3;
+}
+
+p {
+    margin: 0 0 16px;
+}
+
+.brand {
+    margin: 0 0 32px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.button {
+    display: inline-block;
+    padding: 14px 28px;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.muted {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+/* 第二语言与页脚之间的分隔。 */
+.divider {
+    margin: 40px 0 24px;
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+/*
+  ⚠️ 默认**隐藏**依赖 JS 的那一段，由 magic.js 在成功解析出令牌之后放出来。
+  反过来写（默认显示、失败时隐藏）会让关掉 JS 的浏览器看到一个点了没反应的按钮。
+*/
+[hidden] {
+    display: none !important;
+}

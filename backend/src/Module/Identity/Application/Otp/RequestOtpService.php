@@ -97,10 +97,25 @@ final readonly class RequestOtpService
     private const IP_FALLBACK = 'unknown';
 
     /**
+     * 信里 Magic Link 的路径前缀（T-106）。
+     *
+     * ⚠️ 它挂在 `APP_PUBLIC_BASE_URL` 上，也就是**客户端**域
+     * （`https://app.n-cards.de`），不是 API 域。Android 注册了
+     * `https://app.n-cards.de/l/*` 的 App Links，装了 App 的用户点信里的链接
+     * 会被直接拉起 App；没装的落到那份静态落地页
+     * （`infra/caddy/site/l/magic/index.html`）。
+     *
+     * 与 `SessionIssuer::REVOKE_PATH`（`/l/devices`）、
+     * `RefreshTokenService::SUPPORT_PATH`（`/l/security`）同一个域下。
+     */
+    private const MAGIC_PATH = '/l/magic';
+
+    /**
      * @param int<1, 9>   $codeDigits          §7.1：6 位
      * @param int<1, max> $ttlSeconds          §7.1：10 分钟
      * @param int<0, max> $resendAfterSeconds  §7.1：60 秒，必须与 otp_request_email 的 1/min 窗口一致
      * @param int<1, max> $requestBudgetMillis 恒定耗时预算，见 config/packages/ncards_otp.yaml
+     * @param string      $appBaseUrl          `APP_PUBLIC_BASE_URL`，结尾不带斜杠
      */
     public function __construct(
         private OtpChallengeRepositoryInterface $challenges,
@@ -117,6 +132,7 @@ final readonly class RequestOtpService
         private int $ttlSeconds,
         private int $resendAfterSeconds,
         private int $requestBudgetMillis,
+        private string $appBaseUrl,
     ) {
     }
 
@@ -168,6 +184,21 @@ final readonly class RequestOtpService
         $challengeId = $this->uuids->generate();
         $expiresAt = $now->modify(\sprintf('+%d seconds', $this->ttlSeconds));
 
+        // T-106：同一条挑战上再挂一个 Magic Link 令牌。码与链接是**同一次登录**
+        // 的两种入口（共用 expires_at 与 consumed_at），不是两次登录机会 ——
+        // §7.1 的「单次登录只允许一个活跃 challenge」因此对两者同时成立。
+        //
+        // ⚠️ 32 字节 CSPRNG，与 refresh token 同一个配方，落在契约
+        // `MagicLinkConsumption.token` 的 minLength 32 / maxLength 512 内（43 字符）。
+        $magicToken = self::base64UrlEncode($this->random->bytes(32));
+
+        // ⚠️ 本地 SHA-256，**不**走 Vault HMAC —— 与同一行上的 `code_hash`
+        // 口径不同，这是刻意的。完整论证见
+        // {@see \App\Module\Identity\Application\Magic\ConsumeMagicLinkService::consume()}：
+        // 6 位码从一份库备份里几秒钟就能全枚举，pepper 是它唯一的防线；
+        // 32 字节 CSPRNG 没有可枚举的字典，pepper 买不到任何东西。
+        $magicTokenHash = HashDigest::fromRaw(hash('sha256', $magicToken, true));
+
         $this->challenges->save(OtpChallenge::issue(
             $challengeId,
             $emailHash,
@@ -176,20 +207,22 @@ final readonly class RequestOtpService
             $codeHash,
             OtpPurpose::Login,
             $expiresAt,
-            // Magic Link 的 token 归 T-106，本端点一期只发数字码。
-            null,
+            $magicTokenHash,
             $ipHash,
             $now,
         ));
 
-        $this->send($payload->locale, $recipient, $code);
+        $this->send($payload->locale, $recipient, $code, $magicToken);
 
         // §14.4 的「OTP 转化率骤降」P1 告警需要请求侧的计数 —— T-102 只给了
         // worker 侧的 email_send_total，而那是 worker 消费之后才有的数。
         //
         // ⚠️ `result` 标签保留但恒为 `issued`：ADR-0014 之后 `decoy` 这个取值退休了。
-        // 留着标签维度是为了让既有的告警查询不必改写，也为了 T-106 的 Magic Link
-        // 将来能在同一个计数器上分出自己的取值。
+        // 留着标签维度是为了让既有的告警查询不必改写。
+        //
+        // ⚠️ T-106 **没有**在这里加第二个取值：每一条挑战现在都带 Magic Link，
+        // 没有可分的两种请求。消费侧的计数落在 `login_total{result}` 上
+        // （magic consume 与 otp verify 共用它 —— 两者都是一次登录尝试）。
         //
         // ⚠️ 请求路径里**不做任何其它** Redis 读写（QueueingMailSender 的类注释
         // 明令禁止）。
@@ -214,9 +247,11 @@ final readonly class RequestOtpService
     }
 
     /**
-     * @param Ciphertext $recipient 密文形态的收件人 —— 明文邮箱不出这个类
+     * @param Ciphertext $recipient  密文形态的收件人 —— 明文邮箱不出这个类
+     * @param string     $magicToken **明文**令牌。它只在这条直线上存在：
+     *                               库里存的是摘要，信里带的是它本身
      */
-    private function send(Locale $locale, Ciphertext $recipient, string $code): void
+    private function send(Locale $locale, Ciphertext $recipient, string $code, string $magicToken): void
     {
         $this->mail->send(new MailRequest(
             MailTemplate::OtpCode,
@@ -234,7 +269,24 @@ final readonly class RequestOtpService
             [
                 'code' => $code,
                 'expires_in_minutes' => (string) intdiv($this->ttlSeconds, 60),
+                // ⚠️ 指向**落地页**，不是 `POST /v1/auth/magic/consume`。
+                // 企业邮件安全网关会自动 GET 邮件里的每个链接（§7.1）——
+                // 若这里直接给 API，令牌在用户看到这封信之前就已失效。
+                // 落地页是一份静态 HTML，GET 它不改变任何状态。
+                'magic_link_url' => $this->appBaseUrl.self::MAGIC_PATH.'/'.$magicToken,
             ],
         ));
+    }
+
+    /**
+     * RFC 4648 §5 的 base64url：`+/` → `-_`，去掉 `=` 填充。
+     *
+     * ⚠️ 这个令牌要进 **URL 路径**（`/l/magic/<token>`），所以 `+` `/` `=`
+     * 一个都不能有 —— 与 refresh token 那份同样的实现，但那边是「没被禁止」，
+     * 这边是硬要求。
+     */
+    private static function base64UrlEncode(string $raw): string
+    {
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
     }
 }

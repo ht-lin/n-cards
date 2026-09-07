@@ -19,7 +19,7 @@ interface AuthApi {
     /**
      * POST auth/magic/consume
      * 消费 Magic Link 令牌
-     * ⚠️ **必须是 POST**。企业邮件安全网关（Microsoft Defender、Barracuda 等） 会自动 &#x60;GET&#x60; 邮件里的所有链接做扫描——如果 Magic Link 是 &#x60;GET&#x60; 即消费， 用户还没点开就已失效（§7.1）。邮件里的链接指向落地页，&#x60;GET&#x60; 只渲染 「点击继续登录」按钮，实际消费走本端点。 
+     * ⚠️ **必须是 POST**。企业邮件安全网关（Microsoft Defender、Barracuda 等） 会自动 &#x60;GET&#x60; 邮件里的所有链接做扫描——如果 Magic Link 是 &#x60;GET&#x60; 即消费， 用户还没点开就已失效（§7.1）。邮件里的链接指向落地页，&#x60;GET&#x60; 只渲染 「点击继续登录」按钮，实际消费走本端点。  ⚠️ **调用方是 App，不是落地页**（[ADR-0016](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0016-magic-link-delivery-and-landing-page.md)）。 落地页是一份静态 HTML，它的按钮通过 App Links / &#x60;intent://&#x60; 把令牌交给 App， 由 App 带上自己的 &#x60;device&#x60; 发本请求。浏览器构造不出合法的请求体 —— &#x60;device.platform&#x60; 的取值域只有 &#x60;android&#x60;，&#x60;device.id&#x60; 是安装级的客户端生成 UUID。  令牌与 &#x60;POST /auth/otp/request&#x60; 那封信里的 6 位码挂在**同一条**挑战上： 用掉任何一个，另一个立刻 401。重复消费同一个令牌同样 401。  限速（§7.5）：按 IP 60/h。**没有**按挑战的次数上限 —— 令牌是 32 字节 CSPRNG，猜错的令牌找不到任何一行可以累加。 
      * Responses:
      *  - 200: 登录成功
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
@@ -91,7 +91,7 @@ interface AuthApi {
     /**
      * POST auth/otp/request
      * 请求登录用的一次性验证码
-     * **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。  服务端在这条路径上**不查 &#x60;users&#x60;** —— 它在结构上就不知道邮箱注册过没有， 因此对任意地址都生成并发送一个真实的验证码（[ADR-0014](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0014-otp-always-sends-a-code.md)）。 这也是**唯一的注册路径**：首次 &#x60;POST /auth/otp/verify&#x60; 成功即创建 &#x60;users&#x60; 行。  客户端**不能**从本接口的响应推断账号是否存在，也**不应该**尝试 —— 「这个邮箱要走登录还是注册」对客户端是同一个流程（邮箱 → 验证码 → username）。  限速（§7.5）：按 &#x60;email_hash&#x60; 1/min、5/h、10/day；按 IP 20/h。 这三个窗口是本端点唯一的滥用闸门 —— 它挡的是「用 N-Cards 的域名给别人的 收件箱发信」，所以 429 时**不要**自动重试，照 &#x60;Retry-After&#x60; 退避。 
+     * **恒返回 202**，无论该邮箱是否已注册（§3.8 防账号枚举）。  服务端在这条路径上**不查 &#x60;users&#x60;** —— 它在结构上就不知道邮箱注册过没有， 因此对任意地址都生成并发送一个真实的验证码（[ADR-0014](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0014-otp-always-sends-a-code.md)）。 这也是**唯一的注册路径**：首次 &#x60;POST /auth/otp/verify&#x60; 成功即创建 &#x60;users&#x60; 行。  客户端**不能**从本接口的响应推断账号是否存在，也**不应该**尝试 —— 「这个邮箱要走登录还是注册」对客户端是同一个流程（邮箱 → 验证码 → username）。  发出去的那封信里同时有**两样东西**：6 位码，以及一个免输码的 Magic Link （[ADR-0016](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0016-magic-link-delivery-and-landing-page.md)）。 两者挂在**同一条**挑战上、共用一个 &#x60;consumed_at&#x60;，所以它们是同一次登录的 两个入口而不是两次机会 —— 用掉任何一个，另一个立刻失效。 链接的消费走 &#x60;POST /auth/magic/consume&#x60;。  限速（§7.5）：按 &#x60;email_hash&#x60; 1/min、5/h、10/day；按 IP 20/h。 这三个窗口是本端点唯一的滥用闸门 —— 它挡的是「用 N-Cards 的域名给别人的 收件箱发信」，所以 429 时**不要**自动重试，照 &#x60;Retry-After&#x60; 退避。 
      * Responses:
      *  - 202: 挑战已创建（无论邮箱是否存在）
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 

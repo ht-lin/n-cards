@@ -91,3 +91,14 @@ ncards_mail_provider: dogado
 # 与上面「两个环境共用发信域」的取舍相反：域可以共用，**链接目标不行**，
 # 因为前者只影响声誉，后者会跨环境改状态。
 ncards_app_public_base_url: https://app.staging.n-cards.de
+
+# T-106：同一个域名，但这一条是给 **Caddy** 的（站点块地址，不带 scheme），
+# 上一条是给 **backend** 的（邮件正文里的 URL，带 scheme）。两者必须一致，
+# 完整论证见 production 的 group_vars。
+#
+# ⚠️ 上线前提：`app.staging.n-cards.de` 的 A 记录要先存在。
+ncards_app_site_address: app.staging.n-cards.de
+
+# T-106：assetlinks.json 的内容。staging 同样先留空 —— 见 production 的注释。
+ncards_android_package_name: de.ncards
+ncards_android_cert_fingerprints: []
