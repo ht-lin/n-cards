@@ -182,6 +182,176 @@ final class DoctrineSessionRepositoryTest extends KernelTestCase
         self::assertNull($this->devices->findById(IdentityEntities::id(999)));
     }
 
+    // ========================================================================
+    // T-105
+    // ========================================================================
+
+    /**
+     * ⚠️ §7.1 重放检测的**唯一**入口。
+     *
+     * 上面的 `testRotationMakesTheOldHashUnfindableAsCurrent()` 证明了旧摘要
+     * 在 current 上查不到；这一条证明它**确实躺在 previous 上**。
+     * 没有这一条，那个 null 就只是「令牌无效」，整个重放检测都不存在。
+     */
+    public function testFindsARotatedTokenByItsPreviousHash(): void
+    {
+        $now = IdentityEntities::now();
+        $first = IdentityEntities::digest('refresh-1');
+        $second = IdentityEntities::digest('refresh-2');
+        [, , $session] = $this->persistLoginTriple($now, $first);
+
+        $session->rotate($second, $now->modify('+90 days'));
+        $this->sessions->save($session);
+        $this->entityManager->clear();
+
+        $found = $this->sessions->findByPreviousTokenHash($first);
+
+        self::assertInstanceOf(Session::class, $found);
+        self::assertTrue($session->id()->equals($found->id()));
+    }
+
+    /**
+     * 没轮换过的会话，`previous_token_hash` 是 NULL —— 拿当前摘要去查 previous
+     * 必须查不到。
+     *
+     * ⚠️ 这条挡的是「WHERE previous IS NULL 也被当成匹配」那类写法：
+     * 那会让**每一次正常的首刷**都被判成令牌被窃。
+     */
+    public function testAFreshSessionIsNotFoundByItsCurrentHashOnThePreviousColumn(): void
+    {
+        $now = IdentityEntities::now();
+        $hash = IdentityEntities::digest('refresh-1');
+        $this->persistLoginTriple($now, $hash);
+        $this->entityManager->clear();
+
+        self::assertNull($this->sessions->findByPreviousTokenHash($hash));
+    }
+
+    /**
+     * 远程登出：撤销该设备上该用户的全部未撤销会话。
+     */
+    public function testRevokesEverySessionOnADevice(): void
+    {
+        $now = IdentityEntities::now();
+        [$user, $device] = $this->persistLoginTriple($now, IdentityEntities::digest('refresh-1'));
+
+        // 同一台设备再登录一次 = 第二条会话行。
+        $second = Session::start(
+            IdentityEntities::id(7),
+            $user,
+            $device,
+            IdentityEntities::digest('refresh-2'),
+            $now->modify('+90 days'),
+            $now,
+        );
+        $this->sessions->save($second);
+        $this->entityManager->clear();
+
+        $revoked = $this->sessions->revokeAllForDevice(
+            $device->id(),
+            $user->id(),
+            SessionRevokedReason::UserRevoked,
+            $now->modify('+1 hour'),
+        );
+
+        self::assertSame(2, $revoked);
+
+        $this->entityManager->clear();
+
+        foreach ([IdentityEntities::digest('refresh-1'), IdentityEntities::digest('refresh-2')] as $hash) {
+            $found = $this->sessions->findByRefreshTokenHash($hash);
+            self::assertInstanceOf(Session::class, $found);
+            self::assertSame(SessionRevokedReason::UserRevoked, $found->revokedReason());
+        }
+    }
+
+    /**
+     * ⚠️ 已因 `reuse_detected` 撤销的会话**不会**被改写成 `user_revoked`。
+     *
+     * 这是 `Session::revoke()`「首个 reason 胜出」在真库上的证明 ——
+     * 而它正是仓储必须逐行走实体方法、不能写成批量 DQL `UPDATE` 的理由。
+     * 被覆盖掉的话，这个账号曾经发生过令牌被窃就再也查不出来。
+     */
+    public function testARemoteLogoutDoesNotOverwriteASecurityIncidentReason(): void
+    {
+        $now = IdentityEntities::now();
+        [$user, $device, $session] = $this->persistLoginTriple($now, IdentityEntities::digest('refresh-1'));
+
+        $session->revoke(SessionRevokedReason::ReuseDetected, $now);
+        $this->sessions->save($session);
+        $this->entityManager->clear();
+
+        $revoked = $this->sessions->revokeAllForDevice(
+            $device->id(),
+            $user->id(),
+            SessionRevokedReason::UserRevoked,
+            $now->modify('+1 hour'),
+        );
+
+        // 已撤销的不计入 —— 幂等。
+        self::assertSame(0, $revoked);
+
+        $this->entityManager->clear();
+
+        $found = $this->sessions->findById($session->id());
+        self::assertInstanceOf(Session::class, $found);
+        self::assertSame(SessionRevokedReason::ReuseDetected, $found->revokedReason());
+    }
+
+    /**
+     * ⚠️ `userId` 是 WHERE 里的第二个条件，不是冗余：即使上层漏了归属校验，
+     * 这条语句也伤不到别人的会话。
+     */
+    public function testRevokingScopesToTheOwningUser(): void
+    {
+        $now = IdentityEntities::now();
+        [, $device, $session] = $this->persistLoginTriple($now, IdentityEntities::digest('refresh-1'));
+
+        $stranger = IdentityEntities::user(IdentityEntities::id(90), IdentityEntities::digest('other-email'), now: $now);
+        $this->users->save($stranger);
+
+        $revoked = $this->sessions->revokeAllForDevice(
+            $device->id(),
+            $stranger->id(),
+            SessionRevokedReason::UserRevoked,
+            $now,
+        );
+
+        self::assertSame(0, $revoked);
+
+        $this->entityManager->clear();
+
+        $found = $this->sessions->findById($session->id());
+        self::assertInstanceOf(Session::class, $found);
+        self::assertFalse($found->isRevoked());
+    }
+
+    /**
+     * 设备列表：只列未撤销的，按 `last_seen_at` 倒序。
+     */
+    public function testListsOnlyActiveDevicesMostRecentlySeenFirst(): void
+    {
+        $now = IdentityEntities::now();
+        [$user] = $this->persistLoginTriple($now, IdentityEntities::digest('refresh-1'));
+
+        $newer = IdentityEntities::device($user, IdentityEntities::id(43), $now);
+        $newer->touch($now->modify('+1 hour'));
+        $this->devices->save($newer);
+
+        $revokedDevice = IdentityEntities::device($user, IdentityEntities::id(44), $now);
+        $revokedDevice->revoke($now);
+        $this->devices->save($revokedDevice);
+
+        $this->entityManager->clear();
+
+        $listed = $this->devices->listActiveForUser($user->id());
+
+        self::assertSame(
+            [IdentityEntities::id(43)->toString(), IdentityEntities::id(4)->toString()],
+            array_map(static fn (Device $d): string => $d->id()->toString(), $listed),
+        );
+    }
+
     /**
      * T-104 的写入形状：一次登录 = user + device + session 三行。
      *

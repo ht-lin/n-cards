@@ -95,15 +95,52 @@ final class AppRolePolicyTest extends TestCase
      */
     public function testAppRoleCanReadTheJwtSigningKey(): void
     {
-        $key = (new VaultKvSigningKeyProvider(
-            $this->appClient,
-            new FrozenClock((new \DateTimeImmutable('2026-09-06T12:00:00+00:00'))->getTimestamp() * 1000),
-            'ncards/jwt/current',
-            cacheTtlSeconds: 300,
-        ))->currentKey();
+        $key = $this->jwtKeyProvider()->currentKey();
 
         self::assertSame(32, \strlen($key->seed));
         self::assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $key->kid);
+    }
+
+    /**
+     * ⚠️ T-105 给 policy 新开的第二条 KV 路径（`ncards/jwt/previous`）。
+     *
+     * ============================================================================
+     * 这条用例能发现什么，靠的是 403 与 404 的区别
+     * ============================================================================
+     * `previous` 只在 §5.3 的 24h 轮换重叠期里存在，测试栈上**永远没有它** ——
+     * 所以这里不可能断言「读到了上一代密钥」。能断言的是**读不到的方式**：
+     *
+     *   - policy 里**有**这条路径、KV 不存在 → Vault 回 **404** → `CryptoFailed`
+     *     → `verificationKeys()` 静默略过 → 本用例通过。
+     *   - policy 里**漏**了这条路径          → Vault 回 **403** → `CryptoUnavailable`
+     *     → 冒泡出来 → 本用例**红**。
+     *
+     * 也就是说：这条用例的全部价值在于「漏配 policy 会红」。
+     * 没有它，漏配的症状要等到第一次真轮换（六个月后）才出现，
+     * 形式是「轮换当天所有旧 token 突然失效」，且日志里只有一行 503。
+     */
+    public function testAppRoleCanReadThePreviousJwtKeyPathEvenThoughItIsAbsent(): void
+    {
+        $keys = $this->jwtKeyProvider()->verificationKeys();
+
+        // 稳态：只有 current 那一把。两把的情形只在轮换重叠期出现。
+        self::assertCount(1, $keys, 'Only the current key should be present outside a rotation overlap.');
+
+        foreach ($keys as $kid => $publicKey) {
+            self::assertMatchesRegularExpression('/^[0-9a-f]{16}$/', $kid);
+            self::assertSame(32, \strlen($publicKey), 'An Ed25519 public key is exactly 32 raw bytes.');
+        }
+    }
+
+    private function jwtKeyProvider(): VaultKvSigningKeyProvider
+    {
+        return new VaultKvSigningKeyProvider(
+            $this->appClient,
+            new FrozenClock((new \DateTimeImmutable('2026-09-06T12:00:00+00:00'))->getTimestamp() * 1000),
+            'ncards/jwt/current',
+            'ncards/jwt/previous',
+            cacheTtlSeconds: 300,
+        );
     }
 
     /**
@@ -230,15 +267,24 @@ final class AppRolePolicyTest extends TestCase
             '版本列表 + 历史版本 = 全部曾经用过的密钥，那让 §5.3 的轮换失去意义。',
         ];
 
-        yield 'JWT 命名空间下的别的路径' => [
-            'secret/data/ncards/jwt/previous',
-            '重叠期的旧密钥将来可能出现在这里 —— 到那天要显式加一行，'
-            .'并顺便问一次「验签方真的需要读私钥吗」（不需要，它只要公钥）。',
-        ];
+        // ⚠️ `secret/data/ncards/jwt/previous` **曾经**在这张表上，措辞是
+        // 「重叠期的旧密钥将来可能出现在这里 —— 到那天要显式加一行」。
+        // T-105 就是那一天：验签侧要在 §5.3 的 24h 重叠期里认两把密钥，
+        // 于是 policy 里显式加了那一行，这一条也随之搬到了
+        // testAppRoleCanReadThePreviousJwtKeyPathEvenThoughItIsAbsent()。
+        //
+        // 那边断言的是 **404 而不是 403** —— 路径可读、但 KV 不存在。
+        // 两者的区别正是「policy 配对了没有」的判据。
 
         yield '别的 secret' => [
             'secret/data/ncards/anything-else',
             'policy 没有 secret/data/* 通配 —— 将来任何一条新 secret 都要单独授权。',
+        ];
+
+        yield 'JWT 命名空间下第三条路径' => [
+            'secret/data/ncards/jwt/next',
+            '⚠️ 授权仍然是**逐条**给的，不是 secret/data/ncards/jwt/* 通配。'
+            .'T-105 加了 previous 那一条，加的就只是那一条。',
         ];
     }
 

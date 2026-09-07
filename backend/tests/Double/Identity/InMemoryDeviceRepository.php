@@ -63,6 +63,25 @@ final class InMemoryDeviceRepository implements DeviceRepositoryInterface
         return $count;
     }
 
+    public function listActiveForUser(Uuid $userId): array
+    {
+        $matching = array_values(array_filter(
+            $this->devices,
+            static fn (Device $device): bool => $device->user()->id()->equals($userId) && !$device->isRevoked(),
+        ));
+
+        // 与生产 DQL 的 `ORDER BY last_seen_at DESC, id ASC` 同序 ——
+        // 否则「列表顺序」这条断言在两种仓储下会得到不同的结果，
+        // 而单测绿、集成测试红是最难查的一种失败。
+        usort($matching, static function (Device $a, Device $b): int {
+            // last_seen_at DESC（b 在前），相同则 id ASC（a 在前）。
+            return ($b->lastSeenAt() <=> $a->lastSeenAt())
+                ?: ($a->id()->toString() <=> $b->id()->toString());
+        });
+
+        return $matching;
+    }
+
     /**
      * @return list<Device>
      */

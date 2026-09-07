@@ -6,6 +6,7 @@ namespace App\Tests\Double\Identity;
 
 use App\Module\Identity\Domain\Entity\Session;
 use App\Module\Identity\Domain\Repository\SessionRepositoryInterface;
+use App\Module\Identity\Domain\ValueObject\SessionRevokedReason;
 use App\Shared\Domain\Crypto\HashDigest;
 use App\Shared\Domain\Identity\Uuid;
 
@@ -53,6 +54,44 @@ final class InMemorySessionRepository implements SessionRepositoryInterface
         }
 
         return null;
+    }
+
+    public function findByPreviousTokenHash(HashDigest $previousTokenHash): ?Session
+    {
+        foreach ($this->sessions as $session) {
+            $previous = $session->previousTokenHash();
+
+            if (null !== $previous && $previous->equals($previousTokenHash)) {
+                return $session;
+            }
+        }
+
+        return null;
+    }
+
+    public function revokeAllForDevice(
+        Uuid $deviceId,
+        Uuid $userId,
+        SessionRevokedReason $reason,
+        \DateTimeImmutable $now,
+    ): int {
+        $revoked = 0;
+
+        foreach ($this->sessions as $session) {
+            if (!$session->device()->id()->equals($deviceId) || !$session->user()->id()->equals($userId)) {
+                continue;
+            }
+
+            if ($session->isRevoked()) {
+                continue;
+            }
+
+            // 与真实现一样走实体方法，「首个 reason 胜出」因此在两边同源。
+            $session->revoke($reason, $now);
+            ++$revoked;
+        }
+
+        return $revoked;
     }
 
     /**

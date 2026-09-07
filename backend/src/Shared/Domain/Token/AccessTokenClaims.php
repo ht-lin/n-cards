@@ -57,8 +57,12 @@ final readonly class AccessTokenClaims
      * JWT payload 的字面形状。
      *
      * ⚠️ 键名是**契约**（`docs/api/openapi.yaml` 的 `bearerAuth` 描述逐字列了它们），
-     * 不是实现细节 —— 改一个字，全部在线的 Android 客户端在下一次
-     * `T-108` 的鉴权里就对不上。
+     * 不是实现细节 —— 改一个字，全部在线的客户端在下一次鉴权时就对不上。
+     *
+     * 而且**这张表的键集是封闭的**：`Ed25519AccessTokenVerifier` 会拒掉
+     * 多一个或少一个 claim 的 token（T-105）。往这里加字段的话，
+     * 那边的 `REQUIRED_CLAIMS` 要一起改，否则自己签出来的 token 自己验不过。
+     * 这个「一起改」是刻意的 —— 它让往 access token 里偷偷塞 PII 变成一次显眼的编辑。
      *
      * `iat` / `exp` 按 RFC 7519 是**秒级 NumericDate**，不是毫秒、不是字符串。
      *

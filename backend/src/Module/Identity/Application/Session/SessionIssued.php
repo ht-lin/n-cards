@@ -2,18 +2,28 @@
 
 declare(strict_types=1);
 
-namespace App\Module\Identity\Application\Otp;
+namespace App\Module\Identity\Application\Session;
 
 use App\Shared\Domain\Identity\Uuid;
 
 /**
- * 登录成功的结果（契约里的 `Session`）。
+ * 一对新令牌（契约里的 `Session`）。
+ *
+ * ============================================================================
+ * 为什么住在 `Application\Session\` 而不是 `Application\Otp\`
+ * ============================================================================
+ * T-104 建它时只有一个生产者（OTP 验证），于是它落在了 `Application\Otp\`。
+ * T-105 加了第二个（`POST /auth/token/refresh`），而契约里两者的 200 响应
+ * 是**同一个** `Session` schema —— 让刷新流程去 `Application\Otp\` 里取一个 DTO，
+ * 等于宣称刷新是 OTP 的一部分，而它不是（刷新根本不碰 `otp_challenges`）。
+ *
+ * T-106 的 magic consume 会是第三个生产者，形状同样是这个。
  *
  * ============================================================================
  * 为什么是扁平的一堆标量，而不是捎上 User 实体
  * ============================================================================
  * deptrac 里 `Identity.Http` **看不到** `Identity.Domain`，所以控制器拿不到
- * `User` 也读不了它的 getter。把实体塞进这个 DTO，`OtpVerifyController` 就编译不过。
+ * `User` 也读不了它的 getter。把实体塞进这个 DTO，两个控制器都编译不过。
  *
  * 这个约束正好把「控制器不许有业务」从约定变成了机械强制 ——
  * 组响应体这件事因此只能是一层字段搬运，见 {@see OtpChallengeIssued} 的同款注释。

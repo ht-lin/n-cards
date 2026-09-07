@@ -89,15 +89,31 @@ path "transit/verify/ncards-hmac" {
 #   轮换会踢掉全部在线会话，那在事故响应里正是期望行为。
 #
 # 三处刻意的收窄：
-#   - 路径写死到 `current` 这一条，**不给** `secret/data/ncards/jwt/*`，
-#     更不给 `secret/data/*`。将来轮换引入 `previous` 时再显式加一行 ——
-#     那时应该顺便问一次「验签方真的需要读私钥吗」（不需要，它只要公钥）。
+#   - 路径逐条写死，**不给** `secret/data/ncards/jwt/*`，更不给 `secret/data/*`。
+#     T-105 加验签侧时按上面这句话的要求显式加了 `previous` 那一行，见下。
 #   - 只给 `read`，不给 `create` / `update` / `delete`。应用不写密钥；
 #     写入只发生在 bootstrap.sh（root）与 T-404 的运维流程（ncards-ops）。
 #   - **不给** `secret/metadata/ncards/jwt/*`。那是版本列表与删除能力，
 #     读取侧用不到，而它能让攻击者枚举并读取历史版本 —— 也就是把
 #     「拿到当前密钥」升级成「拿到全部曾经用过的密钥」。
 path "secret/data/ncards/jwt/current" {
+  capabilities = ["read"]
+}
+
+# T-105：§5.3 的 24h 双密钥重叠期里那把上一代密钥，**只用于验签**。
+#
+# 上面那条注释要求「加这一行时顺便问一次：验签方真的需要读私钥吗」。
+# 答案是**不需要** —— `verificationKeys()` 只读 `public_key` 字段。
+# 但 KV v2 的 ACL 粒度是**整条 secret**，没有字段级授权，
+# 而 bootstrap.sh 把公私钥写在同一条上。要真正收窄就得把公钥拆成第二条 KV，
+# 那会让轮换 runbook 从「写一条、删一条」变成「写两条、删两条」，
+# 多出来的两步各自都能被漏掉，且漏掉的症状是静默的登录故障。
+#
+# 取舍：接受这条授权，靠**存在时间**收窄爆炸半径 ——
+# `previous` 只在轮换后的 24 小时里存在，其余时候这条路径是 404。
+# 应用主机在那 24 小时内失陷的话，攻击者多拿到一把**即将作废**的密钥；
+# 而不管拿没拿到，事故响应本来就要轮换 JWT 密钥（见上面第 87 行）。
+path "secret/data/ncards/jwt/previous" {
   capabilities = ["read"]
 }
 

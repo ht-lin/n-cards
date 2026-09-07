@@ -29,6 +29,17 @@ parameters:
     # 对不上的症状是「刚建的栈登录不了」，而 Vault 侧只会回一个 404。
     ncards.jwt.kv_path: 'ncards/jwt/current'
 
+    # §5.3 的 24h 双密钥重叠期里那把**上一代**密钥（T-105 的验签侧）。
+    #
+    # ⚠️ 这条 KV 在稳态下**不存在**，读不到不是错误 —— 首次部署到第一次轮换
+    # 之间的全部时间里都没有它，VaultKvSigningKeyProvider::verificationKeys()
+    # 会静默略过。轮换 runbook（T-404）在换 current 之前先把旧的那份写到这里，
+    # 24 小时后删掉。
+    #
+    # 只用于**验签**，永远不用于签名（见 SigningKeyProviderInterface 的类注释：
+    # 「验两把、签一把」）。policy 里同样要有它的 read 授权。
+    ncards.jwt.previous_kv_path: 'ncards/jwt/previous'
+
     # §7.1「Access | JWT，EdDSA (Ed25519) | 15 分钟」。
     #
     # 这个数同时是响应体里的 `expires_in`（契约 Session.expires_in 的示例就是 900）——

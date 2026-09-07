@@ -13,9 +13,8 @@ use App\Shared\Domain\Identity\Uuid;
  * 放 `Domain/Repository/` 而不是 `Application/Port/` 的理由见
  * {@see UserRepositoryInterface} 的类注释。
  *
- * ⚠️ 没有 `findByUser()`。设备管理页（`GET /v1/me/devices`）确实需要它，
- * 但那是 T-105 的端点，而「要不要过滤掉已撤销的」「要不要标记当前设备」
- * 这两个决定都在那张卡上，不在这里。
+ * T-105 补上了 {@see listActiveForUser()}，并在那里回答了本注释原先留下的
+ * 两个问题（过滤已撤销的；当前设备不入库、由调用方比对）。
  */
 interface DeviceRepositoryInterface
 {
@@ -49,4 +48,30 @@ interface DeviceRepositoryInterface
      * 那么下一次在第三台设备上登录仍然应该收到提醒。
      */
     public function countActiveForUser(Uuid $userId): int;
+
+    /**
+     * 设备管理页的列表（`GET /v1/me/devices`，T-105）。
+     *
+     * 本接口原先的注释把两个决定留给了 T-105，现在定：
+     *
+     * 1. **只列未撤销的**（`revoked_at IS NULL`），与 {@see countActiveForUser()}
+     *    同一个口径。撤销之后 `push_token` 已被清（{@see Device::revoke()}，ROPA §8.2）、
+     *    条目对用户也没有任何可操作性 —— 把它列出来只会让「远程登出」看起来没生效。
+     *    ⚠️ 顺带也让「历史设备」不成为一条侧信道：一台被撤销的设备的机型与
+     *    最后在线时间，对已经接管了邮箱的攻击者是有情报价值的。
+     * 2. **「当前设备」不在这里判**。它由调用方拿 access token 的 `did`
+     *    （`AuthContext::$deviceId`）与每一行比对得出，不进库、不加列 ——
+     *    「当前」是**请求**的属性，不是设备行的属性，同一台设备在另一个请求里
+     *    就不是当前的了。
+     *
+     * 排序 `last_seen_at DESC`：用户认得出的是「刚用过的那台」。
+     *
+     * **不分页**。§7.5 没有给设备数设限额，但真实上限是个位数（重装即新设备，
+     * 而人不会重装几百次）。真出现异常多的行是 T-113 清理任务的事，
+     * 不是在这里加一个客户端永远用不到的游标。
+     *
+     * @return list<Device> 可能为空 —— 一个所有设备都被远程登出的用户仍然能
+     *                      用手里的 access token 打这个端点（§7.1 不做黑名单）
+     */
+    public function listActiveForUser(Uuid $userId): array;
 }

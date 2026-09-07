@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Module\Identity\Http;
 
 use App\Module\Identity\Application\Otp\OtpVerificationPayload;
-use App\Module\Identity\Application\Otp\SessionIssued;
 use App\Module\Identity\Application\Otp\VerifyOtpService;
+use App\Module\Identity\Application\Session\SessionIssued;
 use App\Shared\Http\Controller\AbstractApiController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;

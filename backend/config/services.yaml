@@ -106,11 +106,10 @@ services:
     App\Shared\Infrastructure\Vault\VaultTokenProviderInterface:
         factory: ['@App\Shared\Infrastructure\Vault\VaultTokenProviderFactory', 'create']
 
-    # ⚠️ T-1xx（Identity）落地后，把这一行指向 AuthenticatedIdempotencyScopeResolver。
-    # 这条 alias 现在就写出来，正是为了让那次替换是一行的、显眼的编辑 ——
-    # 依赖「单实现自动别名」的话，第二个实现一出现别名就消失，
-    # autowiring 会报一个指向 Shared 内核、根因却在 Identity 的费解错误。
-    App\Shared\Application\Idempotency\IdempotencyScopeResolverInterface: '@App\Shared\Infrastructure\Http\AnonymousIdempotencyScopeResolver'
+    # ✅ T-105 已接：认证过的请求按 `user:<uuid>` 隔离幂等键，其余回落到 IP。
+    # 与下面的 RateLimitSubjectResolverInterface 是**同一个待办的两半**，
+    # 当初就是这么写的注释，也确实是一起改的。
+    App\Shared\Application\Idempotency\IdempotencyScopeResolverInterface: '@App\Shared\Infrastructure\Http\AuthenticatedIdempotencyScopeResolver'
 
     # ------------------------------------------------------------------ T-102
     # §14.4 指标的接缝。抓取端点与告警规则归 T-405 ——
@@ -121,11 +120,13 @@ services:
     # §7.5 速率限制（config/packages/rate_limiter.yaml）。
     App\Shared\Application\RateLimit\RateLimiterInterface: '@App\Shared\Infrastructure\RateLimit\RedisSlidingWindowRateLimiter'
 
-    # ⚠️ 与上面的 IdempotencyScopeResolverInterface 是**同一个待办**：T-1xx 落地后
-    # 两条 alias 一起指向各自的 Authenticated 版本。在那之前 RateLimitListener
-    # 回落到 IP 维度，于是 §7.5 的「全部写接口 300/min」实际按 IP 生效 ——
-    # 这依赖 framework.yaml 的 trusted_proxies（回归测试 tests/Api/TrustedProxyTest）。
-    App\Shared\Application\RateLimit\RateLimitSubjectResolverInterface: '@App\Shared\Infrastructure\Http\AnonymousRateLimitSubjectResolver'
+    # ✅ T-105 已接：§7.5 的「全部写接口 user 300/min」从这一刻起真的按 user 生效。
+    #
+    # ⚠️ 免鉴权的端点上仍然回落到 IP 维度（那里没有 AuthContext），
+    # 而那条回落依赖 framework.yaml 的 trusted_proxies ——
+    # 没有它，getClientIp() 对每个请求都返回 Caddy 容器的 IP。
+    # 回归测试 tests/Api/TrustedProxyTest。
+    App\Shared\Application\RateLimit\RateLimitSubjectResolverInterface: '@App\Shared\Infrastructure\Http\AuthenticatedRateLimitSubjectResolver'
 
     # §7.5 系统限额（config/packages/ncards_limits.yaml）。
     #
@@ -231,14 +232,23 @@ services:
     App\Shared\Application\Token\SigningKeyProviderInterface: '@App\Shared\Infrastructure\Token\VaultKvSigningKeyProvider'
     App\Shared\Application\Token\AccessTokenSignerInterface: '@App\Shared\Infrastructure\Token\Ed25519AccessTokenSigner'
 
+    # T-105：验签侧。签发与验签是两个类，共用同一个 SigningKeyProviderInterface
+    # 的两个不同方法（`currentKey()` 签、`verificationKeys()` 验）——
+    # 「验两把、签一把」的论证见那个接口的类注释。
+    App\Shared\Application\Token\AccessTokenVerifierInterface: '@App\Shared\Infrastructure\Token\Ed25519AccessTokenVerifier'
+
     # 密钥本身在 Vault KV，这里只有路径与缓存 TTL（config/packages/ncards_jwt.yaml）。
     #
     # ⚠️ kvPath 必须与 infra/vault/bootstrap.sh 的 JWT_KV_PATH 逐字相同，
     # 且 infra/vault/policies/ncards-app.hcl 里要有对应的 read 授权 ——
     # 三处任何一处改了，另外两处一起改。对不上的症状是「刚建的栈登录不了」。
+    #
+    # previousKvPath 同样要在 policy 里有 read 授权，但**不由 bootstrap.sh 写入**：
+    # 它只在 §5.3 的 24h 轮换重叠期里存在，由 T-404 的 runbook 建与删。
     App\Shared\Infrastructure\Token\VaultKvSigningKeyProvider:
         arguments:
             $kvPath: '%ncards.jwt.kv_path%'
+            $previousKvPath: '%ncards.jwt.previous_kv_path%'
             $cacheTtlSeconds: '%ncards.jwt.key_cache_ttl_seconds%'
 
     # 验证端点的五个标量。`max_attempts` 从 T-103 起就配在 ncards_otp.yaml 里
@@ -249,6 +259,17 @@ services:
             $accessTtlSeconds: '%ncards.jwt.access_ttl_seconds%'
             $refreshTtlSeconds: '%ncards.jwt.refresh_ttl_seconds%'
             $verifyBudgetMillis: '%ncards.otp.verify_budget_ms%'
+            $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
+
+    # ------------------------------------------------------------------ T-105
+    # 刷新端点的三个标量。`refreshTtlSeconds` 在这里的用途与 T-104 不同：
+    # 那边是**首次**设定 sessions.expires_at，这边是每次轮换**顺延**同样的时长 ——
+    # 两者合起来才是 §7.1 的「90 天滑动」。同一个参数是刻意的，
+    # 分成两个配置项会让「滑动窗口比初始窗口短」这种偏差没有任何测试会红。
+    App\Module\Identity\Application\Session\RefreshTokenService:
+        arguments:
+            $accessTtlSeconds: '%ncards.jwt.access_ttl_seconds%'
+            $refreshTtlSeconds: '%ncards.jwt.refresh_ttl_seconds%'
             $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
 
     # add more service definitions when explicit configuration is needed

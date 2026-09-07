@@ -33,6 +33,21 @@ final class RequestAttributes
     public const CLIENT_VERSION = '_ncards_client_version';
 
     /**
+     * 由 {@see AuthenticationListener} 写入，值是一个 {@see AuthContext}（T-105）。
+     *
+     * ⚠️ **只在鉴权真的通过时存在**。免鉴权的四个端点（`/v1/auth/otp/*`、
+     * `/v1/auth/magic/consume`、`/v1/auth/token/refresh`）上没有它 ——
+     * 那不是「匿名用户」，是「这个请求压根没有用户」。
+     *
+     * 这个「有就是真的、没有就是没有」的约定是承重的：两个解析器
+     * （`Authenticated{RateLimitSubject,IdempotencyScope}Resolver`）靠它决定
+     * 按 `user:` 还是回落到 `ip:` 限流，而 `AbstractApiController::authContext()`
+     * 在缺失时抛 `\LogicException` —— 因为那只可能是**接线错误**
+     * （某个需要鉴权的控制器被漏进了白名单），不是客户端错误。
+     */
+    public const AUTH_CONTEXT = '_ncards_auth_context';
+
+    /**
      * 由 {@see IdempotencyMiddleware} 写入，且**只在本次请求真正抢到了幂等锁时**存在。
      *
      * 这个「只在抢到时写」的约定是承重的：`onResponse` 靠它判断该不该释放锁，

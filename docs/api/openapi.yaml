@@ -82,11 +82,24 @@ servers:
 
 tags:
   - name: auth
-    description: 认证与会话（§7.1）。这一组**不需要** Bearer。
+    description: |
+      认证与会话（§7.1）。
+
+      ⚠️ 这一组里**只有 `POST /auth/logout` 需要 Bearer**，其余四个用
+      `security: []` 覆盖掉全局要求。别把这一组整体当成「公开的」——
+      服务端的白名单按**操作**逐条列出，不是按 `/auth/` 前缀。
+  - name: me
+    description: 当前用户与他的设备（§6.2）。全部需要 Bearer。
   - name: cards
     description: 卡的 CRUD 与摆放。owner 是唯一的写入者；viewer 只能看，以及摆放自己钱包里的位置（§5.2）。
 
-# 默认全局要求 Bearer；auth 组的五个端点各自用 `security: []` 覆盖。
+# 默认全局要求 Bearer。
+#
+# ⚠️ 覆盖它的是 auth 组里的**四个**端点（otp/request、otp/verify、
+# magic/consume、token/refresh），**不含 logout** —— 它是这一组里唯一
+# 需要 Bearer 的那个。服务端侧的对应物是
+# `Shared\Infrastructure\Http\AuthenticationListener::PUBLIC_ROUTES`，
+# 两者由 `tests/Api/AuthenticationCoverageTest` 逐条对账。
 security:
   - bearerAuth: []
 
@@ -342,6 +355,160 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  # ==========================================================================
+  # 我 / 设备（§6.2 / §7.2 T02）
+  # ==========================================================================
+  #
+  # §7.2 把「邮箱被接管 → 账号被接管」记为**已接受**的风险，缓解手段只有三条：
+  # 新设备登录提醒信、这三个端点、以及二期的 Passkey。也就是说这个页面是
+  # 用户在账号被接管之后唯一能自救的地方。
+  #
+  # ⚠️ 三个端点对「不存在的设备」与「别人的设备」返回**同一个 404**，不是 403。
+  # `devices.id` 由客户端生成、不是凭据，403 等于确认「这个 id 存在，只是不是你的」——
+  # 而那是一条现成的存在性信道。
+  /me/devices:
+    get:
+      tags: [me]
+      operationId: listDevices
+      summary: 我的设备列表
+      description: |
+        只返回**未撤销**的设备，按 `last_seen_at` 倒序。
+
+        `is_current` 标记发起本次请求的那台设备 —— 它由 access token 的 `did`
+        比对得出，是**请求**的属性而不是设备行的属性（同一台设备在另一个请求里
+        就不是当前的了）。
+
+        **不分页**：§7.5 没有给设备数设限额，但真实上限是个位数。
+
+        ⚠️ 响应里**没有** `push_token`。它是一个发给第三方（FCM / Google Ireland）
+        的标识符，ROPA §8.2 登记的用途只有投递推送；回显它不服务于任何用例
+        （客户端自己刚上报过），却会让它多出现在一处响应体里。
+        `push_token_updated_at` 有 —— 客户端要靠它判断自己上报的那个还新不新鲜。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+      responses:
+        '200':
+          description: 设备列表
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeviceList' }
+              example:
+                devices:
+                  - id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+                    platform: android
+                    model: Pixel 7a
+                    os_version: "14"
+                    app_version: 1.4.0
+                    is_current: true
+                    last_seen_at: "2026-09-07T08:12:44Z"
+                    created_at: "2026-08-29T10:30:12Z"
+                    push_token_updated_at: "2026-09-07T08:12:44Z"
+                  - id: 0192f3a1-b2c3-7d4e-8f01-0000000000df
+                    platform: android
+                    model: Galaxy S21
+                    os_version: "13"
+                    app_version: 1.3.2
+                    is_current: false
+                    last_seen_at: "2026-09-02T19:40:03Z"
+                    created_at: "2026-08-30T21:05:55Z"
+                    push_token_updated_at: null
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /me/devices/{deviceId}:
+    delete:
+      tags: [me]
+      operationId: revokeDevice
+      summary: 远程登出某设备
+      description: |
+        撤销这台设备**并且**撤销它的全部会话（`revoked_reason = user_revoked`）。
+
+        ⚠️ 两件事都做才有意义：只撤设备的话，那台机器手里的 refresh token
+        仍然有效 90 天。撤销后该设备的下一次 `POST /auth/token/refresh` 立刻 401。
+
+        ⚠️ **已签发的 access token 不会失效**（§7.1 不做黑名单），
+        所以被踢的设备最长还能读 15 分钟。这是被接受的窗口，见 ADR-0015。
+
+        撤销同时清空 `push_token`（ROPA §8.2：设备撤销后即删）。
+
+        允许删自己当前这台，效果等同登出。**幂等**：重复删仍然 204，
+        且不会重置「什么时候被踢下线的」这个时间戳。
+
+        那台设备之后仍然可以用邮箱验证码重新登录（`devices.id` 会被复活并按
+        新设备处理，含提醒信）—— 远程登出不是封禁。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: 已撤销（无响应体）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /me/devices/{deviceId}/push-token:
+    put:
+      tags: [me]
+      operationId: updatePushToken
+      summary: 更新 FCM token
+      description: |
+        客户端在每次启动与每次 FCM 令牌轮换后上报。
+
+        `push_token: null` 表示**清除**（用户关掉了通知权限）——
+        它与「省略该字段」不同，后者是 `400 validation_failed`。
+        空串同样是 `400`：想清除就发 `null`，静默地把空串当成清除
+        会让客户端的 bug 一直活着，而它的另一面是「明明设置了却收不到推送」。
+
+        已撤销的设备返回 `404` —— 允许它继续上报的话，一台被远程登出的设备
+        可以把自己留在推送目标里，而用户以为它已经被踢掉了。
+
+        ⚠️ M1 阶段服务端**只落库，不发推送**：FCM 整条链路归 T-306（M3）。
+        这个端点先存在，是为了 T-306 上线当天不至于一个令牌都没有。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushTokenUpdate' }
+            example:
+              push_token: fJ8xK2mN0pQ:APA91bH_example_fcm_registration_token
+      responses:
+        '204':
+          description: 已更新（无响应体）
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '426': { $ref: '#/components/responses/ClientTooOld' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
         '500': { $ref: '#/components/responses/InternalError' }
@@ -747,6 +914,21 @@ components:
         type: string
         format: uuid
       example: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      description: |
+        设备 id（客户端生成，安装级唯一，§5.2）。
+
+        ⚠️ 它**不是凭据** —— 服务端校验这台设备属于当前用户，不属于则 `404`
+        （不是 `403`，理由见 `/me/devices` 那一组的说明）。
+        格式非法同样返回 `404` 而不是 `422`，出于同一个理由。
+      schema:
+        type: string
+        format: uuid
+      example: 0192f3a1-b2c3-7d4e-8f01-0000000000de
 
     Cursor:
       name: cursor
@@ -1351,6 +1533,113 @@ components:
           model: Pixel 7a
           os_version: "14"
           app_version: 1.4.0
+
+    # ⚠️ `Device` 上面那个是**请求**方向的（登录时上报这次安装），
+    # `RegisteredDevice` 是**响应**方向的（设备管理页上的一行）。
+    #
+    # 刻意不合并成一个：合并意味着 `is_current` / `last_seen_at` 这些
+    # 只有服务端能知道的字段会出现在请求 schema 里，于是客户端生成的代码
+    # 会带上它们，而服务端必须显式地把它们忽略掉 —— 那正是「客户端能不能
+    # 自称 last_seen_at」这类问题的来源。两个 schema 各自封闭更省事。
+    RegisteredDevice:
+      type: object
+      additionalProperties: true
+      required:
+        [id, platform, model, os_version, app_version, is_current, last_seen_at, created_at, push_token_updated_at]
+      description: |
+        设备管理页上的一行（§6.2 / §5.2）。
+
+        ⚠️ **不含** `push_token`。见 `GET /me/devices` 的说明。
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: 客户端生成，安装级唯一。
+        platform:
+          type: string
+          enum: [android]
+        model:
+          anyOf: [{ type: string, maxLength: 100 }, { type: "null" }]
+          description: 客户端未上报时为 `null`（契约要求必填，服务端收得更宽）。
+        os_version:
+          anyOf: [{ type: string, maxLength: 32 }, { type: "null" }]
+        app_version:
+          anyOf: [{ type: string, maxLength: 32 }, { type: "null" }]
+        is_current:
+          type: boolean
+          description: |
+            这一行是不是**发起本次请求**的那台设备。由 access token 的 `did`
+            比对得出，不是存下来的列。
+        last_seen_at:
+          type: string
+          format: date-time
+          description: 最后一次登录或刷新令牌的时刻。
+        created_at:
+          type: string
+          format: date-time
+          description: 这次安装第一次登录的时刻。
+        push_token_updated_at:
+          anyOf: [{ type: string, format: date-time }, { type: "null" }]
+          description: |
+            FCM 令牌最后一次上报的时刻；从未上报过则 `null`。
+            客户端据此判断自己该不该重新上报。**令牌本身不回显。**
+      examples:
+        - id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+          platform: android
+          model: Pixel 7a
+          os_version: "14"
+          app_version: 1.4.0
+          is_current: true
+          last_seen_at: "2026-09-07T08:12:44Z"
+          created_at: "2026-08-29T10:30:12Z"
+          push_token_updated_at: "2026-09-07T08:12:44Z"
+
+    DeviceList:
+      type: object
+      additionalProperties: true
+      required: [devices]
+      description: |
+        ⚠️ **不分页**，没有游标 —— 真实的设备数是个位数（§7.5 未设限额，
+        但重装即新设备，而人不会重装几百次）。包成对象而不是裸数组，
+        是为了将来能加同级字段（顶层数组是一扇加不了字段的单向门）。
+      properties:
+        devices:
+          type: array
+          items: { $ref: '#/components/schemas/RegisteredDevice' }
+          description: 未撤销的设备，按 `last_seen_at` 倒序。
+      examples:
+        - devices:
+            - id: 0192f3a1-b2c3-7d4e-8f01-0000000000de
+              platform: android
+              model: Pixel 7a
+              os_version: "14"
+              app_version: 1.4.0
+              is_current: true
+              last_seen_at: "2026-09-07T08:12:44Z"
+              created_at: "2026-08-29T10:30:12Z"
+              push_token_updated_at: "2026-09-07T08:12:44Z"
+
+    PushTokenUpdate:
+      type: object
+      additionalProperties: true
+      required: [push_token]
+      description: |
+        ⚠️ `push_token` 是 `required` **且**可为 `null`：
+        `null` 是「清除」这个动作，省略该字段则是畸形请求（`400 validation_failed`）。
+        两者必须分得开 —— 用户关掉通知权限时客户端要能把服务端这一侧也清掉。
+      properties:
+        push_token:
+          anyOf: [{ type: string, minLength: 1, maxLength: 4096 }, { type: "null" }]
+          description: |
+            FCM 注册令牌，`null` 表示清除。
+
+            ⚠️ 服务端**不校验格式**，只校验长度上界。FCM 令牌的形状由 Google
+            定义且历史上变过几次；在服务端钉一个正则，下次 Google 改格式时的
+            症状会是全体客户端上报失败、推送静默停摆。
+      examples:
+        - push_token: fJ8xK2mN0pQ:APA91bH_example_fcm_registration_token
+        # 用户关掉了通知权限 —— 清除，而不是省略这个字段。
+        - push_token: null
 
     # ------------------------------------------------------------------ 认证
     OtpRequest:

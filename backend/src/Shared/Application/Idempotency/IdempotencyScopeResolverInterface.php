@@ -13,16 +13,18 @@ namespace App\Shared\Application\Idempotency;
  * ============================================================================
  * 这是一条**认证接缝**（写法照抄 T-003 的 HealthCheckInterface）
  * ============================================================================
- * T-004 阶段还没有认证 —— Identity 是 T-1xx。所以默认实现
- * `Shared\Infrastructure\Http\AnonymousIdempotencyScopeResolver` 恒返回 null，
+ * T-004 阶段还没有认证，默认实现 `AnonymousIdempotencyScopeResolver` 恒返回 null，
  * 中间件回落到 IP 维度。
  *
- * **待接入**：T-1xx 加 `AuthenticatedIdempotencyScopeResolver`，返回 `user:<uuid>`。
+ * ✅ **T-105 已接入**：
+ * {@see \App\Shared\Infrastructure\Http\AuthenticatedIdempotencyScopeResolver}
+ * 在认证过的请求上返回 `user:<uuid>`，其余仍然回落到 IP
+ * （免鉴权的四个端点上没有身份可用 —— 那不是「匿名用户」，是「没有用户」）。
+ * 那个 Anonymous 实现随之删除。
  *
- * ⚠️ 那时**必须在 config/services.yaml 里改显式 alias**，而不是指望 Symfony 的
+ * ⚠️ 替换的落点是 `config/services.yaml` 里的**显式 alias**，不是指望 Symfony 的
  * 「单实现自动别名」—— 第二个实现一出现，自动别名就消失了，autowiring 会报一个
- * 很难懂的错。显式 alias 让这次替换是一行的、显眼的编辑。所以 T-004 现在就把
- * alias 写出来了，哪怕此刻只有一个实现。
+ * 很难懂的错。T-004 提前把 alias 写出来正是为了这一天，而它确实只改了一行。
  */
 interface IdempotencyScopeResolverInterface
 {

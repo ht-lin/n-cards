@@ -55,4 +55,25 @@ final readonly class DoctrineDeviceRepository implements DeviceRepositoryInterfa
 
         return (int) $query->getSingleScalarResult();
     }
+
+    public function listActiveForUser(Uuid $userId): array
+    {
+        // ⚠️ `revokedAt IS NULL` 与 countActiveForUser() 是**同一个** active 口径。
+        // 两处漂了的话，设备管理页会显示 N 行而新设备提醒信按 M 台判断 ——
+        // 而那种不一致没有任何测试会红。
+        $query = $this->entityManager->createQuery(
+            \sprintf(
+                'SELECT d FROM %s d WHERE d.user = :userId AND d.revokedAt IS NULL'
+                .' ORDER BY d.lastSeenAt DESC, d.id ASC',
+                Device::class,
+            ),
+        );
+
+        $query->setParameter('userId', $userId, UuidType::NAME);
+
+        // `id ASC` 是第二排序键，不是装饰：`last_seen_at` 完全可能相同
+        // （同一次登录里注册的设备，或时钟精度之内的两次 touch），
+        // 而没有确定序的分页/断言会间歇性地失败 —— 那类失败最难查。
+        return $query->getResult();
+    }
 }
