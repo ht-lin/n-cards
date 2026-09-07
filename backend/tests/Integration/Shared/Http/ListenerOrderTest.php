@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Integration\Shared\Http;
 
 use App\Shared\Infrastructure\Http\ApiProblemExceptionListener;
+use App\Shared\Infrastructure\Http\AuthenticationListener;
 use App\Shared\Infrastructure\Http\ClientVersionListener;
 use App\Shared\Infrastructure\Http\IdempotencyMiddleware;
 use App\Shared\Infrastructure\Http\RateLimitListener;
@@ -15,7 +16,7 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
- * 把四个横切监听器的**相对顺序**从注释变成契约。
+ * 把五个横切监听器的**相对顺序**从注释变成契约。
  *
  * ============================================================================
  * 为什么需要这个测试
@@ -26,6 +27,8 @@ use Symfony\Component\HttpKernel\KernelEvents;
  *   - RequestIdListener 必须**最先**，否则后面任何监听器抛的异常都没有 request_id
  *   - ClientVersionListener 必须早于 RouterListener，否则 `/v1/typo` 缺 header 会先 404
  *   - IdempotencyMiddleware 必须晚于 RouterListener，否则 `POST /v1/typo` 会白烧一个键
+ *   - AuthenticationListener 必须早于限流与幂等，否则两者都认不出用户，
+ *     §7.5 的「user 300/min」退化成按 IP，而幂等键会跨用户共用一个命名空间
  *   - ApiProblemExceptionListener 必须早于 ErrorListener 的两个回调（见它的类注释）
  *
  * 随手改一个数字，功能测试大概率还是绿的 —— 只有这里会红。
@@ -139,6 +142,7 @@ final class ListenerOrderTest extends KernelTestCase
     {
         $others = [
             ClientVersionListener::class.'::onRequest',
+            AuthenticationListener::class.'::onRequest',
             RateLimitListener::class.'::onRequest',
             IdempotencyMiddleware::class.'::onRequest',
         ];
@@ -200,6 +204,57 @@ final class ListenerOrderTest extends KernelTestCase
         self::assertRunsBefore(
             'Symfony\Component\HttpKernel\EventListener\RouterListener::onKernelRequest',
             RateLimitListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️ T-105：AuthenticationListener 晚于路由。
+     *
+     * 它的免鉴权白名单按**路由名**匹配（而不是路径前缀，否则
+     * `POST /v1/auth/logout` 会被 `/v1/auth/` 一起放过去），
+     * 所以必须先有 `_route`。
+     *
+     * 顺带也让 `POST /v1/typo` 直接 404 而不是先要一个 token ——
+     * 对一个打错路径的客户端，「你没登录」是最没用的错误信息。
+     */
+    public function testAuthenticationRunsAfterRouting(): void
+    {
+        self::assertRunsBefore(
+            'Symfony\Component\HttpKernel\EventListener\RouterListener::onKernelRequest',
+            AuthenticationListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️⚠️ T-105：AuthenticationListener **早于** RateLimitListener。这条是承重的。
+     *
+     * `RateLimitListener` 要按 `user:<uuid>` 限流（§7.5「全部写接口 user 300/min」），
+     * 而它的主体由 `AuthenticatedRateLimitSubjectResolver` 从本监听器写下的
+     * request attribute 里取。反过来排的话，**每个**请求都会回落到 IP 维度 ——
+     * 也就是 NAT 后面一整栋楼共用一个配额，而且看起来完全像是「限流生效了」。
+     */
+    public function testAuthenticationRunsBeforeRateLimiting(): void
+    {
+        self::assertRunsBefore(
+            AuthenticationListener::class.'::onRequest',
+            RateLimitListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️ 同理，幂等作用域也要认得出用户（`AuthenticatedIdempotencyScopeResolver`）。
+     *
+     * 反过来排的话，幂等键会全局按 IP 分桶 —— 两个用户各自生成同一个键时，
+     * 后者会拿到前者的响应，而那是一次跨用户的数据泄露。
+     */
+    public function testAuthenticationRunsBeforeIdempotency(): void
+    {
+        self::assertRunsBefore(
+            AuthenticationListener::class.'::onRequest',
+            IdempotencyMiddleware::class.'::onRequest',
             KernelEvents::REQUEST,
         );
     }

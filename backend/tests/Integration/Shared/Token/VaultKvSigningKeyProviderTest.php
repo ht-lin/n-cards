@@ -45,6 +45,15 @@ final class VaultKvSigningKeyProviderTest extends TestCase
     /** 与 infra/vault/bootstrap.sh 的 JWT_KV_PATH 逐字相同。 */
     private const KV_PATH = 'ncards/jwt/current';
 
+    /**
+     * §5.3 重叠期里那把上一代密钥。
+     *
+     * ⚠️ `bootstrap.sh` **不写**这条 KV —— 它只在轮换后的 24 小时里存在
+     * （T-404 的 runbook 建与删）。所以在测试栈上这条路径恒为 404，
+     * 而那正是这里要覆盖的稳态分支。
+     */
+    private const PREVIOUS_KV_PATH = 'ncards/jwt/previous';
+
     public function testReadsTheKeyBootstrapWrote(): void
     {
         $key = $this->provider()->currentKey();
@@ -122,7 +131,7 @@ final class VaultKvSigningKeyProviderTest extends TestCase
         $client = $this->vaultClient();
         $this->assertVaultBootstrapped($client);
 
-        $provider = new VaultKvSigningKeyProvider($client, $clock, self::KV_PATH, cacheTtlSeconds: 300);
+        $provider = new VaultKvSigningKeyProvider($client, $clock, self::KV_PATH, self::PREVIOUS_KV_PATH, cacheTtlSeconds: 300);
 
         $first = $provider->currentKey();
 
@@ -164,6 +173,7 @@ final class VaultKvSigningKeyProviderTest extends TestCase
             $client,
             new FrozenClock((new \DateTimeImmutable('2026-09-06T12:00:00+00:00'))->getTimestamp() * 1000),
             $kvPath,
+            self::PREVIOUS_KV_PATH,
             cacheTtlSeconds: 300,
         );
     }

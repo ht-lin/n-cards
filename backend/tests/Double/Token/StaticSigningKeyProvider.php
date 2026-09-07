@@ -21,6 +21,9 @@ final class StaticSigningKeyProvider implements SigningKeyProviderInterface
 
     private ?CryptoUnavailable $failure = null;
 
+    /** @var array<non-empty-string, non-empty-string> */
+    private array $extraVerificationKeys = [];
+
     public function __construct(private readonly SigningKey $key)
     {
     }
@@ -48,6 +51,49 @@ final class StaticSigningKeyProvider implements SigningKeyProviderInterface
         ++$this->calls;
 
         return $this->key;
+    }
+
+    /**
+     * §5.3 重叠期的验签集合：本替身持有的那把，加上显式挂上去的历史密钥。
+     *
+     * 公钥由 seed 现推 —— 与 `Ed25519AccessTokenSigner` 里
+     * `sodium_crypto_sign_seed_keypair()` 的推导完全同源，
+     * 于是「签名器签的能不能被验签器验过」是这两个替身天然一致的，
+     * 不需要在用例里手工配一对公私钥（配错了的症状是全部用例一起红，最难查）。
+     */
+    public function verificationKeys(): array
+    {
+        if (null !== $this->failure) {
+            throw $this->failure;
+        }
+
+        ++$this->calls;
+
+        $kid = $this->key->kid;
+
+        \assert('' !== $kid);
+
+        return [$kid => self::publicKeyOf($this->key)] + $this->extraVerificationKeys;
+    }
+
+    /**
+     * 往验签集合里加一把**只验不签**的密钥（模拟轮换重叠期里的 `previous`）。
+     */
+    public function alsoVerifyWith(SigningKey $key): void
+    {
+        $kid = $key->kid;
+
+        \assert('' !== $kid);
+
+        $this->extraVerificationKeys[$kid] = self::publicKeyOf($key);
+    }
+
+    /**
+     * @return non-empty-string
+     */
+    public static function publicKeyOf(SigningKey $key): string
+    {
+        return sodium_crypto_sign_publickey(sodium_crypto_sign_seed_keypair($key->seed));
     }
 
     public function calls(): int

@@ -1,0 +1,43 @@
+# §7.1 Bearer 鉴权（T-105）。
+#
+# ============================================================================
+# 这里只有一个「仅测试」的口子，真正的白名单在 PHP 里
+# ============================================================================
+# 免鉴权的路由是**契约的一部分**（`docs/api/openapi.yaml` 里带 `security: []`
+# 的那几个操作），不是部署时可调的旋钮。把它做成配置意味着一次 YAML 编辑
+# 就能把 `/v1/me/devices` 变成公开端点，而且不会在代码评审里显形。
+#
+# 所以生产白名单硬编码在
+# `Shared\Infrastructure\Http\AuthenticationListener::PUBLIC_ROUTES`，
+# 并由 `tests/Api/AuthenticationCoverageTest` 与契约逐条对账。
+#
+# ============================================================================
+# ⚠️ 那为什么还要这个文件
+# ============================================================================
+# `tests/Fixture/Http/ProbeApiController` 提供的那组 `/v1/_probe/*` 路由
+# （T-004 交付）是横切层契约测试的落脚点：幂等、限流、problem+json、
+# trusted proxy 全跑在它们上面。那些测试与认证无关 ——
+# 逼它们先造一枚真 token，等于让「幂等中间件的行为」这个断言依赖
+# 「JWT 签名正确」这个前提，而两者一起红的时候没人分得清是哪一个坏了。
+#
+# 套路与 `rate_limiter.yaml` 的 `ncards.rate_limits.test_only` 逐字相同，
+# 包括「生产恒为空、用独立参数而不是在 when@test 里整体重定义」这条 ——
+# 后者会**整体替换**而不是合并，于是每次改生产白名单都要记得同步测试副本，
+# 而忘了同步的症状是「测试全绿但生产的鉴权没生效」。
+parameters:
+    ncards.auth.public_routes.test_only: []
+
+when@test:
+    parameters:
+        # ⚠️ 只有 `_probe` 前缀的夹具路由。真实端点**绝不**加到这里 ——
+        # 那会让它在测试里免鉴权、在生产里要鉴权，也就是让 Api 测试
+        # 对「这个端点该不该要 token」这个问题失去判别力。
+        ncards.auth.public_routes.test_only:
+            - probe_echo
+            - probe_fail
+            - probe_boom
+            - probe_list
+            - probe_echo_body
+            - probe_status
+            - probe_limited
+            - probe_limited_multi

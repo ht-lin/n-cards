@@ -18,7 +18,10 @@ use Symfony\Component\HttpFoundation\RequestStack;
  *
  * §14.4 规定日志字段固定为 `ts, level, msg, request_id, user_id, route, duration_ms`。
  * 本 processor 负责其中的 `request_id` 与 `route`：
- *   - `user_id`     → T-1xx 有了认证之后补
+ *   - `user_id`     → 待补。T-105 已经把认证接上了（`AuthContext` 在 request
+ *                     attributes 里），所以这一条现在只差一次编辑；
+ *                     ⚠️ 补的时候注意 §8.2：日志里放的应该是 user id 这个**假名**，
+ *                     不是邮箱
  *   - `duration_ms` → T-405 的可观测性任务补
  *
  * ⚠️ **不覆盖调用方显式提供的同名 key**。业务代码写

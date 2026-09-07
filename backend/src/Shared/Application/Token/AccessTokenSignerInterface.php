@@ -27,16 +27,18 @@ use App\Shared\Domain\Token\IssuedAccessToken;
  * 接口在 `Shared\Application`、值对象在 `Shared\Domain`、实现在 `Shared\Infrastructure`。
  *
  * ============================================================================
- * ⚠️ 只签不验
+ * ⚠️ 只签不验 —— 验签是**另一个接口**
  * ============================================================================
- * 今天没有验签的生产调用方 —— refresh token 是 32 字节不透明随机（§7.1），
- * 走的是 `sessions.refresh_token_hash` 查表，不是 JWT。
- * `Authorization: Bearer` 的解析与验签归 T-108（`/v1/me` 与 onboarding 拦截器）。
+ * T-104 交付本接口时刻意没加 `verify()`：那时没有生产调用方，而它的形状
+ * （返回什么？过期怎么表达？重叠期怎么试第二把密钥？）只有在真有鉴权器时才定得下来。
  *
- * 现在顺手加一个 `verify()` 会得到一段没有生产调用方、却要为 §13.3 的覆盖率门禁
- * 补测试的代码，而且它的形状（返回什么？过期怎么表达？重叠期怎么试第二把密钥？）
- * 只有在真有鉴权器时才定得下来。单测里验签名正确性直接用
- * `sodium_crypto_sign_verify_detached` + Vault 里那份 `public_key` 即可。
+ * ✅ **T-105 定了**：{@see AccessTokenVerifierInterface}，一个**独立**的接口，
+ * 而不是往这里加一个方法。分开的理由与 `SigningKeyProviderInterface` 的两个方法
+ * 分开是同一条（§5.3「验两把、签一把」）：签发方永远只用一把密钥，
+ * 验签方在轮换重叠期里要认两把。合成一个接口就迟早会有人让它们共用一条取密钥的路。
+ *
+ * refresh token 仍然与 JWT 无关：它是 32 字节不透明随机（§7.1），
+ * 走 `sessions.refresh_token_hash` 查表。
  */
 interface AccessTokenSignerInterface
 {

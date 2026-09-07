@@ -1,5 +1,6 @@
 src/main/kotlin/de/ncards/core/network/api/AuthApi.kt
 src/main/kotlin/de/ncards/core/network/api/CardsApi.kt
+src/main/kotlin/de/ncards/core/network/api/MeApi.kt
 src/main/kotlin/de/ncards/core/network/api/infrastructure/AtomicBooleanAdapter.kt
 src/main/kotlin/de/ncards/core/network/api/infrastructure/AtomicIntegerAdapter.kt
 src/main/kotlin/de/ncards/core/network/api/infrastructure/AtomicLongAdapter.kt
@@ -22,12 +23,15 @@ src/main/kotlin/de/ncards/core/network/api/model/CardPlacement.kt
 src/main/kotlin/de/ncards/core/network/api/model/CardRole.kt
 src/main/kotlin/de/ncards/core/network/api/model/CardUpdate.kt
 src/main/kotlin/de/ncards/core/network/api/model/Device.kt
+src/main/kotlin/de/ncards/core/network/api/model/DeviceList.kt
 src/main/kotlin/de/ncards/core/network/api/model/MagicLinkConsumption.kt
 src/main/kotlin/de/ncards/core/network/api/model/OtpChallenge.kt
 src/main/kotlin/de/ncards/core/network/api/model/OtpRequest.kt
 src/main/kotlin/de/ncards/core/network/api/model/OtpVerification.kt
 src/main/kotlin/de/ncards/core/network/api/model/Problem.kt
 src/main/kotlin/de/ncards/core/network/api/model/ProblemFieldError.kt
+src/main/kotlin/de/ncards/core/network/api/model/PushTokenUpdate.kt
+src/main/kotlin/de/ncards/core/network/api/model/RegisteredDevice.kt
 src/main/kotlin/de/ncards/core/network/api/model/Session.kt
 src/main/kotlin/de/ncards/core/network/api/model/TokenRefresh.kt
 src/main/kotlin/de/ncards/core/network/api/model/User.kt

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Module\Identity\Application\Otp;
 
+use App\Module\Identity\Application\Session\SessionIssued;
 use App\Module\Identity\Domain\Entity\Device;
 use App\Module\Identity\Domain\Entity\OtpChallenge;
 use App\Module\Identity\Domain\Entity\Session;
@@ -101,12 +102,15 @@ final readonly class VerifyOtpService
     /**
      * 新设备提醒信里那个「这不是我」链接的路径。
      *
-     * ⚠️ 指向 T-105 的设备管理落地页，**不是**一个带令牌的一次性撤销 URL ——
-     * 后者需要撤销端点与令牌存储，都在 T-105 的卡上。§7.1 要求那个链接
-     * 「同样走 POST 确认」（企业邮件安全网关会自动 GET 邮件里的每个链接），
-     * 而一个只列出设备的落地页天然满足那条：GET 它不改变任何状态。
+     * ⚠️ 指向设备管理落地页，**不是**一个带令牌的一次性撤销 URL。
+     * §7.1 要求那个链接「同样走 POST 确认」（企业邮件安全网关会自动 GET
+     * 邮件里的每个链接），而一个只列出设备的落地页天然满足那条：
+     * GET 它不改变任何状态，真正的撤销是页面上的
+     * `DELETE /v1/me/devices/{id}`。
      *
-     * 交接 T-105：换成 tokenized URL 时，改的应该只有这一个常量与拼接方式。
+     * ✅ T-105 之后这个链接是**有后端的**：那三个设备端点已经存在。
+     * 仍然不是 tokenized URL —— 任务卡的交付物里没有它，而这个形状已经满足 §7.1。
+     * 真要换成一次性令牌的话，改的应该只有这一个常量与拼接方式。
      */
     private const REVOKE_PATH = '/l/devices';
 

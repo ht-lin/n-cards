@@ -101,16 +101,24 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
 
     private ?\DateTimeImmutable $cachedUntil = null;
 
+    /** @var array<non-empty-string, non-empty-string>|null */
+    private ?array $cachedVerificationKeys = null;
+
+    private ?\DateTimeImmutable $verificationKeysCachedUntil = null;
+
     /**
      * @param string      $kvPath          KV v2 里的逻辑路径，**不含** `data/` 段，
      *                                     例如 `ncards/jwt/current`。必须与
      *                                     `infra/vault/bootstrap.sh` 的 `JWT_KV_PATH` 一致
+     * @param string      $previousKvPath  §5.3 重叠期里那把**上一代**密钥的逻辑路径。
+     *                                     这条 KV 在稳态下**不存在**，读不到不是错误
      * @param int<1, max> $cacheTtlSeconds 远小于 §5.3 的 24h 重叠期
      */
     public function __construct(
         private readonly VaultClient $vault,
         private readonly ClockInterface $clock,
         private readonly string $kvPath,
+        private readonly string $previousKvPath,
         private readonly int $cacheTtlSeconds,
     ) {
     }
@@ -123,7 +131,7 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
             return $this->cached;
         }
 
-        $key = $this->fetch();
+        $key = $this->fetch($this->kvPath);
 
         $this->cached = $key;
         $this->cachedUntil = $now->modify(\sprintf('+%d seconds', $this->cacheTtlSeconds));
@@ -132,16 +140,84 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
     }
 
     /**
+     * §5.3 的「验两把、签一把」的**验**那一半（T-105）。
+     *
+     * 缓存与 {@see currentKey()} 分开，用的是同一个 TTL 但各自独立的槽位 ——
+     * 两者的读取次数不同（每个带 Bearer 的请求都要验签，而签名只发生在登录与刷新），
+     * 共用一个槽会让其中一个的过期时刻由另一个的调用节奏决定。
+     */
+    public function verificationKeys(): array
+    {
+        $now = $this->clock->now();
+
+        if (null !== $this->cachedVerificationKeys
+            && null !== $this->verificationKeysCachedUntil
+            && $now < $this->verificationKeysCachedUntil
+        ) {
+            return $this->cachedVerificationKeys;
+        }
+
+        // current 读不出来 = 没有任何人能通过鉴权。与 fetch() 里那一段同一个理由，
+        // 收敛成 503 而不是 500：处置是运维动作，且 §14.4 的 5xx 告警不该被它点着。
+        try {
+            [$kid, $publicKey] = $this->fetchPublicKey($this->kvPath);
+        } catch (CryptoFailed $e) {
+            throw new CryptoUnavailable(self::UNREADABLE, $e);
+        }
+
+        $keys = [$kid => $publicKey];
+
+        // ⚠️ previous 缺失是**常态**，不是故障：首次部署到第一次轮换之间的
+        // 全部时间里这条 KV 都不存在。
+        //
+        // 只吞 CryptoFailed（VaultClient 把 404 映射到这里），**不吞**
+        // CryptoUnavailable —— 后者覆盖 403（policy 里漏了这条路径）、
+        // 5xx 与 sealed。把 403 一起吞掉的话，「忘了更新 ncards-app.hcl」
+        // 的症状就变成「轮换当天旧 token 全部失效」，而日志里一行都没有。
+        try {
+            [$previousKid, $previousPublicKey] = $this->fetchPublicKey($this->previousKvPath);
+            $keys[$previousKid] = $previousPublicKey;
+        } catch (CryptoFailed) {
+            // 没有上一代密钥。稳态。
+        }
+
+        $this->cachedVerificationKeys = $keys;
+        $this->verificationKeysCachedUntil = $now->modify(\sprintf('+%d seconds', $this->cacheTtlSeconds));
+
+        return $keys;
+    }
+
+    /**
+     * @return array{non-empty-string, non-empty-string} [kid, 32 字节裸公钥]
+     *
+     * @throws CryptoFailed      这条 KV 不存在（404）—— 调用方决定它是否可选
+     * @throws CryptoUnavailable Vault 不可达 / 封印 / 权限不足，或值不是一把合法的密钥
+     */
+    private function fetchPublicKey(string $kvPath): array
+    {
+        $data = $this->readEnvelope($kvPath);
+
+        $publicPem = $data['public_key'] ?? null;
+        $kid = $data['kid'] ?? null;
+
+        if (!\is_string($publicPem) || !\is_string($kid) || '' === $kid) {
+            throw new CryptoUnavailable(self::UNREADABLE);
+        }
+
+        $publicKey = self::publicKeyFromSpkiPem($publicPem);
+
+        \assert('' !== $publicKey);
+
+        return [$kid, $publicKey];
+    }
+
+    /**
      * @throws CryptoUnavailable
      */
-    private function fetch(): SigningKey
+    private function fetch(string $kvPath): SigningKey
     {
-        // KV v2 的读路径要插一段 `data/`：逻辑路径 `ncards/jwt/current`
-        // 对应的 API 路径是 `secret/data/ncards/jwt/current`。
-        // ⚠️ 少了那一段会打到 KV v1 的形状上，Vault 回 404，而 404 在这里
-        // 与「密钥不存在」无法区分 —— 症状是「刚建的栈登录不了」。
         try {
-            $envelope = $this->vault->read('secret/data/'.$this->kvPath);
+            $data = $this->readEnvelope($kvPath);
         } catch (CryptoFailed $e) {
             // ============================================================
             // ⚠️ 一律收敛成 503，包括 VaultClient 判定为 500 的那些（比如 404）
@@ -161,6 +237,38 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
             throw new CryptoUnavailable(self::UNREADABLE, $e);
         }
 
+        $privatePem = $data['private_key'] ?? null;
+        $kid = $data['kid'] ?? null;
+
+        if (!\is_string($privatePem) || !\is_string($kid) || '' === $kid) {
+            throw new CryptoUnavailable(self::UNREADABLE);
+        }
+
+        return new SigningKey(self::seedFromPkcs8Pem($privatePem), $kid);
+    }
+
+    /**
+     * 读一条 JWT 密钥 KV 并校验它确实是一把 Ed25519 密钥。
+     *
+     * ⚠️ **不**把 {@see CryptoFailed} 收敛成 {@see CryptoUnavailable}——
+     * 那个转换归调用方，因为两个调用方对「这条 KV 不存在」的判断相反：
+     * `current` 缺失是故障（{@see fetch()} 转 503），
+     * `previous` 缺失是稳态（{@see verificationKeys()} 静默略过）。
+     * 在这里统一转掉的话，后者就再也分不出「没有上一代密钥」与「Vault 挂了」。
+     *
+     * @return array<string, mixed>
+     *
+     * @throws CryptoFailed      这条 KV 不存在
+     * @throws CryptoUnavailable Vault 不可达 / 封印 / 权限不足，或值不是一把 Ed25519 密钥
+     */
+    private function readEnvelope(string $kvPath): array
+    {
+        // KV v2 的读路径要插一段 `data/`：逻辑路径 `ncards/jwt/current`
+        // 对应的 API 路径是 `secret/data/ncards/jwt/current`。
+        // ⚠️ 少了那一段会打到 KV v1 的形状上，Vault 回 404，而 404 在这里
+        // 与「密钥不存在」无法区分 —— 症状是「刚建的栈登录不了」。
+        $envelope = $this->vault->read('secret/data/'.$kvPath);
+
         $data = $envelope['data'] ?? null;
 
         if (!\is_array($data)) {
@@ -175,14 +283,8 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
             throw new CryptoUnavailable(self::UNREADABLE);
         }
 
-        $privatePem = $data['private_key'] ?? null;
-        $kid = $data['kid'] ?? null;
-
-        if (!\is_string($privatePem) || !\is_string($kid) || '' === $kid) {
-            throw new CryptoUnavailable(self::UNREADABLE);
-        }
-
-        return new SigningKey(self::seedFromPkcs8Pem($privatePem), $kid);
+        /* @var array<string, mixed> $data */
+        return $data;
     }
 
     /**
@@ -201,11 +303,10 @@ final class VaultKvSigningKeyProvider implements SigningKeyProviderInterface
     /**
      * SPKI PEM → 32 字节公钥。
      *
-     * 生产路径上没有调用方（本类只签不验），但 `bootstrap.sh` 把 `public_key`
-     * 与私钥写在同一条 KV 上，而集成测试要拿它验签名 ——
-     * 「验签方能不能用这份公钥验过」正是这个类唯一无法自证的部分。
-     *
-     * T-108 接鉴权器时，这个方法就是它取验签材料的入口。
+     * T-105 起这是 {@see verificationKeys()} 取验签材料的入口。
+     * 仍然保持 `public static`：集成测试直接拿 `bootstrap.sh` 写进同一条 KV 的
+     * `public_key` 验一枚真签出来的 token —— 「验签方能不能用这份公钥验过」
+     * 正是签名侧唯一无法自证的部分。
      *
      * @throws CryptoUnavailable 不是一份合法的 Ed25519 SPKI 公钥
      */

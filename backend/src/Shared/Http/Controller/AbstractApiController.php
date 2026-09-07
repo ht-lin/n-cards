@@ -7,6 +7,7 @@ namespace App\Shared\Http\Controller;
 use App\Shared\Domain\Client\ClientVersion;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
+use App\Shared\Domain\Http\AuthContext;
 use App\Shared\Domain\Http\RequestAttributes;
 use App\Shared\Http\Pagination\Page;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -153,6 +154,30 @@ abstract class AbstractApiController
         }
 
         return $client;
+    }
+
+    /**
+     * 本次请求认证出的身份（由 AuthenticationListener 从 access token 里取出，T-105）。
+     *
+     * ⚠️ 拿到它**不**代表这个会话此刻仍然有效 —— §7.1 不做 access token 黑名单，
+     * 撤销后最长 15 分钟内它仍然验得过。需要那个保证的端点自己查表，
+     * 详见 {@see AuthContext} 的类注释。
+     *
+     * @throws \LogicException 属性不存在时。那意味着这个控制器被路由到了一个
+     *                         免鉴权的路由上（`AuthenticationListener::PUBLIC_ROUTES`），
+     *                         或根本不在 `/v1` 下 —— 两者都是**接线错误**，
+     *                         不是客户端错误，所以不能是 DomainException。
+     *                         口径与上面的 `clientVersion()` 完全一致
+     */
+    protected function authContext(Request $request): AuthContext
+    {
+        $context = $request->attributes->get(RequestAttributes::AUTH_CONTEXT);
+
+        if (!$context instanceof AuthContext) {
+            throw new \LogicException('No auth context on the request. A controller calling authContext() must be routed under /v1/ and must not be listed in AuthenticationListener::PUBLIC_ROUTES.');
+        }
+
+        return $context;
     }
 
     /**
