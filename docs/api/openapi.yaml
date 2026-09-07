@@ -448,12 +448,7 @@ paths:
             Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
           content:
             application/json:
-              schema:
-                type: object
-                additionalProperties: true
-                required: [user]
-                properties:
-                  user: { $ref: '#/components/schemas/User' }
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
               example:
                 user:
                   id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
@@ -1590,6 +1585,32 @@ components:
         username: { $ref: '#/components/schemas/Username' }
       examples:
         - username: anna_b
+
+    UserEnvelope:
+      type: object
+      additionalProperties: true
+      required: [user]
+      description: |
+        `POST /me/username` 的 200 响应。
+
+        ⚠️ **必须是具名 schema，不能写成内联的匿名对象。** 内联的话
+        openapi-generator 会给 Android 侧生成一个叫 `SetUsername200Response` 的类
+        —— 类型名里带着**端点名与状态码**，于是 T-108 的 `PATCH /v1/me` 复用同一个
+        形状时会再生成一个 `UpdateMe200Response`，两个一模一样的 data class
+        谁也转不成谁。与 `DeviceList` 是同一条理由。
+
+        包成对象而不是直接返回 `User`，是为了将来能加同级字段
+        （顶层裸对象是一扇加不了兄弟字段的单向门）——
+        同样照抄 `DeviceList` 的论证。
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+      examples:
+        - user:
+            id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+            username: anna_b
+            locale: de
+            onboarding_complete: true
+            created_at: "2026-08-29T10:30:12Z"
 
     User:
       type: object

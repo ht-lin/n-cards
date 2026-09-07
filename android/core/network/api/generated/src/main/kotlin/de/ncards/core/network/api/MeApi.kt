@@ -10,6 +10,8 @@ import kotlinx.serialization.Serializable
 import de.ncards.core.network.api.model.DeviceList
 import de.ncards.core.network.api.model.Problem
 import de.ncards.core.network.api.model.PushTokenUpdate
+import de.ncards.core.network.api.model.UserEnvelope
+import de.ncards.core.network.api.model.UsernameAssignment
 
 interface MeApi {
     /**
@@ -53,6 +55,32 @@ interface MeApi {
      */
     @DELETE("me/devices/{deviceId}")
     suspend fun revokeDevice(@Header("X-Client") xClient: kotlin.String, @Path("deviceId") deviceId: java.util.UUID, @Header("Idempotency-Key") idempotencyKey: java.util.UUID? = null): Response<Unit>
+
+    /**
+     * POST me/username
+     * 一次性设定 username
+     * 注册流程的**最后一步**，也是 &#x60;onboarding_incomplete&#x60; 状态唯一的出口 （§5.2）：&#x60;POST /auth/otp/verify&#x60; 成功即建行，但那一行的 &#x60;username&#x60; 是 &#x60;null&#x60;，在设定之前所有其他 &#x60;/v1&#x60; 端点都返回 &#x60;403 username_required&#x60;。  **一次性写入。** 已经设过了 → &#x60;409 username_immutable&#x60;（**不静默忽略**）。 没有 &#x60;PATCH&#x60; / &#x60;PUT&#x60; 对应端点，不可变性就是靠这一点保证的。  客户端**必须**在发送前做 &#x60;trim&#x60; + &#x60;lowercase(Locale.ROOT)&#x60; 归一化， 并且**必须**用二次确认对话框（&#x60;Dieser Name kann später nicht geändert werden.&#x60;）—— 这是本产品为数不多的不可逆操作之一，与删号同级（§3.8）。 设定页还必须提示「其他人可通过该名字找到你，请勿使用真实姓名或邮箱」。  三种失败要分开处理，别合并成一句「出错了」：  | code | 状态 | UI 该做什么 | |---|---|---| | &#x60;username_invalid&#x60; | 422 | 输入框下标红，让用户改（长度 / 字符集 / 保留词） | | &#x60;username_taken&#x60; | 409 | 同上，文案是「这个名字已经有人用了」 | | &#x60;username_immutable&#x60; | 409 | **不是**输入错误：本机状态过期了，重新拉 &#x60;GET /me&#x60; | | &#x60;limit_exceeded&#x60; | 422 | 次数用尽，见下 |  ⚠️ **&#x60;422 limit_exceeded&#x60; 是终局，不是「稍后再试」。** §7.5 给这个端点的 配额是按 user **10 次总计**的生命周期计数（不是滑动窗口，&#x60;Retry-After&#x60; 不适用，所以它不是 429）。只有真正查了占用情况的请求才消耗次数 —— &#x60;username_invalid&#x60; 与 &#x60;username_immutable&#x60; 都不消耗。详见 ADR-0017。 
+     * Responses:
+     *  - 200: 已设定。响应里的 `user.onboarding_complete` 恒为 `true` —— 客户端据此离开设定页。 
+     *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
+     *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 409: `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、 `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、 `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、 `full_resync_required`（清库全量重同步）。 
+     *  - 413: `payload_too_large`。客户端 bug，上报 Sentry。
+     *  - 415: `unsupported_media_type`：`Content-Type` 不是 `application/json`。客户端 bug，上报 Sentry。
+     *  - 422: `limit_exceeded`（**系统限额**，§7.5 的第一张表）、`username_invalid`、 `idempotency_key_reused`（**不要重试**，上报 Sentry）。  ⚠️ `422 limit_exceeded` 与限流（`429`）**完全是两回事**：前者是绝对的存量 上限，重试**永远**不会成功，UI 应该显示「额度已满」而不是「稍后重试」。 
+     *  - 426: `client_too_old`：低于 `/v1/config` 下发的 `min_supported_client`。客户端显示强制升级墙。
+     *  - 429: `rate_limited`：「我判定你超限了」，按 `Retry-After` 退避重试（§7.5）。  ⚠️ **必须**同时带 `Retry-After`（秒数）与 `X-RateLimit-Remaining`（恒为 0）。 与 `503 service_unavailable`（「我**无法判定**」——Redis 不可达且该策略 fail-closed）不是一回事，见 ADR-0005。 
+     *  - 500: `internal_error`。`detail` 恒为固定文案，**绝不回显**原始异常消息 （那会泄露主机名、端口、SQL 片段）。客户端提示稍后重试并上报 Sentry。 
+     *  - 503: `service_unavailable`：维护中，或限流器**无法判定**（Redis 不可达 + 该策略 fail-closed，ADR-0005）。这是服务端故障，走 §5.4.3 的 outbox 重试策略。 
+     *
+     * @param xClient **所有 &#x60;/v1&#x60; 请求必填**（§6.1）。缺失或格式不符即 &#x60;400 validation_failed&#x60;。 用于强制升级判定（低于 &#x60;min_supported_client&#x60; → &#x60;426 client_too_old&#x60;）与指标切分。  pattern 与后端 &#x60;App\\Shared\\Domain\\Client\\ClientVersion::PATTERN&#x60; 的**判定结果 逐例一致**，由 &#x60;backend/tests/Api/OpenApiDocumentTest&#x60; 用一张对照表断言 —— 改一处不改另一处，CI 立刻红。 （唯一的差别是后端会先 &#x60;trim()&#x60; 一次，正则表达不了这个。）  ⚠️ &#x60;/health/live&#x60; 与 &#x60;/health/ready&#x60; **不在 &#x60;/v1&#x60; 下**，因此不需要这个头—— 它们的调用方是 Docker healthcheck、Caddy 与 Ansible（§14.2）。 那两个端点刻意不出现在本契约里。 
+     * @param usernameAssignment 
+     * @param idempotencyKey 幂等键（UUID），Redis 存 24h（§6.1 / ADR-0003）。所有 &#x60;POST&#x60; 支持。  同一个 key 配**相同**请求体 → 回放此前的响应，并带上 &#x60;Idempotency-Replayed: true&#x60;。 同一个 key 配**不同**请求体 → &#x60;422 idempotency_key_reused&#x60;， 这是客户端 bug，**不要重试**，上报 Sentry。 前一次请求仍在处理中 → &#x60;409 idempotency_in_progress&#x60;，带 &#x60;Retry-After&#x60;，退避重试。  ⚠️ Redis 不可达时幂等是 **fail-OPEN**（照常执行，不保证幂等）， 而限流是 fail-CLOSED。这个不对称是刻意的，理由见 ADR-0003。  (optional)
+     * @return [UserEnvelope]
+     */
+    @POST("me/username")
+    suspend fun setUsername(@Header("X-Client") xClient: kotlin.String, @Body usernameAssignment: UsernameAssignment, @Header("Idempotency-Key") idempotencyKey: java.util.UUID? = null): Response<UserEnvelope>
 
     /**
      * PUT me/devices/{deviceId}/push-token

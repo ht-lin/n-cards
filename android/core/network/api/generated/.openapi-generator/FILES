@@ -35,3 +35,5 @@ src/main/kotlin/de/ncards/core/network/api/model/RegisteredDevice.kt
 src/main/kotlin/de/ncards/core/network/api/model/Session.kt
 src/main/kotlin/de/ncards/core/network/api/model/TokenRefresh.kt
 src/main/kotlin/de/ncards/core/network/api/model/User.kt
+src/main/kotlin/de/ncards/core/network/api/model/UserEnvelope.kt
+src/main/kotlin/de/ncards/core/network/api/model/UsernameAssignment.kt
