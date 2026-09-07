@@ -56,9 +56,6 @@ final class MagicConsumeEndpointTest extends WebTestCase
 
     private const PATH = '/v1/auth/magic/consume';
 
-    /** 与生产同形：32 字节 base64url = 43 字符。 */
-    private const TOKEN = 'bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS49tK3zQ1sX7';
-
     private const DEVICE_ID = '0192f3a1-b2c3-7d4e-8f01-0000000000de';
 
     /** 与本次登录无关的另一条挑战上的码，用来验「两条入口互斥」。 */
@@ -137,7 +134,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testASuccessfulConsumptionStampsConsumedAt(): void
     {
-        $challenge = $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $challenge = $this->seedChallenge(self::CODE, magicToken: self::token());
 
         self::assertNull($this->consumedAt($challenge->id()->toString()));
 
@@ -155,7 +152,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testASecondPostWithTheSameTokenIsRejected(): void
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
 
         self::assertSame(Response::HTTP_OK, $this->post(self::body())->getStatusCode());
 
@@ -174,7 +171,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testConsumingTheLinkAlsoBurnsTheSixDigitCode(): void
     {
-        $challenge = $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $challenge = $this->seedChallenge(self::CODE, magicToken: self::token());
 
         self::assertSame(Response::HTTP_OK, $this->post(self::body())->getStatusCode());
 
@@ -190,7 +187,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
     /** 反向：先用码登录，链接随即失效。 */
     public function testConsumingTheCodeAlsoBurnsTheLink(): void
     {
-        $challenge = $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $challenge = $this->seedChallenge(self::CODE, magicToken: self::token());
 
         $verify = $this->postTo('/v1/auth/otp/verify', json_encode([
             'challenge_id' => $challenge->id()->toString(),
@@ -242,7 +239,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
         $challenge = $this->seedChallenge(
             self::CODE,
             expiresAt: new \DateTimeImmutable('-1 hour'),
-            magicToken: self::TOKEN,
+            magicToken: self::token(),
         );
 
         self::assertSame(Response::HTTP_UNAUTHORIZED, $this->post(self::body())->getStatusCode());
@@ -255,13 +252,13 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testADeviceIdOwnedBySomebodyElseIsRejected(): void
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
         $this->post(self::body());
 
         // 另一个人、另一条挑战，但复用同一个安装 id。
-        $this->seedChallenge(self::CODE, magicToken: self::OTHER_TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::otherToken());
 
-        $response = $this->post(self::body(self::OTHER_TOKEN));
+        $response = $this->post(self::body(self::otherToken()));
 
         self::assertSame(Response::HTTP_CONFLICT, $response->getStatusCode());
         self::assertIsProblemDetails($response, ErrorCode::IdConflict);
@@ -310,14 +307,14 @@ final class MagicConsumeEndpointTest extends WebTestCase
         yield 'token missing' => [['device' => self::device()], 'token'];
         yield 'token too short' => [['token' => 'abc', 'device' => self::device()], 'token'];
         yield 'token not a string' => [['token' => 42, 'device' => self::device()], 'token'];
-        yield 'device missing' => [['token' => self::TOKEN], 'device'];
-        yield 'device not an object' => [['token' => self::TOKEN, 'device' => []], 'device'];
+        yield 'device missing' => [['token' => self::token()], 'device'];
+        yield 'device not an object' => [['token' => self::token(), 'device' => []], 'device'];
         yield 'unknown top-level field' => [
-            ['token' => self::TOKEN, 'device' => self::device(), 'challenge_id' => self::DEVICE_ID],
+            ['token' => self::token(), 'device' => self::device(), 'challenge_id' => self::DEVICE_ID],
             'challenge_id',
         ];
         yield 'unknown device field' => [
-            ['token' => self::TOKEN, 'device' => self::device() + ['nickname' => 'x']],
+            ['token' => self::token(), 'device' => self::device() + ['nickname' => 'x']],
             'device.nickname',
         ];
     }
@@ -334,7 +331,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testNoBearerTokenIsRequired(): void
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
 
         self::assertSame(Response::HTTP_OK, $this->post(self::body())->getStatusCode());
     }
@@ -351,7 +348,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
     #[DataProvider('unsafeMethods')]
     public function testOnlyPostIsRouted(string $method): void
     {
-        $challenge = $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $challenge = $this->seedChallenge(self::CODE, magicToken: self::token());
 
         $this->client->request($method, self::PATH, server: [
             'HTTP_X_CLIENT' => 'android/1.4.0 (26)',
@@ -374,7 +371,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
     /** §3.10：`/v1` 下的一切都要带 `X-Client`。 */
     public function testRequiresTheClientHeader(): void
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
 
         $this->client->request('POST', self::PATH, server: [
             'CONTENT_TYPE' => 'application/json',
@@ -390,7 +387,7 @@ final class MagicConsumeEndpointTest extends WebTestCase
      */
     public function testIdempotentReplayReturnsTheSameTokens(): void
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
 
         $key = self::uniqueIdempotencyKey();
         $ip = self::uniqueIp();
@@ -407,12 +404,36 @@ final class MagicConsumeEndpointTest extends WebTestCase
     // 支撑
     // ========================================================================
 
+    /**
+     * 与生产同形：32 字节 base64url = 43 字符。
+     *
+     * ⚠️ **不写成字面量常量。** 43 字符的 base64url 熵足够高，gitleaks 的
+     * generic-api-key 见到 `TOKEN = '…'` 就报，而 .gitleaks.toml 的头一句是
+     * 「加豁免前先想清楚」—— 为一个假令牌开一条按文件的豁免，等于在那张表里
+     * 留一个「这个测试文件里的秘密不用管」的口子，不值得。
+     *
+     * 从固定种子推出来的值同形、跨进程稳定（用例要先 seed 摘要再 post 原文，
+     * 两边必须拿到同一个串），源码里也就没有高熵字面量了。
+     */
+    private static function token(): string
+    {
+        return self::tokenFrom('magic-consume');
+    }
+
     /** 第二个令牌，用于「同一台设备撞上别人的挑战」那条。 */
-    private const OTHER_TOKEN = 'zQ1sX7bF0pR4hN8mV2wY6cL5dJ0aG3eU7iO1kS49tK3';
+    private static function otherToken(): string
+    {
+        return self::tokenFrom('magic-consume-other');
+    }
+
+    private static function tokenFrom(string $seed): string
+    {
+        return rtrim(strtr(base64_encode(hash('sha256', $seed, true)), '+/', '-_'), '=');
+    }
 
     private function consume(): Response
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
 
         return $this->post(self::body());
     }
@@ -426,20 +447,20 @@ final class MagicConsumeEndpointTest extends WebTestCase
             'expired' => $this->rejectExpired(),
             'consumed' => $this->rejectConsumed(),
             // 从来没有存在过的令牌。长度合法，只是查不到。
-            default => $this->post(self::body(self::OTHER_TOKEN)),
+            default => $this->post(self::body(self::otherToken())),
         };
     }
 
     private function rejectExpired(): Response
     {
-        $this->seedChallenge(self::CODE, expiresAt: new \DateTimeImmutable('-1 hour'), magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, expiresAt: new \DateTimeImmutable('-1 hour'), magicToken: self::token());
 
         return $this->post(self::body());
     }
 
     private function rejectConsumed(): Response
     {
-        $this->seedChallenge(self::CODE, magicToken: self::TOKEN);
+        $this->seedChallenge(self::CODE, magicToken: self::token());
         $this->post(self::body());
 
         return $this->post(self::body());
@@ -470,9 +491,12 @@ final class MagicConsumeEndpointTest extends WebTestCase
         ];
     }
 
-    private static function body(string $token = self::TOKEN): string
+    private static function body(?string $token = null): string
     {
-        return json_encode(['token' => $token, 'device' => self::device()], \JSON_THROW_ON_ERROR);
+        return json_encode(
+            ['token' => $token ?? self::token(), 'device' => self::device()],
+            \JSON_THROW_ON_ERROR,
+        );
     }
 
     /**
@@ -521,12 +545,18 @@ final class MagicConsumeEndpointTest extends WebTestCase
     }
 
     /**
-     * 契约把 token 的长度定在 32–512。用例里那两个常量必须落在里面，
+     * 契约把 token 的长度定在 32–512。用例里那两个令牌必须落在里面，
      * 否则「拒绝」可能来自校验而不是查不到 —— 那会让上面几条用例测错东西。
+     *
+     * 两者不相等同理：{@see reject()} 的 'unknown' 那条全靠 otherToken() 查不到。
+     * 它们现在是推出来的而不是两个一眼不同的字面量，所以这里明写一句。
      */
     public function testTheFixtureTokensSatisfyTheContract(): void
     {
-        foreach ([self::TOKEN, self::OTHER_TOKEN] as $token) {
+        self::assertNotSame(self::token(), self::otherToken());
+
+        foreach ([self::token(), self::otherToken()] as $token) {
+            self::assertSame(43, \strlen($token), '与生产同形：32 字节 base64url。');
             self::assertGreaterThanOrEqual(MagicLinkConsumptionPayload::TOKEN_MIN_LENGTH, \strlen($token));
             self::assertLessThanOrEqual(MagicLinkConsumptionPayload::TOKEN_MAX_LENGTH, \strlen($token));
         }
