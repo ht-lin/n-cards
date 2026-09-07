@@ -150,6 +150,9 @@ services:
             $usernameMinChars: '%ncards.limits.username_min_chars%'
             $usernameMaxChars: '%ncards.limits.username_max_chars%'
             $usernamePattern: '%ncards.limits.username_pattern%'
+            # T-107。上面三个是 username 的**格式**常量（只读暴露，不抛异常），
+            # 这一个相反：它有 SystemLimit case，走 enforceCanAdd() → 422 limit_exceeded。
+            $usernameAttemptsPerUser: '%ncards.limits.username_attempts_per_user%'
 
     # ------------------------------------------------------------------ T-102
     # 邮件通道（§3.1 / §3.2 / §8.3）。
@@ -283,6 +286,26 @@ services:
             $accessTtlSeconds: '%ncards.jwt.access_ttl_seconds%'
             $refreshTtlSeconds: '%ncards.jwt.refresh_ttl_seconds%'
             $appBaseUrl: '%env(APP_PUBLIC_BASE_URL)%'
+
+    # ------------------------------------------------------------------ T-107
+    # username 的保留词黑名单（§3.8 / Q9，config/packages/ncards_username.yaml）。
+    #
+    # ⚠️ 必须显式列：UsernameRules 在 `Identity\Domain\ValueObject\`，而 deptrac 里
+    # `Identity.Domain` 的允许列表只有 `Shared.Domain` —— `#[Autowire]` 属于
+    # Framework.Core，在那一层是 violation。而数组参数 autowiring 也解析不了，
+    # 两条理由指向同一个结论。与上面 LimitEnforcer 是同一个做法。
+    #
+    # ⚠️ 这个目录**不在** `App\` 的 exclude 里（那里只排除了 Domain/Entity/），
+    # 所以 UsernameRules 会被自动注册成服务 —— 我们要的正是这个。
+    # 同目录下的 Username 值对象构造是私有的，它的服务定义因为无人引用
+    # 会在 RemoveUnusedDefinitionsPass 里消失，与 Shared\Domain\Crypto\HashDigest
+    # 从 T-101 起的处境完全相同。
+    #
+    # 长度与正则**不在这里** —— 它们从 LimitEnforcer 转手（见 UsernameRules 的
+    # 类注释：再接一遍参数会开出第二个真相来源）。
+    App\Module\Identity\Domain\ValueObject\UsernameRules:
+        arguments:
+            $reservedWords: '%ncards.username.reserved_words%'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones

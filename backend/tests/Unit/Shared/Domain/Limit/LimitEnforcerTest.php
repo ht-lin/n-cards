@@ -48,6 +48,9 @@ final class LimitEnforcerTest extends TestCase
         'title_chars' => 100,
         'username_min_chars' => 3,
         'username_max_chars' => 20,
+        // T-107。§7.5 把这一行印在**速率限制**表里，但它是存量上限、返回
+        // 422 limit_exceeded，所以它有 SystemLimit case 也在这张表里（ADR-0017）。
+        'username_attempts_per_user' => 10,
     ];
 
     private const USERNAME_PATTERN = '^[a-z0-9_]{3,20}$';
@@ -326,6 +329,7 @@ final class LimitEnforcerTest extends TestCase
             self::SPEC['username_min_chars'],
             self::SPEC['username_max_chars'],
             self::USERNAME_PATTERN,
+            self::SPEC['username_attempts_per_user'],
         );
     }
 

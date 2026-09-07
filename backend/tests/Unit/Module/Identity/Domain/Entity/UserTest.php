@@ -121,6 +121,58 @@ final class UserTest extends TestCase
         self::assertSame('Anna_B', $user->username());
     }
 
+    // ========================================================================
+    // §7.5 的「10 次总计」计数（T-107）
+    // ========================================================================
+
+    public function testStartsWithNoUsernameAttempts(): void
+    {
+        self::assertSame(0, IdentityEntities::user()->usernameAttempts());
+    }
+
+    public function testCountsEveryRecordedAttempt(): void
+    {
+        $user = IdentityEntities::user();
+
+        $user->recordUsernameAttempt(10);
+        $user->recordUsernameAttempt(10);
+
+        self::assertSame(2, $user->usernameAttempts());
+    }
+
+    /**
+     * 饱和而不是无限累加，与 `OtpChallenge::recordAttempt()` 同一个形状。
+     *
+     * 正常路径走不到这里（`AssignUsernameService` 先 `enforceCanAdd()`）——
+     * 它防的是「日后有人加了第二个调用点却忘了先检查」，那时的后果会是
+     * 计数溢出 SMALLINT，而不是一个能被看见的错误。
+     */
+    public function testSaturatesAtTheGivenMaximum(): void
+    {
+        $user = IdentityEntities::user();
+
+        for ($i = 0; $i < 25; ++$i) {
+            $user->recordUsernameAttempt(10);
+        }
+
+        self::assertSame(10, $user->usernameAttempts());
+    }
+
+    /**
+     * ⚠️ 记次数与写名字是**两个**动作，实体不把它们绑在一起。
+     *
+     * 绑住的话「哪些失败消耗次数」这条策略（ADR-0017）就被钉死在 Domain 里了，
+     * 而它是策略不是不变量 —— 真正的编排在 `AssignUsernameService`。
+     */
+    public function testAssigningAUsernameDoesNotItselfCountAnAttempt(): void
+    {
+        $user = IdentityEntities::user();
+
+        $user->assignUsername('anna_b', IdentityEntities::now());
+
+        self::assertSame(0, $user->usernameAttempts());
+    }
+
     public function testChangesLocale(): void
     {
         $user = IdentityEntities::user(locale: Locale::German);

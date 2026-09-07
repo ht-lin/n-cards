@@ -42,6 +42,35 @@ interface UserRepositoryInterface
      */
     public function save(User $user): void;
 
+    /**
+     * 落盘一个**刚设定了 username** 的用户，并把 `uq_users_username` 的唯一冲突
+     * 翻译成 `409 username_taken`（T-107）。
+     *
+     * ============================================================================
+     * 为什么是独立的方法，而不是在 save() 里翻译
+     * ============================================================================
+     * `save()` 抛裸 `UniqueConstraintViolationException` 是它**现有的契约**，
+     * `DoctrineUserRepositoryTest::testRejectsADuplicateEmailHash()` 与
+     * `testRejectsADuplicateNormalisedUsername()` 都钉着它。在 `save()` 里翻译
+     * 会顺手改掉 `uq_users_email_hash` 那条路径的语义 —— 而 email_hash 撞车
+     * 是 T-104 的并发注册问题，与本卡无关，静默变成一个 409 只会让它更难查。
+     *
+     * ============================================================================
+     * 为什么翻译必须发生在仓储里
+     * ============================================================================
+     * deptrac 只允许 `Identity.Infrastructure` 看见 Doctrine，
+     * 所以 Application 层**接不住** `UniqueConstraintViolationException`。
+     * 这个限制是对的：唯一约束的名字是持久层的细节。
+     *
+     * ⚠️ 调用方必须先把别的改动（尤其是尝试计数）flush 掉再调这里 ——
+     * Doctrine 在 flush 失败时会**关闭 EntityManager**，挤在同一次 flush 里的
+     * 改动会一起丢。理由见 `AssignUsernameService` 的类注释。
+     *
+     * @throws \App\Shared\Domain\Error\DomainException `username_taken`（409）——
+     *                                                  `uq_users_username` 冲突。其余唯一约束的冲突原样冒泡
+     */
+    public function saveNewUsername(User $user): void;
+
     public function findById(Uuid $id): ?User;
 
     /**

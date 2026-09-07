@@ -67,6 +67,7 @@ final class LimitEnforcer
         private readonly int $usernameMinChars,
         private readonly int $usernameMaxChars,
         private readonly string $usernamePattern,
+        private readonly int $usernameAttemptsPerUser,
     ) {
     }
 
@@ -87,6 +88,7 @@ final class LimitEnforcer
             SystemLimit::BarcodePayloadBytes => $this->barcodePayloadBytes,
             SystemLimit::NoteChars => $this->noteChars,
             SystemLimit::TitleChars => $this->titleChars,
+            SystemLimit::UsernameAttemptsPerUser => $this->usernameAttemptsPerUser,
         };
     }
 
@@ -140,11 +142,15 @@ final class LimitEnforcer
     }
 
     // ========================================================================
-    // username（§3.8 / §7.5）
+    // username 的**格式**约束（§3.8 / §7.5）
     //
     // 只暴露常量，**不**在这里抛异常：不合规的 username 是 `422 username_invalid`
     // 而不是 `limit_exceeded`（理由见 SystemLimit 的类注释）。
-    // 值对象与校验由 T-107 的 Identity\Domain\ValueObject\Username 负责。
+    // 值对象与校验由 T-107 的 Identity\Domain\ValueObject\Username 负责，
+    // 它经 UsernameRules 读下面这三个访问器。
+    //
+    // ⚠️ username 的第四个常量 —— 10 次总计 —— **不**在这里，它是
+    // SystemLimit::UsernameAttemptsPerUser，走上面的 enforceCanAdd()。
     // ========================================================================
 
     public function usernameMinChars(): int

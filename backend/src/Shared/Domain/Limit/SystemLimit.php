@@ -18,12 +18,16 @@ namespace App\Shared\Domain\Limit;
  * **面向客户端的稳定标识**：与 §6.1 的 code 一样，改名不是向后兼容的变更。
  *
  * ============================================================================
- * ⚠️ username 的三个常量**不在**本枚举里
+ * ⚠️ username 的三个**格式**常量不在本枚举里，但尝试次数在
  * ============================================================================
  * §7.5 的表里有「username 长度 3–20 字符，`[a-z0-9_]`」，但它不合规时的错误码是
  * `422 username_invalid`（§6.1 的专门 code），不是 `limit_exceeded`。
  * 塞进来会让客户端无法区分「名字格式不对，换一个」与「你的额度满了」。
  * 那三个值由 {@see LimitEnforcer} 以只读访问器暴露给 T-107。
+ *
+ * {@see UsernameAttemptsPerUser} 是**另一回事**，所以它在这里：它量的不是
+ * 「名字长什么样」而是「你已经试了几次」，超了就是货真价实的
+ * 「你的额度满了」。客户端要展示的也正是这句话 —— 与下面「每日两项」同一套论证。
  *
  * ============================================================================
  * ⚠️ 「每日」两项是计数，不是速率限制
@@ -46,6 +50,15 @@ enum SystemLimit: string
     case TitleChars = 'title_chars';
 
     /**
+     * `POST /v1/me/username` 的**生命周期**尝试次数（§7.5：10 次总计，T-107）。
+     *
+     * 与上面每一项的区别：它的存量读自 `users.username_attempts` 这一列，
+     * 而且**永不衰减** —— 用尽即永久 `422 limit_exceeded`。
+     * 为什么它不是 429、不在 rate_limiter.yaml 里，见 ADR-0017。
+     */
+    case UsernameAttemptsPerUser = 'username_attempts_per_user';
+
+    /**
      * 这一项量的是什么。
      *
      * ⚠️ `match($this)` **没有 `default` 分支**是刻意的，与 `ErrorCode::httpStatus()`
@@ -56,7 +69,8 @@ enum SystemLimit: string
     {
         return match ($this) {
             self::CardsPerUser, self::MembersPerCard, self::FriendsPerUser,
-            self::FriendRequestsPerDay, self::ShareInvitesPerDay => LimitUnit::Count,
+            self::FriendRequestsPerDay, self::ShareInvitesPerDay,
+            self::UsernameAttemptsPerUser => LimitUnit::Count,
             self::BarcodePayloadBytes => LimitUnit::Bytes,
             self::NoteChars, self::TitleChars => LimitUnit::Characters,
         };

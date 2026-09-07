@@ -71,3 +71,19 @@ parameters:
     ncards.limits.username_min_chars: 3
     ncards.limits.username_max_chars: 20
     ncards.limits.username_pattern: '^[a-z0-9_]{3,20}$'
+
+    # §7.5：`POST /v1/me/username` 按 user **10 次总计**（T-107）。
+    #
+    # ⚠️ 与上面三项**相反** —— 这一条走 `LimitEnforcer::enforceCanAdd()`，
+    # 超了就是 `422 limit_exceeded`，所以它在 SystemLimit 枚举里有 case。
+    # 区别在于它量的不是「名字长什么样」而是「你已经试了几次」，后者是存量。
+    #
+    # ⚠️ §7.5 把这一行印在**速率限制**表里，但它不是滑动窗口，也不返回 429：
+    # 计数永不恢复（成功一次后端点永久 409），而契约强制 429 带 `Retry-After` ——
+    # 只能编一个假秒数让客户端永远退避重试。完整论证见 ADR-0017。
+    # 计数落在 `users.username_attempts` 列上，**不在 Redis**：§8.2 的 ROPA
+    # 规定限流计数只留 24 小时，而这个计数要跨越账号生命周期
+    #（同一条登记在 config/packages/rate_limiter.yaml 的页脚）。
+    ncards.limits.username_attempts_per_user: 10
+
+    # 保留词黑名单不在本文件 —— 词表不是限额，见 config/packages/ncards_username.yaml。
