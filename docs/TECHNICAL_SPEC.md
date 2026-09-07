@@ -690,6 +690,7 @@ Anna App          Backend                              Bob App
 | `email_encrypted` | TEXT | NOT NULL | Vault Transit 密文（`vault:v1:...`），用于发信 |
 | **`username`** | **TEXT** | **UNIQUE, NULL**（见下） | **v1.1 新增**。已归一化的小写值，`^[a-z0-9_]{3,20}$`。**唯一且不可变**，是添加好友的唯一检索键（§3.8）。**明文存储**——它是用户自选的公开伪名，不是个人数据，且必须支持等值查询 |
 | ~~`display_name`~~ | — | — | **v1.1 移除**（C10）。`username` 即用户在全局唯一的展示名与检索名，见下方说明 |
+| **`username_attempts`** | **SMALLINT** | **NOT NULL DEFAULT 0** | **T-107 新增**。`POST /v1/me/username` 已被打过几次（§7.5：10 次总计）。**生命周期计数**，不是滑动窗口 —— §8.2 的 ROPA 把 Redis 限流计数的保留期定为 24 小时，而这个计数要跨越整个账号生命周期，见 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md) |
 | `locale` | TEXT | NOT NULL DEFAULT 'de' | `de` / `en` |
 | `status` | TEXT | NOT NULL DEFAULT 'active' | `active` / `pending_deletion` |
 | `deletion_requested_at` | TIMESTAMPTZ | NULL | 宽限期起点 |
@@ -1571,7 +1572,8 @@ Bob:  【选择接受或拒绝】
 | barcode payload 长度 | 1024 字节 | 覆盖 PDF417/QR 的实际上限 |
 | note 长度 | 2000 字符 | |
 | title 长度 | 100 字符 | |
-| **username 长度** | **3–20 字符，`[a-z0-9_]`** | §3.8 |
+| **username 长度** | **3–20 字符，`[a-z0-9_]`** | §3.8。⚠️ 不合规是 `422 username_invalid`（专门的 code），**不是** `limit_exceeded` |
+| **`POST /v1/me/username` 每用户设定尝试** | **10 次总计** | v1.1 曾把这一行印在下面的速率表里。**T-107 改归此表**：它没有窗口长度也永不恢复，是存量上限而不是速率，所以返回 `422 limit_exceeded`——429 会强迫编一个假的 `Retry-After`，客户端照着退避并永远失败。计数落在 `users.username_attempts` 列上（Redis 存不下跨账号生命周期的计数，§8.2）。⚠️ 只有**走到唯一性检查**的请求消耗它：`username_invalid` 与 `username_immutable` 都不消耗，否则客户端预校验的一个 bug 就能把账号永久钉死在 onboarding。见 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md) |
 | 每用户每日发出好友请求 | 50 | 防骚扰 |
 | 每用户每日发出共享邀请 | 100 | |
 | ~~每用户每日给未注册邮箱的邀请~~ | **已删除** | v1.1 取消邮箱邀请（C2），该能力不复存在 |
@@ -1590,7 +1592,7 @@ Bob:  【选择接受或拒绝】
 | `GET /v1/sync` | device | 60/min |
 | **`GET /v1/users/lookup`** | **user** | **30/min，300/day**（v1.1，抑制 username 枚举 T18） |
 | **`GET /v1/users/lookup`** | **IP** | **100/h**（覆盖多账号协同枚举） |
-| **`POST /v1/me/username`** | **user** | **10 次总计**（用于试探占用情况；成功一次后该端点永久 409） |
+| ~~`POST /v1/me/username`~~ | ~~user~~ | **已移入上面的限额表**（T-107）。它不是滑动窗口，也不返回 429 —— 见那一行与 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md)。`POST /auth/otp/verify` 的「challenge_id 5 次总计」出于同一个理由也是持久层计数（`otp_challenges.attempts`），只是它的失败码本来就是 401 |
 | 全部写接口 | user | 300/min |
 | 全局 | 邮件外发总量 | 阈值告警 + 熔断（保留 OTP） |
 
@@ -2452,6 +2454,12 @@ CREATE TABLE users (
   email_encrypted       TEXT  NOT NULL,
   username              TEXT  UNIQUE                      -- 可空：注册中间态，见 §5.2
                           CHECK (username ~ '^[a-z0-9_]{3,20}$'),
+  -- T-107：§7.5 的「POST /v1/me/username 按 user 10 次总计」。**生命周期计数**，
+  -- 不是滑动窗口，所以它在这张表上而不在 Redis —— §8.2 的 ROPA 规定限流计数
+  -- 只保留 24 小时，而这个计数要跨越整个账号生命周期。见 ADR-0017。
+  -- ⚠️ 刻意不加 CHECK：上限 10 是策略，真相在
+  --    %ncards.limits.username_attempts_per_user%；写进库层会让改数字要发两次。
+  username_attempts     SMALLINT NOT NULL DEFAULT 0,
   -- v1.1：无 display_name 列（C10），username 即唯一展示名
   locale                TEXT  NOT NULL DEFAULT 'de' CHECK (locale IN ('de','en')),
   status                TEXT  NOT NULL DEFAULT 'active'
@@ -2743,7 +2751,7 @@ path "auth/token/renew-self"         { capabilities = ["update"] }
 | ~~Q6~~ | ~~Vault unseal 方案（人工 vs 外部 KMS auto-unseal）~~ | **已决（2026-08-28）：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭。见 [ADR-0004](adr/0004-manual-vault-unseal.md) 与 [`docs/runbooks/vault-unseal.md`](runbooks/vault-unseal.md)** | 技术负责人 | ✅ M0 |
 | Q7 | 卡片调色板的具体色值（需满足 4.5:1 对比度） | 设计交付 | 设计 | M1 |
 | Q8 | 是否上架 F-Droid（会与 ML Kit/FCM 冲突） | 一期不上 | 创始人 | M4 |
-| Q9 | username 保留词黑名单的最终清单（德语场景需补 `impressum`、`hilfe`、`konto` 等） | 由技术负责人起草，产品确认 | 产品 | M1 结束 |
+| Q9 | username 保留词黑名单的最终清单（德语场景需补 `impressum`、`hilfe`、`konto` 等） | **草案已交付（2026-09-07，T-107），待产品确认**：12 个词，见 `backend/config/packages/ncards_username.yaml` —— §3.8 的九个通用词 + 德语场景的 `impressum` / `hilfe` / `konto`。**精确匹配**，不做前缀/子串/变体（论证见 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md) 决定五）。确认后改配置里的一行即可，代码不用动。⚠️ 加词要写**机器读形态**：`n-cards` 这种带连字符的写法过不了字符集，会成为一条永远匹配不到任何输入的死规则（`UsernameRulesTest` 会拦下来） | 产品 | M1 结束 |
 | Q10 | 用户强烈要求改 username 时的人工处理口径（拒绝 / DBA 手工改 / 引导注销重注册） | **一期一律拒绝并引导注销重注册**，不开人工通道（开了就会有第二个）。注意 C10 后已无 `display_name` 作为退路，此口径需在 FAQ 写清 | 产品 | M3 |
 | Q11 | 共享卡在 viewer 侧是否计入其"每用户卡数 500"限额 | **不计入**（限额针对自有卡；否则 owner 可通过共享消耗他人配额，是一种滥用面） | 后端负责人 | M3 |
 

@@ -64,6 +64,20 @@
         -->
         <field name="username" type="text" column="username" nullable="true"/>
 
+        <!--
+            §7.5 的「10 次总计」（T-107）。生命周期计数，不是滑动窗口 ——
+            为什么不在 Redis 里，见 User 实体上这个属性的注释与 ADR-0017。
+
+            ⚠️ DEFAULT 0 必须在这里声明一遍：Comparator 比的是
+            getColumnDeclarationSQL() 的字符串相等，DEFAULT 也在那串里。
+            漏了的话 schema:validate 会报「不同步」，而迁移本身是对的。
+        -->
+        <field name="usernameAttempts" type="smallint" column="username_attempts" nullable="false">
+            <options>
+                <option name="default">0</option>
+            </options>
+        </field>
+
         <field name="locale" type="text" column="locale" nullable="false"
                enum-type="App\Module\Identity\Domain\ValueObject\Locale">
             <options>

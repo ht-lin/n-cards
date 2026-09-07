@@ -7,6 +7,8 @@ namespace App\Tests\Double\Identity;
 use App\Module\Identity\Domain\Entity\User;
 use App\Module\Identity\Domain\Repository\UserRepositoryInterface;
 use App\Shared\Domain\Crypto\HashDigest;
+use App\Shared\Domain\Error\DomainException;
+use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Domain\Identity\Uuid;
 
 /**
@@ -25,12 +27,88 @@ final class InMemoryUserRepository implements UserRepositoryInterface
 
     private int $findByEmailHashCalls = 0;
 
+    /** @var list<string> 方法调用顺序，见 {@see calls()} */
+    private array $calls = [];
+
+    /**
+     * 预查放行、写入时才撞车的那个名字（T-107）。
+     *
+     * @see failSaveNewUsernameFor()
+     */
+    private ?string $racingUsername = null;
+
     public function __construct(User ...$users)
     {
         $this->users = array_values($users);
     }
 
+    /**
+     * 让 {@see saveNewUsername()} 对这个名字**无条件**抛 `username_taken`，
+     * 即使 `findByUsername()` 刚刚说它是空的。
+     *
+     * 模拟的是真库上 `uq_users_username` 的并发路径：两个请求同时通过预查，
+     * 后一个在 INSERT 时才撞上唯一索引。没有这个开关的话，那条分支
+     * （`AssignUsernameService` 里 `saveNewUsername()` 外面那个 try）
+     * 在单测里够不着。
+     */
+    public function failSaveNewUsernameFor(string $username): void
+    {
+        $this->racingUsername = $username;
+    }
+
+    /**
+     * 方法调用顺序。
+     *
+     * T-107 用它钉住「尝试计数必须在查重**之前**落库」：真库上 Doctrine 会在
+     * flush 失败时关掉 EntityManager，两者挤进同一次 flush 的话，撞唯一约束
+     * 那一路的计数会被一起丢掉，而那恰好是唯一真正在试探占用情况的那条路径。
+     * 顺序之外没有别的东西能表达这条约束。
+     *
+     * @return list<string>
+     */
+    public function calls(): array
+    {
+        return $this->calls;
+    }
+
     public function save(User $user): void
+    {
+        $this->calls[] = 'save';
+
+        $this->upsert($user);
+    }
+
+    /**
+     * 真库那边靠 `uq_users_username` 兜底，这里手工模拟同一条：**别人**已经占了
+     * 同一个归一化值时抛 `username_taken`（T-107）。
+     *
+     * ⚠️ 必须比对 id 排除自己 —— upsert 的语义下，一个刚在内存里被
+     * `assignUsername()` 过的用户此刻已经在 `$this->users` 里带着那个名字了，
+     * 不排除的话每一次正常的设定都会撞上自己。
+     */
+    public function saveNewUsername(User $user): void
+    {
+        $this->calls[] = 'saveNewUsername';
+
+        $username = $user->username();
+
+        if (null !== $username && $username === $this->racingUsername) {
+            throw new DomainException(ErrorCode::UsernameTaken, 'The username is already taken.');
+        }
+
+        foreach ($this->users as $existing) {
+            if (null !== $username
+                && $existing->username() === $username
+                && !$existing->id()->equals($user->id())
+            ) {
+                throw new DomainException(ErrorCode::UsernameTaken, 'The username is already taken.');
+            }
+        }
+
+        $this->upsert($user);
+    }
+
+    private function upsert(User $user): void
     {
         foreach ($this->users as $index => $existing) {
             if ($existing->id()->equals($user->id())) {
@@ -45,6 +123,8 @@ final class InMemoryUserRepository implements UserRepositoryInterface
 
     public function findById(Uuid $id): ?User
     {
+        $this->calls[] = 'findById';
+
         foreach ($this->users as $user) {
             if ($user->id()->equals($id)) {
                 return $user;
@@ -69,6 +149,8 @@ final class InMemoryUserRepository implements UserRepositoryInterface
 
     public function findByUsername(string $normalized): ?User
     {
+        $this->calls[] = 'findByUsername';
+
         foreach ($this->users as $user) {
             if ($user->username() === $normalized) {
                 return $user;

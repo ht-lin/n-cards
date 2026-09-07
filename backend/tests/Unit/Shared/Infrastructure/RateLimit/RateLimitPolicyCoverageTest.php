@@ -72,7 +72,11 @@ final class RateLimitPolicyCoverageTest extends TestCase
      */
     private const NOT_RATE_LIMITED = [
         'POST /auth/otp/verify challenge_id 5 次总计' => 'otp_challenges.attempts 列（T-104）',
-        'POST /v1/me/username user 10 次总计' => 'users 行上的计数（T-107）',
+        // ✅ T-107 已落地：`users.username_attempts` 列（Version20260907170000）。
+        // 顺带一提，§7.5 的那一行现在已经**移进限额表**了 —— 它返回
+        // 422 limit_exceeded 而不是 429（429 会强迫编一个假的 Retry-After，
+        // 而这个计数永不恢复）。所以它不在本文件里有双重理由，见 ADR-0017。
+        'POST /v1/me/username user 10 次总计' => 'users.username_attempts 列（T-107）',
         '全局邮件外发总量' => '§14.4 的阈值告警 + 熔断，不是 per-subject 限流',
     ];
 

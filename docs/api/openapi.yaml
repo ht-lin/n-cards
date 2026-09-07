@@ -388,6 +388,91 @@ paths:
   # ⚠️ 三个端点对「不存在的设备」与「别人的设备」返回**同一个 404**，不是 403。
   # `devices.id` 由客户端生成、不是凭据，403 等于确认「这个 id 存在，只是不是你的」——
   # 而那是一条现成的存在性信道。
+
+  # --------------------------------------------------------------------------
+  # ⚠️ 本组里**只有 POST /me/username 一个写 username 的操作**，而且必须一直如此。
+  #
+  # §3.8 的「可变性」那一行写着：username 不可变，设定后**无 API 可修改**。
+  # 这份契约就是那条产品不变量的强制点 —— 加一个 PATCH/PUT /me/username，
+  # 或者让 PATCH /me 接受 username 字段，都等于把它删掉。
+  # 要动之前先读 §17.5 的 Q10（一期一律拒绝改名，不开人工通道）。
+  # --------------------------------------------------------------------------
+  /me/username:
+    post:
+      tags: [me]
+      operationId: setUsername
+      summary: 一次性设定 username
+      description: |
+        注册流程的**最后一步**，也是 `onboarding_incomplete` 状态唯一的出口
+        （§5.2）：`POST /auth/otp/verify` 成功即建行，但那一行的 `username` 是
+        `null`，在设定之前所有其他 `/v1` 端点都返回 `403 username_required`。
+
+        **一次性写入。** 已经设过了 → `409 username_immutable`（**不静默忽略**）。
+        没有 `PATCH` / `PUT` 对应端点，不可变性就是靠这一点保证的。
+
+        客户端**必须**在发送前做 `trim` + `lowercase(Locale.ROOT)` 归一化，
+        并且**必须**用二次确认对话框（`Dieser Name kann später nicht geändert
+        werden.`）—— 这是本产品为数不多的不可逆操作之一，与删号同级（§3.8）。
+        设定页还必须提示「其他人可通过该名字找到你，请勿使用真实姓名或邮箱」。
+
+        三种失败要分开处理，别合并成一句「出错了」：
+
+        | code | 状态 | UI 该做什么 |
+        |---|---|---|
+        | `username_invalid` | 422 | 输入框下标红，让用户改（长度 / 字符集 / 保留词） |
+        | `username_taken` | 409 | 同上，文案是「这个名字已经有人用了」 |
+        | `username_immutable` | 409 | **不是**输入错误：本机状态过期了，重新拉 `GET /me` |
+        | `limit_exceeded` | 422 | 次数用尽，见下 |
+
+        ⚠️ **`422 limit_exceeded` 是终局，不是「稍后再试」。** §7.5 给这个端点的
+        配额是按 user **10 次总计**的生命周期计数（不是滑动窗口，`Retry-After`
+        不适用，所以它不是 429）。只有真正查了占用情况的请求才消耗次数 ——
+        `username_invalid` 与 `username_immutable` 都不消耗。详见 ADR-0017。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsernameAssignment' }
+            example:
+              username: anna_b
+      responses:
+        '200':
+          description: |
+            已设定。响应里的 `user.onboarding_complete` 恒为 `true` ——
+            客户端据此离开设定页。
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                required: [user]
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+              example:
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: anna_b
+                  locale: de
+                  onboarding_complete: true
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
   /me/devices:
     get:
       tags: [me]
@@ -1484,6 +1569,27 @@ components:
         不可变是靠「**没有修改端点**」保证的：只有一次性的 `POST /me/username`，
         没有 `PATCH` / `PUT` 对应端点。
       example: anna_b
+
+    UsernameAssignment:
+      type: object
+      additionalProperties: true
+      required: [username]
+      description: |
+        `POST /me/username` 的请求体。**唯一**的字段。
+
+        ⚠️ 服务端会再做一次 `trim` + 小写化 —— 客户端的归一化是为了让用户在
+        输入框里就看到最终形态，不是服务端可以省掉那一步的理由（§3.8：
+        「客户端与服务端均对输入 `trim` + `toLowerCase`」）。
+
+        ⚠️ `additionalProperties: true` 是全仓库的约定（§13.6 允许新增字段），
+        但这个端点在**运行时**会把未知字段拒成 `400 validation_failed`
+        + `errors[].code = unknown_field`：请求体只有一个字段，多出来的东西
+        只可能是客户端 bug，而在一个一生只调一次的端点上静默忽略它，
+        意味着那个 bug 永远不会被发现。
+      properties:
+        username: { $ref: '#/components/schemas/Username' }
+      examples:
+        - username: anna_b
 
     User:
       type: object

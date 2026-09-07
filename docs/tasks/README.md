@@ -59,7 +59,7 @@ T-301 Friendship ─► T-303 级联撤销 ◄─ T-304/305 共享（同事务�
 | ~~Q6~~ | ~~Vault unseal 方案~~ | ✅ **已决**：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭（[ADR-0004](../adr/0004-manual-vault-unseal.md)） | ~~T-005~~, T-406 | ✅ M0 |
 | Q7 | 卡片调色板色值（≥ 4.5:1） | 设计交付 | T-153 | M1 |
 | Q8 | 是否上架 F-Droid | 不上 | T-454 | M4 |
-| Q9 | username 保留词最终清单 | 技术负责人起草 | T-107 | M1 |
+| Q9 | username 保留词最终清单 | 🟡 **草案已交付（T-107，2026-09-07），待产品确认**：12 个词，精确匹配，在 `backend/config/packages/ncards_username.yaml`。不阻塞任何任务 —— 确认后改配置里的一行（[ADR-0017](../adr/0017-username-assignment-and-lifetime-attempt-counter.md) 决定五） | ~~T-107~~ | M1 |
 | Q10 | 改名诉求的人工口径 | 一律拒绝，引导注销重注册 | T-450 | M3 |
 | Q11 | 共享卡是否计入 viewer 的 500 卡限额 | **不计入** | T-111 | M3 |
 

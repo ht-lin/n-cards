@@ -101,6 +101,45 @@ final class IdentitySchemaTest extends KernelTestCase
     }
 
     /**
+     * `users.username_attempts`（T-107）——§7.5 的「10 次总计」落在这一列上。
+     *
+     * ⚠️ 默认值必须是 0 而不是 NULL：既有行（T-101 建的）不做回填，
+     * 旧版本的代码（不知道这一列）照常 INSERT 也不能失败 —— 这是这次变更
+     * 满足 §13.5 expand–contract、因而只发一次的**全部**理由。
+     */
+    public function testUsernameAttemptsDefaultsToZero(): void
+    {
+        $this->insertUser('anna');
+
+        self::assertSame(
+            0,
+            (int) $this->connection->fetchOne('SELECT username_attempts FROM users WHERE username IS NULL'),
+        );
+    }
+
+    /**
+     * ⚠️ 刻意**没有** `CHECK (username_attempts BETWEEN 0 AND 10)`。
+     *
+     * §17.1 的口径是只有三列（username / locale / status）带 CHECK ——
+     * 它们的值域是契约的一部分。这一列是内部计数：把 10 写进库层意味着改 §7.5
+     * 的数字要发两次（先改 CHECK 再改配置），而反过来的顺序会让新值被库层拒掉。
+     * 上限的真相只在 `%ncards.limits.username_attempts_per_user%` 一处。
+     *
+     * 这条用例把那个决定钉住 —— 有人「顺手补个 CHECK」时它会红。
+     */
+    public function testUsernameAttemptsHasNoCheckConstraint(): void
+    {
+        $this->insertUser('anna');
+
+        $this->connection->executeStatement('UPDATE users SET username_attempts = 999');
+
+        self::assertSame(
+            999,
+            (int) $this->connection->fetchOne('SELECT username_attempts FROM users'),
+        );
+    }
+
+    /**
      * §17.1 的 CHECK 是**第二道防线**：即使应用层（T-107 的 Username 值对象）有 bug，
      * 也绝不会写入大写或非法字符。
      *

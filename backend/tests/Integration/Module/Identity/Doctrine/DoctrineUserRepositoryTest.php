@@ -10,6 +10,8 @@ use App\Module\Identity\Domain\ValueObject\Locale;
 use App\Module\Identity\Domain\ValueObject\UserStatus;
 use App\Module\Identity\Infrastructure\Doctrine\DoctrineUserRepository;
 use App\Shared\Domain\Crypto\HashDigest;
+use App\Shared\Domain\Error\DomainException;
+use App\Shared\Domain\Error\ErrorCode;
 use App\Tests\Double\Identity\IdentityEntities;
 use App\Tests\Integration\Support\RequiresIdentitySchema;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
@@ -176,6 +178,94 @@ final class DoctrineUserRepositoryTest extends KernelTestCase
         $second = IdentityEntities::user(IdentityEntities::id(2), IdentityEntities::digest('bea'));
         // T-107 的值对象会把 "Anna_B " 归一化成这个；这里直接给归一化后的形态。
         $second->assignUsername(strtolower(trim('Anna_B ')), IdentityEntities::now());
+
+        $this->expectException(UniqueConstraintViolationException::class);
+
+        $this->repository->save($second);
+    }
+
+    // ========================================================================
+    // saveNewUsername()：把 uq_users_username 翻译成 409（T-107）
+    // ========================================================================
+
+    public function testSaveNewUsernamePersistsTheNameAndTheAttemptCounter(): void
+    {
+        $user = IdentityEntities::user();
+        $user->recordUsernameAttempt(10);
+        $user->assignUsername('anna_b', IdentityEntities::now());
+
+        $this->repository->saveNewUsername($user);
+        $this->entityManager->clear();
+
+        $reloaded = $this->repository->findById($user->id());
+
+        self::assertInstanceOf(User::class, $reloaded);
+        self::assertSame('anna_b', $reloaded->username());
+        self::assertSame(1, $reloaded->usernameAttempts());
+    }
+
+    /**
+     * ⚠️ 这是 T-107 真正的防线：`findByUsername()` 预查有 TOCTOU，
+     * 两个并发请求可以同时通过它，唯一索引才是最后拦下来的那一道。
+     *
+     * 而**翻译**必须发生在仓储里 —— deptrac 只允许 Infrastructure 看见 Doctrine，
+     * Application 层接不住 `UniqueConstraintViolationException`。
+     */
+    public function testSaveNewUsernameTranslatesADuplicateIntoUsernameTaken(): void
+    {
+        $first = IdentityEntities::user(IdentityEntities::id(1), IdentityEntities::digest('anna'));
+        $first->assignUsername('anna_b', IdentityEntities::now());
+        $this->repository->save($first);
+
+        $second = IdentityEntities::user(IdentityEntities::id(2), IdentityEntities::digest('bea'));
+        $second->assignUsername('anna_b', IdentityEntities::now());
+
+        try {
+            $this->repository->saveNewUsername($second);
+            self::fail('Expected DomainException.');
+        } catch (DomainException $e) {
+            self::assertSame(ErrorCode::UsernameTaken, $e->errorCode());
+            self::assertSame(409, $e->errorCode()->httpStatus());
+            // detail 里**不放**那个 username（§3.8-C4）—— 它会进日志与 Sentry。
+            self::assertStringNotContainsString('anna_b', $e->detail());
+            // 原异常仍挂在 previous 上供日志取用。
+            self::assertInstanceOf(UniqueConstraintViolationException::class, $e->getPrevious());
+        }
+    }
+
+    /**
+     * ⚠️ **只翻译 `uq_users_username`。** `uq_users_email_hash` 的冲突是
+     * T-104 的并发注册问题，与本卡无关 —— 翻成一个 409 只会让它更难查，
+     * 所以它必须原样冒泡（在 Http 层变成 500）。
+     */
+    public function testSaveNewUsernameDoesNotSwallowOtherUniqueViolations(): void
+    {
+        $hash = IdentityEntities::digest('anna');
+        $this->repository->save(IdentityEntities::user(IdentityEntities::id(1), $hash));
+
+        $collidingOnEmail = IdentityEntities::user(IdentityEntities::id(2), $hash);
+        $collidingOnEmail->assignUsername('anna_b', IdentityEntities::now());
+
+        $this->expectException(UniqueConstraintViolationException::class);
+
+        $this->repository->saveNewUsername($collidingOnEmail);
+    }
+
+    /**
+     * `save()` 的既有契约不变 —— 它仍然抛裸异常。
+     *
+     * 上面 `testRejectsADuplicateNormalisedUsername()` 已经断言了这一点；
+     * 这条从反面再钉一次：翻译是 `saveNewUsername()` **独有**的行为，
+     * 有人图省事把 try/catch 挪进 `save()` 时两边一起红。
+     */
+    public function testSaveStillThrowsTheRawDriverException(): void
+    {
+        $first = IdentityEntities::user(IdentityEntities::id(1), IdentityEntities::digest('anna'));
+        $first->assignUsername('anna_b', IdentityEntities::now());
+        $this->repository->save($first);
+
+        $second = IdentityEntities::user(IdentityEntities::id(2), IdentityEntities::digest('bea'));
+        $second->assignUsername('anna_b', IdentityEntities::now());
 
         $this->expectException(UniqueConstraintViolationException::class);
 

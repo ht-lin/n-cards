@@ -76,4 +76,5 @@
 | [0014](0014-otp-always-sends-a-code.md) | OTP 请求对**任意**邮箱都真发码，取消 decoy challenge —— 否则不存在任何注册路径 | Accepted |
 | [0015](0015-access-token-verification.md) | Access token 验签：`alg` 白名单、按 `kid` 选密钥、「验两把签一把」、不做黑名单、免鉴权白名单按路由名 | Accepted |
 | [0016](0016-magic-link-delivery-and-landing-page.md) | Magic Link 与验证码同一封信（退休一份模板）、落地页是 Caddy 上的静态文件、消费由 App 发起且不做耗时填充 | Accepted |
+| [0017](0017-username-assignment-and-lifetime-attempt-counter.md) | username 的 10 次总计落在 `users` 新增一列上、用尽返回 422 而非 429、只有「探到占用」的请求消耗它；**Q9 起草**为 12 个词的精确匹配黑名单 | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。

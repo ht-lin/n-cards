@@ -53,6 +53,16 @@ class User
 {
     private ?string $username = null;
 
+    /**
+     * `POST /v1/me/username` 已经被这个用户打过几次（§7.5：10 次总计，T-107）。
+     *
+     * ⚠️ 它是**账号生命周期**的计数，不是滑动窗口，所以它在这张表上而不在 Redis：
+     * §8.2 的 ROPA 规定限流计数只保留 24 小时，而这个计数必须跨越整个账号生命周期
+     *（`config/packages/rate_limiter.yaml` 的页脚逐字登记了这条豁免）。
+     * 完整论证与它为什么返回 422 而不是 429，见 ADR-0017。
+     */
+    private int $usernameAttempts = 0;
+
     private UserStatus $status;
 
     private ?\DateTimeImmutable $deletionRequestedAt = null;
@@ -150,6 +160,38 @@ class User
 
         $this->username = $normalized;
         $this->updatedAt = $now;
+    }
+
+    /**
+     * 已用掉的设定次数（§7.5：10 次总计）。
+     */
+    public function usernameAttempts(): int
+    {
+        return $this->usernameAttempts;
+    }
+
+    /**
+     * 记一次设定尝试。
+     *
+     * 形状照抄 {@see OtpChallenge::recordAttempt()}：
+     * 到上限为止**饱和**，不无限累加。
+     * 调用方（T-107 的 `AssignUsernameService`）会先 `enforceCanAdd()` 再调这里，
+     * 所以饱和分支正常情况下走不到 —— 它防的是「有人日后加了第二个调用点却忘了先检查」，
+     * 那时的后果是计数溢出 SMALLINT，而不是一个能被看见的错误。
+     *
+     * ⚠️ **不是每个请求都调这里。** 格式非法（422）与已设过（409）都不消耗次数：
+     * §7.5 给这条限流的理由是「用于试探占用情况」，而一个格式非法的名字探不到
+     * 任何占用。反过来，把 422 也计数意味着客户端本地校验的一个 bug 能在 10 次内
+     * 把用户永久钉死在 onboarding（username 不可变，且没有第二条出路）。见 ADR-0017。
+     *
+     * @param int $max §7.5 的上限（10）。**由调用方传入**：这个数字是策略不是不变量，
+     *                 真相在 `%ncards.limits.username_attempts_per_user%`
+     */
+    public function recordUsernameAttempt(int $max): void
+    {
+        if ($this->usernameAttempts < $max) {
+            ++$this->usernameAttempts;
+        }
     }
 
     public function locale(): Locale

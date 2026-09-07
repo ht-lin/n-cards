@@ -7,7 +7,10 @@ namespace App\Module\Identity\Infrastructure\Doctrine;
 use App\Module\Identity\Domain\Entity\User;
 use App\Module\Identity\Domain\Repository\UserRepositoryInterface;
 use App\Shared\Domain\Crypto\HashDigest;
+use App\Shared\Domain\Error\DomainException;
+use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Domain\Identity\Uuid;
+use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -35,6 +38,13 @@ use Doctrine\ORM\EntityManagerInterface;
  */
 final readonly class DoctrineUserRepository implements UserRepositoryInterface
 {
+    /**
+     * `uq_users_username` 的名字，与 `Version20260905101500` 和 `User.orm.xml`
+     * 里的那个必须逐字相同。三处已经因为 `schema:validate` 绑在一起了，
+     * 这里是第四处 —— 改名时 `DoctrineUserRepositoryTest` 会红。
+     */
+    private const USERNAME_CONSTRAINT = 'uq_users_username';
+
     public function __construct(private EntityManagerInterface $entityManager)
     {
     }
@@ -43,6 +53,34 @@ final readonly class DoctrineUserRepository implements UserRepositoryInterface
     {
         $this->entityManager->persist($user);
         $this->entityManager->flush();
+    }
+
+    /**
+     * ⚠️ 匹配的是**约束名**而不是异常类型：`UniqueConstraintViolationException`
+     * 在这张表上有两个来源（`uq_users_email_hash` 与 `uq_users_username`），
+     * 而只有后者是一个可以告诉用户的业务结果。前者是并发注册撞车（T-104 的事），
+     * 翻成 409 只会把它变成一个查不出来的问题，所以原样冒泡成 500。
+     *
+     * 约束名从异常消息里认 —— DBAL 没有把它提升成结构化字段，
+     * `getPrevious()` 拿到的 PDOException 也只有一样的字符串。
+     * `DoctrineUserRepositoryTest` 对着真库跑这两条分支，
+     * 所以「哪天 DBAL 改了消息格式」会在 CI 上现形，而不是在生产里。
+     */
+    public function saveNewUsername(User $user): void
+    {
+        try {
+            $this->entityManager->persist($user);
+            $this->entityManager->flush();
+        } catch (UniqueConstraintViolationException $e) {
+            if (!str_contains($e->getMessage(), self::USERNAME_CONSTRAINT)) {
+                throw $e;
+            }
+
+            // detail 里**不放**那个 username：§3.8-C4 已经为同一个理由把 problem
+            // 的 `instance` 从 getRequestUri() 收敛成了 getPathInfo()，
+            // 而 detail 会进日志与 Sentry。原异常挂在 previous 上供日志取用。
+            throw new DomainException(ErrorCode::UsernameTaken, 'The username is already taken.', [], [], $e);
+        }
     }
 
     public function findById(Uuid $id): ?User
