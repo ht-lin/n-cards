@@ -8,6 +8,7 @@ use App\Shared\Infrastructure\Http\ApiProblemExceptionListener;
 use App\Shared\Infrastructure\Http\AuthenticationListener;
 use App\Shared\Infrastructure\Http\ClientVersionListener;
 use App\Shared\Infrastructure\Http\IdempotencyMiddleware;
+use App\Shared\Infrastructure\Http\OnboardingListener;
 use App\Shared\Infrastructure\Http\RateLimitListener;
 use App\Shared\Infrastructure\Http\RequestIdListener;
 use PHPUnit\Framework\Attributes\CoversNothing;
@@ -16,7 +17,7 @@ use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
- * 把五个横切监听器的**相对顺序**从注释变成契约。
+ * 把六个横切监听器的**相对顺序**从注释变成契约。
  *
  * ============================================================================
  * 为什么需要这个测试
@@ -29,6 +30,8 @@ use Symfony\Component\HttpKernel\KernelEvents;
  *   - IdempotencyMiddleware 必须晚于 RouterListener，否则 `POST /v1/typo` 会白烧一个键
  *   - AuthenticationListener 必须早于限流与幂等，否则两者都认不出用户，
  *     §7.5 的「user 300/min」退化成按 IP，而幂等键会跨用户共用一个命名空间
+ *   - OnboardingListener 必须晚于 AuthenticationListener，否则它读不到 AuthContext
+ *     而直接 return —— §5.2 的状态机**全站静默失效**，且所有功能测试照常绿
  *   - ApiProblemExceptionListener 必须早于 ErrorListener 的两个回调（见它的类注释）
  *
  * 随手改一个数字，功能测试大概率还是绿的 —— 只有这里会红。
@@ -136,7 +139,7 @@ final class ListenerOrderTest extends KernelTestCase
     }
 
     /**
-     * 也早于我们自己另外三个 —— 它们抛的 400/409/422 都必须可追踪。
+     * 也早于我们自己另外四个 —— 它们抛的 400/403/409/422 都必须可追踪。
      */
     public function testRequestIdRunsBeforeOurOtherListeners(): void
     {
@@ -144,6 +147,7 @@ final class ListenerOrderTest extends KernelTestCase
             ClientVersionListener::class.'::onRequest',
             AuthenticationListener::class.'::onRequest',
             RateLimitListener::class.'::onRequest',
+            OnboardingListener::class.'::onRequest',
             IdempotencyMiddleware::class.'::onRequest',
         ];
 
@@ -285,6 +289,56 @@ final class ListenerOrderTest extends KernelTestCase
         self::assertRunsBefore(
             ClientVersionListener::class.'::onRequest',
             RateLimitListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️⚠️ T-108：OnboardingListener **晚于** AuthenticationListener。这条是承重的。
+     *
+     * 它按路由名豁免（要 `_route`）、按 `AuthContext` 判定用户状态，两样都由
+     * AuthenticationListener 写下。反过来排的话它每次都读到 `null` 并直接 return
+     * —— 也就是**全站静默放行**：§5.2 的状态机形同虚设，而所有功能测试照常绿
+     * （它们用的都是已完成 onboarding 的账号）。
+     */
+    public function testOnboardingRunsAfterAuthentication(): void
+    {
+        self::assertRunsBefore(
+            AuthenticationListener::class.'::onRequest',
+            OnboardingListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️ T-108：OnboardingListener **晚于** RateLimitListener。
+     *
+     * 它是唯一一个每个受管请求都**查一次库**的横切监听器（另外那些刻意排在
+     * 限流前面的检查——`/v1/typo` 的 404、缺 X-Client 的 400——都不碰后端）。
+     * 排在限流前面等于给一个持 token 的客户端开一条不受 §7.5「user 300/min」
+     * 约束的 DB 往返：一个 403 重试循环就成了对 Postgres 的放大器。
+     */
+    public function testOnboardingRunsAfterRateLimiting(): void
+    {
+        self::assertRunsBefore(
+            RateLimitListener::class.'::onRequest',
+            OnboardingListener::class.'::onRequest',
+            KernelEvents::REQUEST,
+        );
+    }
+
+    /**
+     * ⚠️ T-108：OnboardingListener **早于** IdempotencyMiddleware。
+     *
+     * 一个注定 `403 username_required` 的 POST 不该白烧一个幂等键，
+     * 更不该占下 60 秒的在途锁让客户端下次重试撞上 `409 idempotency_in_progress`。
+     * 与上面 `testRateLimitRunsBeforeIdempotency()` 是同一条论证。
+     */
+    public function testOnboardingRunsBeforeIdempotency(): void
+    {
+        self::assertRunsBefore(
+            OnboardingListener::class.'::onRequest',
+            IdempotencyMiddleware::class.'::onRequest',
             KernelEvents::REQUEST,
         );
     }

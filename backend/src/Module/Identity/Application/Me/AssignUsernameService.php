@@ -34,9 +34,15 @@ use App\Shared\Domain\Time\ClockInterface;
  * 保证它的是两件结构性的事实：
  *   1. 契约里**没有** `PATCH` / `PUT /v1/me/username`（§6.2 逐字写了这句）；
  *   2. {@see User::assignUsername()} 在 `username` 已非空时抛 `username_immutable`，
- *      于是任何日后新增的写入路径（比如 T-108 的 `PATCH /v1/me` 收到 username 字段）
- *      都会撞上同一条不变量，不需要各自记得判断。
+ *      所以经由本服务的每一条路径都会撞上同一条不变量。
  * 本类下面第 2 步的显式检查是为了**不白白消耗**一次尝试次数，不是防线本身。
+ *
+ * ⚠️ 第 2 条**不覆盖** `PATCH /v1/me`（T-108）。那个端点收到 `username` 字段时
+ * 在 {@see ProfileUpdatePayload::fromArray()} 的第一行就抛了，**没有**走到实体 ——
+ * 因为 `assignUsername()` 对一个尚未设过 username 的调用者会真的把值写进去，
+ * 绕过校验、查重与本服务的 10 次计数。换句话说：那条不变量只保护
+ * **已经设过 username 的人**，靠它来兜住一个新的写入路径是不成立的 ——
+ * 正确的做法是根本不新增写入路径。完整论证见 ADR-0018 决定五。
  *
  * ============================================================================
  * ⚠️ 顺序不是随便排的：哪些失败消耗 10 次预算
@@ -100,7 +106,7 @@ final readonly class AssignUsernameService
         if ($user->hasUsername()) {
             $this->metrics->counter('username_set_total', ['result' => 'immutable']);
 
-            throw new DomainException(ErrorCode::UsernameImmutable, 'The username has already been set and cannot be changed.');
+            throw new DomainException(ErrorCode::UsernameImmutable, User::USERNAME_IMMUTABLE_DETAIL);
         }
 
         // ② 归一化 + 校验 —— 不消耗次数。抛 422 username_invalid。

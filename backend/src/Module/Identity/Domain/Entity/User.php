@@ -51,6 +51,24 @@ use App\Shared\Domain\Identity\Uuid;
  */
 class User
 {
+    /**
+     * `409 username_immutable` 的 detail —— **两个调用方共用一句话**。
+     *
+     * {@see assignUsername()} 抛它（`POST /v1/me/username` 打第二次），
+     * `Application\Me\ProfileUpdatePayload` 也抛它（`PATCH /v1/me` 的请求体里
+     * 出现了 `username` 字段，§6.2：**不静默忽略**）。
+     *
+     * ⚠️ 提成常量而不是各写一份：两处描述的是同一条产品不变量，
+     * 文案分叉之后，客户端按 `code` 分支没问题，但日志与 Sentry 里会出现
+     * 两句意思一样的话，读的人要花时间确认它们是不是同一件事。
+     *
+     * ⚠️ `PATCH /v1/me` 那一路**不**经过本类的 {@see assignUsername()}：
+     * 那个方法的语义是「没设过就写进去」，对一个尚未设过 username 的调用者
+     * 它会**真的写进去** —— 绕过 `Username::fromInput()` 的字符集校验、
+     * 保留词表与 §7.5 的 10 次计数。详见 ProfileUpdatePayload 的类注释。
+     */
+    public const USERNAME_IMMUTABLE_DETAIL = 'The username has already been set and cannot be changed.';
+
     private ?string $username = null;
 
     /**
@@ -155,7 +173,7 @@ class User
             //
             // detail 里不放两个 username 的值：§6.1 的 detail 会进日志与 Sentry，
             // 而 username 是可检索的公开伪名，没有必要顺手记一遍。
-            throw new DomainException(ErrorCode::UsernameImmutable, 'The username has already been set and cannot be changed.');
+            throw new DomainException(ErrorCode::UsernameImmutable, self::USERNAME_IMMUTABLE_DETAIL);
         }
 
         $this->username = $normalized;

@@ -20,8 +20,10 @@ use Symfony\Component\Routing\Attribute\Route;
  * 而所有测试照常绿（没认证也返回 204）。
  *
  * ⚠️ `onboarding_incomplete` 的用户**也**能调用（契约里写明了）。
- * T-108 加 username 拦截器时，这个路由必须进它的三个白名单之一 ——
- * 否则中途放弃注册的人无法登出。
+ * `auth_logout` 因此在
+ * {@see \App\Shared\Infrastructure\Http\OnboardingListener::EXEMPT_ROUTES} 里（T-108）——
+ * 拿掉它，中途放弃注册的人就再也登不出去，而 username 不可变、
+ * 也没有第二条自助路径（ADR-0017 的 Consequences）。
  *
  * 204 无响应体：没有什么可以告诉客户端的，而「撤销了几条」是服务端的内部事实。
  */

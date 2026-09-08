@@ -1244,7 +1244,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 |---|---|---|
 | `GET` | `/v1/me` | 用户资料（含 `username`、`onboarding_complete`） |
 | `POST` | `/v1/me/username` | **一次性**设定 username。body `{username}` → `200 {user}`；`409 username_taken` / `409 username_immutable` / `422 username_invalid`。**无 `PATCH`/`PUT` 对应端点——不可变是靠"没有这个端点"保证的** |
-| `PATCH` | `/v1/me` | `locale`、通知偏好（v1.1：**已无 `display_name`**；若请求体出现 `username` 字段 → `409 username_immutable`，不静默忽略） |
+| `PATCH` | `/v1/me` | `locale`（v1.1：**已无 `display_name`**；若请求体出现 `username` 字段 → `409 username_immutable`，不静默忽略）。⚠️ **不在 onboarding 白名单里** —— 未设 username 的用户调它得到 `403 username_required`，豁免清单只有 `GET /me`。**通知偏好延后**：本表原先列了它，但全仓库没有任何数据模型（§17.1 的 `users` DDL、契约的 `User`、`Notification` 模块里都没有），M1 也没有任何用户可关的通知（OTP 信与新设备提醒信都是安全类）。§13.6 允许后续作为**可选字段**新增，见 T-108 落地记录与 [ADR-0018](adr/0018-onboarding-interceptor-placement-and-the-first-inverted-shared-port.md) |
 | `GET` | `/v1/me/devices` | 设备列表（含当前设备标记） |
 | `DELETE` | `/v1/me/devices/{id}` | 远程登出某设备 |
 | `PUT` | `/v1/me/devices/{id}/push-token` | 更新 FCM token |

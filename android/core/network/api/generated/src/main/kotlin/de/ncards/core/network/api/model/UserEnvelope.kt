@@ -35,7 +35,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 
 /**
- * `POST /me/username` 的 200 响应。  ⚠️ **必须是具名 schema，不能写成内联的匿名对象。** 内联的话 openapi-generator 会给 Android 侧生成一个叫 `SetUsername200Response` 的类 —— 类型名里带着**端点名与状态码**，于是 T-108 的 `PATCH /v1/me` 复用同一个 形状时会再生成一个 `UpdateMe200Response`，两个一模一样的 data class 谁也转不成谁。与 `DeviceList` 是同一条理由。  包成对象而不是直接返回 `User`，是为了将来能加同级字段 （顶层裸对象是一扇加不了兄弟字段的单向门）—— 同样照抄 `DeviceList` 的论证。 
+ * `GET /me`、`PATCH /me` 与 `POST /me/username` 的 200 响应 —— **同一个 schema，三个生产者**。  ⚠️ **必须是具名 schema，不能写成内联的匿名对象。** 内联的话 openapi-generator 会给 Android 侧生成带**端点名与状态码**的类型名 （`SetUsername200Response` / `GetMe200Response` / `UpdateMe200Response`）， 三个一模一样的 data class 谁也转不成谁 —— T-107 把它收成具名 schema 就是为了 T-108 这一刻。与 `DeviceList` 是同一条理由。 往这三个操作里任何一个填内联 schema，都会把这件事重新做坏。  包成对象而不是直接返回 `User`，是为了将来能加同级字段 （顶层裸对象是一扇加不了兄弟字段的单向门）—— 同样照抄 `DeviceList` 的论证。 
  *
  * @param user 
  */

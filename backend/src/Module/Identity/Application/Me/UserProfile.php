@@ -23,9 +23,11 @@ use App\Shared\Domain\Identity\Uuid;
  * ============================================================================
  * 三个生产者，一个形状
  * ============================================================================
- * `POST /v1/me/username`（T-107，本卡）、`GET /v1/me` 与 `PATCH /v1/me`（T-108）
- * 的响应里都是同一个 `User` schema。T-108 直接复用本类与
- * `UsernameController::body()` 里那段搬运，**不要**再写第二份 ——
+ * `POST /v1/me/username`（T-107）、`GET /v1/me` 与 `PATCH /v1/me`（T-108）
+ * 的响应里都是同一个 `User` schema，三者共用本类。
+ *
+ * 组装成响应体那一步也只有一份：{@see \App\Module\Identity\Http\UserBody::of()}
+ * （T-108 把它从 `UsernameController::body()` 提了出来）。**不要**再写第二份 ——
  * 契约里 `User` 是一个 schema，服务端有两份组装代码的话，加字段时必然漏一处。
  *
  * ⚠️ `SessionIssued` 里那五个同名字段**不**合并到本类：那个 DTO 描述的是
