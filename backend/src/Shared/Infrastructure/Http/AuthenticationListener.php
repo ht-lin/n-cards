@@ -61,6 +61,18 @@ use Symfony\Component\HttpKernel\KernelEvents;
  *   1. 给每个带 Bearer 的请求加一趟 DB 往返（§9.1 的性能预算里没有这一笔）；
  *   2. 把一条写进规格并已在 ADR-0015 记录的决定悄悄反悔掉。
  * 需要「此刻是否有效」的端点自己查表 —— 见 `DeviceController` 与刷新路径。
+ *
+ * ============================================================================
+ * ⚠️ 姊妹监听器：{@see OnboardingListener}（优先级 10，T-108）
+ * ============================================================================
+ * 本类回答「你是谁」，它回答「你注册完了吗」。两者一起构成 `/v1` 的准入，
+ * 而且**互相依赖**：它按路由名豁免、按 `AuthContext` 判定，两样都由本类写下；
+ * 反过来，本类对免鉴权路由是在写 `AUTH_CONTEXT` **之前**返回的，
+ * 而它正是靠这一点自动放过公开端点与 `/v1/_probe/*` 夹具。
+ *
+ * 加一个免鉴权端点时，除了本类的 {@see PUBLIC_ROUTES}，还要想一下它是不是
+ * 也该进那边的 `EXEMPT_ROUTES` —— 两张表不是一回事：`auth_logout` 要 Bearer
+ * （不在本表），但对未完成 onboarding 的人必须放行（在那张表）。
  */
 #[AsEventListener(event: KernelEvents::REQUEST, method: 'onRequest', priority: self::PRIORITY)]
 final readonly class AuthenticationListener

@@ -143,6 +143,24 @@ trait RequiresOtpStack
     }
 
     /**
+     * 每条用例用一个**新** username，用于把一个刚注册的用户推出 onboarding（T-108）。
+     *
+     * ⚠️ 从 T-108 起，`POST /auth/otp/verify` 建出来的用户（`username IS NULL`）
+     * 除 `GET /me`、`POST /me/username`、`POST /auth/logout` 外调**任何** `/v1`
+     * 端点都得到 `403 username_required`。所以凡是要测「登录之后能用某个端点」
+     * 的用例，都必须先把 username 设掉 —— 见 `SessionLifecycleTest::login()`。
+     *
+     * 形态要同时满足两边：`^[a-z0-9_]{3,20}$`（`chk_users_username_format`）
+     * 且不能撞上 `ncards.username.reserved_words` 的 12 个词。
+     * `u_` + 12 位十六进制 = 14 字符，两条都过；随机是为了避开 `uq_users_username`
+     * ——唯一冲突在真库上会返回 409，而那与本组用例要测的东西无关。
+     */
+    private static function uniqueUsername(): string
+    {
+        return 'u_'.bin2hex(random_bytes(6));
+    }
+
+    /**
      * 直接种一条**码已知**的挑战，绕过 `POST /auth/otp/request`。
      *
      * ============================================================================

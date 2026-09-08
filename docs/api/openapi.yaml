@@ -389,6 +389,108 @@ paths:
   # `devices.id` 由客户端生成、不是凭据，403 等于确认「这个 id 存在，只是不是你的」——
   # 而那是一条现成的存在性信道。
 
+  /me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: 我的资料
+      description: |
+        **`onboarding_incomplete` 状态下仍然可达的三个端点之一**（另外两个是
+        `POST /me/username` 与 `POST /auth/logout`，§5.2）。客户端正是靠这里的
+        `user.onboarding_complete` 决定下一步去哪：`false` → username 设定页
+        （不可跳过、不可返回）；`true` → 钱包。
+
+        所以它**必须**免受 onboarding 拦截 —— 把它挡住，客户端就再也问不出
+        「我是不是卡在注册中间态」，注册流程无法完成。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+      responses:
+        '200':
+          description: |
+            我的资料。示例特意用注册中间态（`username: null` /
+            `onboarding_complete: false`）—— 那是这个端点最要紧的一种响应。
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+              example:
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: null
+                  locale: de
+                  onboarding_complete: false
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+    patch:
+      tags: [me]
+      operationId: updateMe
+      summary: 修改我的资料
+      description: |
+        目前只能改 `locale`。
+
+        ⚠️ **它不在 onboarding 白名单里。** 未设 username 的用户调它得到
+        `403 username_required` —— §5.2 / §6.2 的豁免清单里只有 `GET /me`。
+        在 username 设定之前开一条写 `users` 的路径，正好是那个拦截器要挡的事；
+        而注册期的语言由 `POST /auth/otp/request` 的 `locale` 字段决定，
+        不需要这个端点。
+
+        ⚠️ **请求体里出现 `username` → `409 username_immutable`，不静默忽略**
+        （§6.2）。这是那条「username 不可变」不变量在本端点上的落点：
+        静默忽略会让客户端以为改成功了，而下一次 `GET /me` 才发现没有 ——
+        那种不一致比一个明确的 409 难查得多。
+
+        没有 `display_name`（v1.1 C10 移除），将来也不会有。
+
+        ⚠️ **空对象 `{}` 返回 `400 malformed_request`，不是 200 no-op。**
+        `locale` 是当前唯一的字段，因此 `required`；一个什么都不改的 PATCH
+        只可能是客户端 bug。将来加了通知偏好之后，这条会放宽成「至少给一个字段」
+        —— 那是 §13.6 允许的放宽方向（收紧才是禁止的）。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MeUpdate' }
+            example:
+              locale: en
+      responses:
+        '200':
+          description: |
+            改完之后的完整资料。**与 `GET /me` 同一个 `UserEnvelope`** ——
+            客户端拿它直接替换本地副本，不需要再拉一次。
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+              example:
+                user:
+                  id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                  username: anna_b
+                  locale: en
+                  onboarding_complete: true
+                  created_at: "2026-08-29T10:30:12Z"
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
   # --------------------------------------------------------------------------
   # ⚠️ 本组里**只有 POST /me/username 一个写 username 的操作**，而且必须一直如此。
   #
@@ -1164,6 +1266,12 @@ components:
         `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**，
         正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、
         `username_required`（跳 username 设定页）、`not_friends`。
+
+        ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则：
+        `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、
+        `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器
+        强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为
+        「跳 username 设定页」，不需要按端点分支。
       headers:
         X-Request-Id: { $ref: '#/components/headers/XRequestId' }
       content:
@@ -1204,7 +1312,8 @@ components:
         `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、
         `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、
         `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、
-        `full_resync_required`（清库全量重同步）。
+        `full_resync_required`（清库全量重同步）、
+        `username_taken` / `username_immutable`（见 `/me/username` 与 `PATCH /me`）。
       headers:
         X-Request-Id: { $ref: '#/components/headers/XRequestId' }
         Retry-After: { $ref: '#/components/headers/RetryAfter' }
@@ -1586,18 +1695,49 @@ components:
       examples:
         - username: anna_b
 
+    MeUpdate:
+      type: object
+      additionalProperties: true
+      required: [locale]
+      description: |
+        `PATCH /me` 的请求体。
+
+        ⚠️ **没有 `username`**，而且这不是遗漏：出现该字段的请求返回
+        `409 username_immutable`（§6.2，**不静默忽略**）。不可变性靠「没有修改
+        端点」保证，而这个端点是那条不变量最容易被绕过的地方 ——
+        往下面的 `properties` 里加一行 `username`，等于把它删掉。
+
+        ⚠️ **没有 `display_name`**（v1.1 C10 移除）。
+
+        `required: [locale]` 与运行时一致：`locale` 是目前唯一的字段，
+        因此空对象 `{}` 是 `400 malformed_request` 而不是 200 no-op。
+        通知偏好（§6.2 提到、但一期没有任何数据模型，见 T-108 落地记录）落地时，
+        这里会放宽成「至少给一个字段」—— §13.6 允许放宽，禁止的是收紧。
+      properties:
+        locale:
+          type: string
+          enum: [de, en]
+          description: |
+            界面与邮件语言。值域闭合的两项，发别的值是**客户端 bug** ——
+            服务端返回 `400 validation_failed` + `errors[].code = invalid_format`，
+            不是 422（422 留给「请求合法但这个值用户不能用」，例如 `username_invalid`）。
+      examples:
+        - locale: en
+
     UserEnvelope:
       type: object
       additionalProperties: true
       required: [user]
       description: |
-        `POST /me/username` 的 200 响应。
+        `GET /me`、`PATCH /me` 与 `POST /me/username` 的 200 响应 ——
+        **同一个 schema，三个生产者**。
 
         ⚠️ **必须是具名 schema，不能写成内联的匿名对象。** 内联的话
-        openapi-generator 会给 Android 侧生成一个叫 `SetUsername200Response` 的类
-        —— 类型名里带着**端点名与状态码**，于是 T-108 的 `PATCH /v1/me` 复用同一个
-        形状时会再生成一个 `UpdateMe200Response`，两个一模一样的 data class
-        谁也转不成谁。与 `DeviceList` 是同一条理由。
+        openapi-generator 会给 Android 侧生成带**端点名与状态码**的类型名
+        （`SetUsername200Response` / `GetMe200Response` / `UpdateMe200Response`），
+        三个一模一样的 data class 谁也转不成谁 —— T-107 把它收成具名 schema
+        就是为了 T-108 这一刻。与 `DeviceList` 是同一条理由。
+        往这三个操作里任何一个填内联 schema，都会把这件事重新做坏。
 
         包成对象而不是直接返回 `User`，是为了将来能加同级字段
         （顶层裸对象是一扇加不了兄弟字段的单向门）——

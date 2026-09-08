@@ -23,8 +23,8 @@ interface CardsApi {
      *  - 201: 已创建
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
-     *  - 409: `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、 `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、 `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、 `full_resync_required`（清库全量重同步）。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
+     *  - 409: `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、 `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、 `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、 `full_resync_required`（清库全量重同步）、 `username_taken` / `username_immutable`（见 `/me/username` 与 `PATCH /me`）。 
      *  - 413: `payload_too_large`。客户端 bug，上报 Sentry。
      *  - 415: `unsupported_media_type`：`Content-Type` 不是 `application/json`。客户端 bug，上报 Sentry。
      *  - 422: `limit_exceeded`（**系统限额**，§7.5 的第一张表）、`username_invalid`、 `idempotency_key_reused`（**不要重试**，上报 Sentry）。  ⚠️ `422 limit_exceeded` 与限流（`429`）**完全是两回事**：前者是绝对的存量 上限，重试**永远**不会成功，UI 应该显示「额度已满」而不是「稍后重试」。 
@@ -49,7 +49,7 @@ interface CardsApi {
      *  - 204: 已删除（无响应体）
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
      *  - 404: `not_found`。  ⚠️ 对**非成员**访问一张存在的卡，服务端返回的是 `403 not_a_member` 还是 `404 not_found`，取决于该资源是否属于「存在性本身即信息」的一类。 卡走 `403`（成员关系是明确的授权概念）；含 username 的查找走 `404`。 
      *  - 426: `client_too_old`：低于 `/v1/config` 下发的 `min_supported_client`。客户端显示强制升级墙。
      *  - 429: `rate_limited`：「我判定你超限了」，按 `Retry-After` 退避重试（§7.5）。  ⚠️ **必须**同时带 `Retry-After`（秒数）与 `X-RateLimit-Remaining`（恒为 0）。 与 `503 service_unavailable`（「我**无法判定**」——Redis 不可达且该策略 fail-closed）不是一回事，见 ADR-0005。 
@@ -71,7 +71,7 @@ interface CardsApi {
      *  - 200: 卡
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
      *  - 404: `not_found`。  ⚠️ 对**非成员**访问一张存在的卡，服务端返回的是 `403 not_a_member` 还是 `404 not_found`，取决于该资源是否属于「存在性本身即信息」的一类。 卡走 `403`（成员关系是明确的授权概念）；含 username 的查找走 `404`。 
      *  - 426: `client_too_old`：低于 `/v1/config` 下发的 `min_supported_client`。客户端显示强制升级墙。
      *  - 429: `rate_limited`：「我判定你超限了」，按 `Retry-After` 退避重试（§7.5）。  ⚠️ **必须**同时带 `Retry-After`（秒数）与 `X-RateLimit-Remaining`（恒为 0）。 与 `503 service_unavailable`（「我**无法判定**」——Redis 不可达且该策略 fail-closed）不是一回事，见 ADR-0005。 
@@ -93,7 +93,7 @@ interface CardsApi {
      *  - 200: 一页卡
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
      *  - 426: `client_too_old`：低于 `/v1/config` 下发的 `min_supported_client`。客户端显示强制升级墙。
      *  - 429: `rate_limited`：「我判定你超限了」，按 `Retry-After` 退避重试（§7.5）。  ⚠️ **必须**同时带 `Retry-After`（秒数）与 `X-RateLimit-Remaining`（恒为 0）。 与 `503 service_unavailable`（「我**无法判定**」——Redis 不可达且该策略 fail-closed）不是一回事，见 ADR-0005。 
      *  - 500: `internal_error`。`detail` 恒为固定文案，**绝不回显**原始异常消息 （那会泄露主机名、端口、SQL 片段）。客户端提示稍后重试并上报 Sentry。 
@@ -115,9 +115,9 @@ interface CardsApi {
      *  - 200: 已更新，`revision` 已递增
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
      *  - 404: `not_found`。  ⚠️ 对**非成员**访问一张存在的卡，服务端返回的是 `403 not_a_member` 还是 `404 not_found`，取决于该资源是否属于「存在性本身即信息」的一类。 卡走 `403`（成员关系是明确的授权概念）；含 username 的查找走 `404`。 
-     *  - 409: `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、 `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、 `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、 `full_resync_required`（清库全量重同步）。 
+     *  - 409: `revision_conflict`（乐观锁失败，`current` 带服务端状态 → 走 §5.4.3 冲突解决）、 `id_conflict`（客户端生成的 id 已属于他人 → **重新生成 id 重试**）、 `already_exists`（幂等处理）、`idempotency_in_progress`（带 `Retry-After`，退避重试）、 `full_resync_required`（清库全量重同步）、 `username_taken` / `username_immutable`（见 `/me/username` 与 `PATCH /me`）。 
      *  - 413: `payload_too_large`。客户端 bug，上报 Sentry。
      *  - 415: `unsupported_media_type`：`Content-Type` 不是 `application/json`。客户端 bug，上报 Sentry。
      *  - 422: `limit_exceeded`（**系统限额**，§7.5 的第一张表）、`username_invalid`、 `idempotency_key_reused`（**不要重试**，上报 Sentry）。  ⚠️ `422 limit_exceeded` 与限流（`429`）**完全是两回事**：前者是绝对的存量 上限，重试**永远**不会成功，UI 应该显示「额度已满」而不是「稍后重试」。 
@@ -143,7 +143,7 @@ interface CardsApi {
      *  - 200: 已更新（返回的是**调用者视角**的卡）
      *  - 400: `validation_failed`（字段校验失败，带 `errors[]`）或 `malformed_request`（body 不是合法 JSON / 不是 JSON 对象 / 为空）。  缺失或格式错误的 `X-Client`、缺失的 `If-Match`、以及任何 offset 风格的 分页参数（`offset` / `page` / `skip` / `per_page` / `start`， `errors[].code = unsupported_parameter`）也都走这里。 
      *  - 401: `token_expired`（静默刷新后重试**一次**）或 `token_invalid`（会话已撤销 → 清空本地会话，跳登录，**不要重试**）。 
-     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。 
+     *  - 403: `insufficient_role`（viewer 试图改卡/删卡/邀请——**同时上报 Sentry**， 正常 UI 不应产生此请求）、`not_a_member`（从本地删除该卡）、 `username_required`（跳 username 设定页）、`not_friends`。  ⚠️ `username_required` 不是某几个端点的特例，而是**整个 `/v1` 面**的规则： `username IS NULL` 的用户除 `GET /me`、`POST /me/username`、 `POST /auth/logout` 外，调任何操作都得到它（§5.2，由单一 Kernel 监听器 强制）。所以每个操作的 `403` 都可能是它 —— 客户端的处置固定为 「跳 username 设定页」，不需要按端点分支。 
      *  - 404: `not_found`。  ⚠️ 对**非成员**访问一张存在的卡，服务端返回的是 `403 not_a_member` 还是 `404 not_found`，取决于该资源是否属于「存在性本身即信息」的一类。 卡走 `403`（成员关系是明确的授权概念）；含 username 的查找走 `404`。 
      *  - 413: `payload_too_large`。客户端 bug，上报 Sentry。
      *  - 415: `unsupported_media_type`：`Content-Type` 不是 `application/json`。客户端 bug，上报 Sentry。

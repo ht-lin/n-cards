@@ -460,7 +460,24 @@ final class SessionLifecycleTest extends WebTestCase
     // ========================================================================
 
     /**
-     * 走真实的 `POST /v1/auth/otp/verify` 拿一对令牌。
+     * 走真实的 `POST /v1/auth/otp/verify` 拿一对令牌，**并完成 onboarding**。
+     *
+     * ============================================================================
+     * ⚠️ 为什么这里要顺手设一个 username（T-108）
+     * ============================================================================
+     * `otp/verify` 建出来的行 `username` 恒为 NULL（§5.2 的注册中间态），
+     * 而从 T-108 起 `OnboardingListener` 会把这种用户拦在除
+     * `GET /me`、`POST /me/username`、`POST /auth/logout` 之外的所有 `/v1` 之外。
+     * 本文件有十来处打 `/v1/me/devices*` —— 不设 username 的话它们全变
+     * `403 username_required`，而那个症状会把人引向「是不是鉴权坏了」。
+     *
+     * 设备管理这组用例要测的是**会话与设备**的语义，onboarding 是它们的前置条件
+     * 而不是被测对象。真正拿注册中间态当被测对象的是 `UsernameEndpointTest`
+     * 与 `OnboardingCoverageTest`，那两个文件**不**走这条路径。
+     *
+     * ⚠️ 同邮箱第二次登录（造「同一用户的两台设备」）时用户已经有 username 了，
+     * 再设一次会得到 `409 username_immutable` —— 所以按响应里的
+     * `onboarding_complete` 判断，不能无条件设。
      *
      * @param string|null $email 复用同一个邮箱即同一个账号（用来造「同一用户的两台设备」）
      *
@@ -488,6 +505,21 @@ final class SessionLifecycleTest extends WebTestCase
         self::assertSame(Response::HTTP_OK, $response->getStatusCode(), (string) $response->getContent());
 
         $body = self::decode($response);
+
+        if (false === $body['user']['onboarding_complete']) {
+            $assigned = $this->post(
+                '/v1/me/username',
+                json_encode(['username' => self::uniqueUsername()], \JSON_THROW_ON_ERROR),
+                $body['access_token'],
+            );
+
+            self::assertSame(
+                Response::HTTP_OK,
+                $assigned->getStatusCode(),
+                'onboarding 没走完的话，本文件里所有 /v1/me/devices 的用例都会变 403 username_required。'
+                .(string) $assigned->getContent(),
+            );
+        }
 
         return [
             'access_token' => $body['access_token'],
