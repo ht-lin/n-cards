@@ -46,6 +46,19 @@ use Doctrine\Migrations\AbstractMigration;
  * 而那一步是这个仓库唯一能发现「映射与迁移漂了」的地方 —— 用它换一点索引空间
  * 是亏的。⚠️ 这是**实测**结论（本机 compose，2026-09-07），不是推测。
  *
+ * ⚠️⚠️ **上面这段的归因是错的**（T-109 于 2026-09-08 重测，见
+ * {@see Version20260908182500} 的文件头与 ADR-0019 末尾）。
+ * 观察到的现象是真的，但 DBAL 4 **读得回**那个 WHERE 子句 ——
+ * `PostgreSQLSchemaManager::selectIndexColumns()` 用
+ * `pg_get_expr(indpred, indrelid)` 把它读进索引的 `where` 选项。
+ * 真正的原因是 `Index::samePartialIndex()` 拿两侧做 `===` 字符串比较，
+ * 而 PG 存回来的是规范化结果、**带一对外层括号**：XML 里写
+ * `(magic_token_hash IS NOT NULL)` 就能对上，写不带括号的版本对不上。
+ *
+ * **本迁移不改。** 现在这条普通唯一索引功能正确，只是索引里多了一堆 NULL 行，
+ * 而改它需要一次新迁移，收益是几十 KB。留给真正需要动 `otp_challenges` 的那张卡。
+ * 这段话留在这里是为了下一个读到上面那段的人**不要**照着它下结论。
+ *
  * 代价可以忽略：挑战 10 分钟过期、T-113 每日清理，任何时刻的行数都是
  * 分钟级的登录量，不是历史累积量。
  *

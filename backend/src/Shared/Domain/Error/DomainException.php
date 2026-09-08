@@ -149,6 +149,39 @@ class DomainException extends \RuntimeException
     }
 
     /**
+     * 调用者是这个资源的成员，但角色不够（403，§5.2 的角色权限矩阵）。
+     *
+     * 典型调用点：`PATCH` / `DELETE /v1/cards/{id}` 的非 owner ——
+     * 任务卡逐字要求「**一律** 403，即使请求体合法、revision 正确」，
+     * 所以这条判定要排在请求体校验与乐观锁**之前**。
+     *
+     * ⚠️ 与 `not_a_member`（也是 403）不是一回事，别合并：
+     * 契约让客户端对后者**删掉本地副本**（说明共享已被撤销），
+     * 对前者只是禁用编辑 UI 并上报 Sentry（正常 UI 不该产生这个请求）。
+     * 压成一个码，客户端就只能选一种处置，而两种都会出错。
+     */
+    public static function insufficientRole(string $detail = 'Your role on this resource does not permit this operation.'): self
+    {
+        return new self(ErrorCode::InsufficientRole, $detail);
+    }
+
+    /**
+     * 客户端生成的 id 已经属于**别人**（409，§5.4.3）。
+     *
+     * 只用于「id 由客户端生成」的资源（一期只有 `cards`）。契约要求客户端
+     * **重新生成一个 id 再重试** —— 所以它必须与 `already_exists` 区分开：
+     * 后者的正确处置是「别重试，你要的东西已经在了」。
+     *
+     * ⚠️ detail 里**不放**那个 id 属于谁的任何信息。请求方对那张卡没有任何权限，
+     * 而 `detail` 会进日志与 Sentry。它甚至不该确认「那是一张卡」——
+     * 但这一点做不到，因为端点本身就是 `/v1/cards`。
+     */
+    public static function idConflict(string $detail = 'The supplied id already belongs to another user; generate a new one and retry.'): self
+    {
+        return new self(ErrorCode::IdConflict, $detail);
+    }
+
+    /**
      * 未预期的服务端故障。
      *
      * `detail` 是**固定文案**：原始异常消息只进日志，绝不进响应体 ——

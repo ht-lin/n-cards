@@ -104,6 +104,19 @@ DEFAULT 用 `<options><option name="default">now()</option></options>`。
 
 ## 遗留问题：T-109 的跨模块外键
 
+> **✅ 已由 [ADR-0019](0019-cross-module-foreign-keys-via-post-generate-schema.md) 结掉（2026-09-08，随 T-109 落地）。**
+>
+> 结论是下面三条之外的**第四条**：外键照建在库里，但**不进 ORM 元数据** ——
+> 实体只持有 `Uuid $ownerId` 这样的普通列，外键由
+> `Shared\Infrastructure\Doctrine\CrossModuleForeignKeys` 在 Doctrine 的
+> `postGenerateSchema` 事件上补进生成的 schema，于是 `schema:validate` 照样对得上。
+>
+> 三条代价一条都不用付：库层外键在、deptrac 零 violation、`skip_violations` 保持为空。
+> 而且它比 `skip_violations` 方案**更**硬 —— 拿不到 `$card->getOwner()`，
+> 就写不出跨模块 JOIN，§4.2 规则 5 从此是结构性成立的。
+>
+> **下面这一节保留原文**，因为 ADR-0019 的论证是接着它写的。
+
 **本 ADR 刻意不解决它。**
 
 §17.1 要求 `cards.owner_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT`。
@@ -121,6 +134,11 @@ DEFAULT 用 `<options><option name="default">now()</option></options>`。
 
 哪一条都不是顺手能定的，**留给 T-109 单独决策并写一篇新 ADR**。
 在那之前不要把本 ADR 第 3 条当成「所有外键都这么办」——它的适用范围是**模块内部**。
+
+> **后续**：那篇 ADR 是 [ADR-0019](0019-cross-module-foreign-keys-via-post-generate-schema.md)，
+> 选的是上表之外的第四条路。本 ADR 第 3 条的适用范围因此正式收窄为
+> **模块内部的外键**（`devices.user_id`、`sessions.user_id` 这些）——
+> 跨模块的按 ADR-0019 办。
 
 ## Alternatives considered
 

@@ -350,11 +350,29 @@ T-101 落地。完整论证在
 `doctrine:schema:validate` 会把库里的外键与 ORM 元数据对账，映射成普通 uuid 列的话
 那条命令永远绿不了。join-column 必须写 `on-delete` —— Comparator 不比外键**名字**
 （所以迁移里用 §5.2 要求的 `fk_<table>_<column>`），但**比 onDelete**。
-⚠️ 跨模块外键（T-109 的 `cards.owner_id → users`）是**未决问题**，见 ADR-0011 末尾。
+⚠️ 这条只管**模块内部**的外键。**跨模块**的（`cards.owner_id → users`、
+T-110 的 `card_members`、M3 的 `friendships` / `share_invitations`）反过来办：
+实体只持有一个 uuid 列，外键由 `Shared\Infrastructure\Doctrine\CrossModuleForeignKeys`
+在 `postGenerateSchema` 上补进 ORM schema。加一条要同时改三处（那份清单、迁移、
+引用侧的 `<index>` 声明），见 [ADR-0019](../docs/adr/0019-cross-module-foreign-keys-via-post-generate-schema.md)。
 
 **5. 索引、唯一约束与每个 DEFAULT 都要在 XML 里再写一遍，名字与迁移逐字相同。**
 索引是**按名字**比的：不显式声明的话 DBAL 会自动补 `IDX_<hash>`（外键索引尤其容易忘），
 于是迁移里写什么名字都会 diff。DEFAULT 用 `<options><option name="default">now()</option></options>`。
+
+**5a. 部分索引（`WHERE …`）能用，但谓词要抄 PG 规范化之后的样子。**
+DBAL 4 用 `pg_get_expr(indpred, …)` 把谓词读回索引的 `where` 选项，
+再与 XML 里声明的做 **`===` 字符串比较** —— 而 PG 存回来的带一对外层括号：
+
+```xml
+<index name="idx_cards_owner" columns="owner_id">
+    <options><option name="where">(deleted_at IS NULL)</option></options>
+</index>
+```
+
+少那对括号 `schema:validate` 就永久不同步。照抄 `pg_indexes.indexdef` 里看到的那串最稳。
+（T-106 的迁移注释里记着一条相反的结论 ——「DBAL 读不回 WHERE 子句」。
+那次观察到的现象是真的，但归因错了：读得回，只是括号没对上。见 ADR-0019 末尾。）
 
 写完跑这两条对账，任何漂移都会当场现形：
 
