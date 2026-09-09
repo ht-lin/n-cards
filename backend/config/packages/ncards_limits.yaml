@@ -28,7 +28,9 @@ parameters:
     #
     # ⚠️ 计数只统计 `owner_id = :user`：**共享卡不计入 viewer 的额度**（§17.5 Q11）。
     # 否则 owner 可以通过共享消耗他人配额 —— 那本身就是一种滥用面。
-    # 强制点在 T-111。
+    # 强制点是 `CreateCardService::enforceLimits()`，计数口径落在
+    # `DoctrineCardRepository::countOwnedBy()`（那条 DQL 不 join card_members）；
+    # Q11 由 `tests/Integration/.../CardQuotaScopeTest` 在真库上钉住。
     ncards.limits.cards_per_user: 500
 
     # 1 owner + 19 viewer（§7.5）。家庭 / 小团体的量级。

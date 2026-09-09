@@ -10,6 +10,7 @@ use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
 use App\Tests\Double\Wallet\WalletEntities;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 #[CoversClass(UpdateCardService::class)]
@@ -215,21 +216,62 @@ final class UpdateCardServiceTest extends TestCase
         }
     }
 
-    public function testALengthLimitStillAppliesOnUpdate(): void
-    {
-        $card = WalletEntities::card(id: WalletEntities::id(1), ownerId: WalletEntities::id(0xA11A));
-        $harness = new WalletServiceHarness($card);
+    /**
+     * §7.5 的三条长度限额在 `PATCH` 上与 `POST` 上是**同一组数字**。
+     *
+     * ⚠️ 分开列而不是只测 note：`UpdateCardService::enforceLimits()` 的三个分支
+     * 各带一个 `null !== $payload->…` 的 guard，抄错一个 `SystemLimit` case
+     * （比如给 title 传了 `NoteChars`）不会有任何症状 —— 100 字符的标题照样通过，
+     * 只是上限悄悄变成了 2000。逐条钉住上限值本身。
+     *
+     * @param string $field `CardUpdatePayload::fromArray()` 的键
+     */
+    #[DataProvider('lengthLimits')]
+    public function testTheLengthLimitsApplyOnUpdateAtTheirRealBoundaries(
+        string $field,
+        string $atTheLimit,
+        string $overTheLimit,
+    ): void {
+        // 恰好在上限上 → 放行。
+        $harness = new WalletServiceHarness(
+            WalletEntities::card(id: WalletEntities::id(1), ownerId: WalletEntities::id(0xA11A)),
+        );
+
+        $harness->updater()->update(
+            WalletServiceHarness::auth(),
+            WalletEntities::id(1),
+            CardUpdatePayload::fromArray([$field => $atTheLimit]),
+            1,
+        );
+
+        // 多一个单位 → 422。
+        $harness = new WalletServiceHarness(
+            WalletEntities::card(id: WalletEntities::id(1), ownerId: WalletEntities::id(0xA11A)),
+        );
 
         try {
             $harness->updater()->update(
                 WalletServiceHarness::auth(),
                 WalletEntities::id(1),
-                CardUpdatePayload::fromArray(['note' => str_repeat('b', 2001)]),
+                CardUpdatePayload::fromArray([$field => $overTheLimit]),
                 1,
             );
-            self::fail('期待 limit_exceeded。');
+            self::fail(\sprintf('%s 超限时期待 limit_exceeded。', $field));
         } catch (DomainException $e) {
             self::assertSame(ErrorCode::LimitExceeded, $e->errorCode());
         }
+    }
+
+    /**
+     * @return iterable<string, array{string, string, string}>
+     */
+    public static function lengthLimits(): iterable
+    {
+        yield 'title 100 字符' => ['title', str_repeat('a', 100), str_repeat('a', 101)];
+        yield 'note 2000 字符' => ['note', str_repeat('b', 2000), str_repeat('b', 2001)];
+
+        // ⚠️ payload 的单位是**字节**：512 个 `ä` 是 1024 字节（放行），
+        // 513 个是 1026 字节（拒绝）。按字符判的话两个都会通过。
+        yield 'barcode_value 1024 字节' => ['barcode_value', str_repeat('ä', 512), str_repeat('ä', 513)];
     }
 }

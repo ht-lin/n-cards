@@ -61,7 +61,7 @@ T-301 Friendship ─► T-303 级联撤销 ◄─ T-304/305 共享（同事务�
 | Q8 | 是否上架 F-Droid | 不上 | T-454 | M4 |
 | Q9 | username 保留词最终清单 | 🟡 **草案已交付（T-107，2026-09-07），待产品确认**：12 个词，精确匹配，在 `backend/config/packages/ncards_username.yaml`。不阻塞任何任务 —— 确认后改配置里的一行（[ADR-0017](../adr/0017-username-assignment-and-lifetime-attempt-counter.md) 决定五） | ~~T-107~~ | M1 |
 | Q10 | 改名诉求的人工口径 | 一律拒绝，引导注销重注册 | T-450 | M3 |
-| Q11 | 共享卡是否计入 viewer 的 500 卡限额 | **不计入** | T-111 | M3 |
+| Q11 | 共享卡是否计入 viewer 的 500 卡限额 | ✅ **已闭环（T-111，2026-09-09）**：不计入。`countOwnedBy()` 只按 `owner_id` 数、不 join `card_members`，真库护栏是 `CardQuotaScopeTest` | ~~T-111~~ | M3 |
 
 ## 可裁剪项（R5 触发时按此顺序砍，§15.1）
 

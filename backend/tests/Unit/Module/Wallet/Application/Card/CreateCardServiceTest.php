@@ -245,6 +245,48 @@ final class CreateCardServiceTest extends TestCase
         self::assertTrue($harness->creator()->create(WalletServiceHarness::auth($me), self::payload())->wasCreated);
     }
 
+    /**
+     * ⚠️ 配额刚好满的时候，重放一张**已经存在的自有卡**仍然是 200，不是 422。
+     *
+     * {@see CreateCardService::create()} 的幂等短路排在 `enforceLimits()` **之前**，
+     * 这不是巧合：满配额的用户手里那个离线 outbox（§5.4.3）里躺着的条目，
+     * 指向的正是已经建成的卡。先查限额的话它们会永久 422 —— 而客户端对 422 的
+     * 处置是「额度已满，别重试」（见 openapi.yaml 的 UnprocessableEntity 描述），
+     * 于是那些条目再也不会被清掉，队列永远排不空。
+     *
+     * 把 `enforceLimits()` 挪到函数开头不会让别的用例红，所以这条用例在这里钉住它。
+     */
+    public function testReplayingAnExistingCardAtAFullQuotaIsStillIdempotent(): void
+    {
+        $owner = WalletEntities::id(0xA11A);
+        $existing = [];
+
+        // 第 1 张就是待重放的那一张，另外 499 张把配额顶到 500。
+        for ($i = 1; $i <= 500; ++$i) {
+            $existing[] = WalletEntities::card(
+                id: WalletEntities::id(1 === $i ? 1 : 1000 + $i),
+                ownerId: $owner,
+                title: 1 === $i ? '用户后来改成的标题' : 'Karte',
+            );
+        }
+
+        $harness = new WalletServiceHarness(...$existing);
+
+        // 满配额下建**新**卡确实是 422 —— 前提没写错。
+        try {
+            $harness->creator()->create(WalletServiceHarness::auth($owner), self::payload(id: 2));
+            self::fail('前提不成立：配额没有满。');
+        } catch (DomainException $e) {
+            self::assertSame(ErrorCode::LimitExceeded, $e->errorCode());
+        }
+
+        // 而重放已有的那一张照样通过。
+        $replay = $harness->creator()->create(WalletServiceHarness::auth($owner), self::payload());
+
+        self::assertFalse($replay->wasCreated, '什么都没建 → 200，不是 201，更不是 422。');
+        self::assertSame('用户后来改成的标题', $replay->card->title);
+    }
+
     private static function assertLimitExceeded(CardCreatePayload $payload): void
     {
         try {
