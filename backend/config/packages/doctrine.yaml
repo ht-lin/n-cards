@@ -113,6 +113,10 @@ doctrine:
         # 报告字段声明在哪个类上（ORM 3 的默认行为，显式写出来免得升级时行为漂移）。
         report_fields_where_declared: true
 
+        # ⚠️ 每个模块一个块，手工登记 —— `auto_mapping: false` 的直接后果（见上）。
+        # 新模块的第一个实体落地时要在这里加一整块，漏了的症状是
+        # 「实体存在但 Doctrine 不认识它」：`find()` 抛 MappingException，
+        # 而 schema:validate 看不见那张表，于是迁移建出来的表被报成「多余」。
         mappings:
             Identity:
                 type: xml
@@ -120,6 +124,13 @@ doctrine:
                 dir: '%kernel.project_dir%/src/Module/Identity/Infrastructure/Doctrine/Mapping'
                 prefix: 'App\Module\Identity\Domain\Entity'
                 alias: Identity
+
+            Wallet:
+                type: xml
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Module/Wallet/Infrastructure/Doctrine/Mapping'
+                prefix: 'App\Module\Wallet\Domain\Entity'
+                alias: Wallet
 
 when@test:
     doctrine:

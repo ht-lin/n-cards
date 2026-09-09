@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `cards`（§5.2 / §17.1）。
+
+    映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
+
+    ============================================================================
+    ⚠️ `owner_id` 是普通列，**没有** <many-to-one> —— 这是本文件与 Device/Session 的分水岭
+    ============================================================================
+    ADR-0011 第 3 条（外键必须建成 ORM 关联）的适用范围是**模块内部**。
+    `cards.owner_id → users(id)` 跨模块，而 deptrac 里 `Wallet.Domain` 看不见
+    `Identity.Domain`，写成 <many-to-one> 会直接 violation。
+
+    库层的外键照建（迁移里的 `fk_cards_owner_id`），ORM 侧由
+    `App\Shared\Infrastructure\Doctrine\CrossModuleForeignKeys` 在
+    postGenerateSchema 上补进 schema，于是 schema:validate 仍然对得上。
+    完整论证见 ADR-0019。
+
+    ============================================================================
+    ⚠️ 下面那条 <index> 必须留着，删了 schema:validate 会红
+    ============================================================================
+    迁移建了 `idx_cards_owner`，ORM 侧不声明的话它就是一条「库里有、映射里没有」
+    的索引 → `schema:update` 的 dump-sql 吐 `DROP INDEX idx_cards_owner`，
+    schema:validate 报不同步。（实测，本机 compose，2026-09-08。）
+
+    ⚠️ 顺带：XML 注释里**不能出现两个连续的减号**，所以上面写的是
+    「`schema:update` 的 dump-sql」而不是那个带两根减号的选项名。
+    写进去的话 libxml 直接拒绝整个文件（"The document has no document element"），
+    而 `validate_xml_mapping: true` 会让它在容器编译期就炸。
+
+    名字与迁移里的 CREATE INDEX 逐字相同。它本身也是必要的：钱包列表按
+    owner_id 取（`findOwnedPage()`），而 PG 不会为外键自动建索引。
+
+    ============================================================================
+    ⚠️⚠️ `where` 选项里那对括号不是笔误 —— 删了 schema:validate 会永久变红
+    ============================================================================
+    §17.1 要求这是一条**部分索引**（`WHERE deleted_at IS NULL`）。要让它过
+    schema:validate，ORM 侧声明的谓词必须与 PG 存回来的**逐字**相同：
+
+      - DBAL 4 的 `PostgreSQLSchemaManager::selectIndexColumns()` 用
+        `pg_get_expr(indpred, indrelid)` 读回谓词，而 PG 吐的是**规范化**结果，
+        带一对外层括号：`(deleted_at IS NULL)`。
+      - `Index::samePartialIndex()` 拿两侧的 `where` 选项做 `===` 字符串比较。
+
+    实测（本机 compose，2026-09-08）：
+      `deleted_at IS NULL`   → 不同步，dump-sql 反复吐 DROP + CREATE INDEX
+      `(deleted_at IS NULL)` → 同步 ✅
+
+    ⚠️ 这条结论**推翻了** T-106 在 `Version20260907140000` 文件头里记的
+    「DBAL 读不回 WHERE 子句，所以部分索引一律不能用」。那条结论在 DBAL 4 上
+    不成立 —— 读得回，只是要连括号一起写。T-110 的 `uq_card_single_owner`
+    （`WHERE role = 'owner' AND left_at IS NULL`，那条谓词是不变量本身、去不掉）
+    因此是可以落地的，照本文件的形状写即可，注意把 PG 规范化后的样子抄准。
+
+    代价：谓词字符串依赖 PG 的格式化规则。它变了这里就红 —— 而红在
+    `composer migration:check` 上，不是在生产里。`WalletSchemaTest` 另外直接
+    对着 `pg_indexes.indexdef` 断言了一次，好让失败信息指向真正的原因。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Wallet\Domain\Entity\Card" table="cards">
+
+        <indexes>
+            <index name="idx_cards_owner" columns="owner_id">
+                <options>
+                    <option name="where">(deleted_at IS NULL)</option>
+                </options>
+            </index>
+        </indexes>
+
+        <!--
+            strategy=NONE：id 由**客户端**生成（UUIDv7，§5.4.3 的离线优先前提）。
+            与 devices 同一个理由，也同一条警告：它不是凭据。
+        -->
+        <id name="id" type="uuid" column="id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <field name="ownerId" type="uuid" column="owner_id" nullable="false"/>
+
+        <field name="title" type="text" column="title" nullable="false"/>
+
+        <!-- 用户自填的商家名（一期无商家目录，§5.2）。 -->
+        <field name="merchantLabel" type="text" column="merchant_label" nullable="true"/>
+
+        <!--
+            预设调色板的键（如 blue_600）。值域待 Q7 / T-153 交付，
+            所以这里是开放词汇的 TEXT，库层也没有 CHECK —— §13.6 允许新增枚举值。
+        -->
+        <field name="color" type="text" column="color" nullable="false"/>
+
+        <field name="barcodeFormat" type="text" column="barcode_format" nullable="false"
+               enum-type="App\Module\Wallet\Domain\ValueObject\BarcodeFormat"/>
+
+        <!-- Vault Transit 密文（ncards-card，§5.3）。 -->
+        <field name="barcodeValueEncrypted" type="ciphertext"
+               column="barcode_value_encrypted" nullable="false"/>
+
+        <!--
+            HMAC(payload) —— 重复卡检测用，不可逆（§5.2）。
+            可空：§17.1 就是可空的，二期 E2EE 的卡服务端算不出这个指纹。
+        -->
+        <field name="barcodeValueFingerprint" type="hash_digest"
+               column="barcode_value_fingerprint" nullable="true"/>
+
+        <field name="noteEncrypted" type="ciphertext" column="note_encrypted" nullable="true"/>
+
+        <!-- §3.13 的到期提醒。DATE，不是 TIMESTAMPTZ —— 卡片到期是日期概念。 -->
+        <field name="expiresOn" type="date_immutable" column="expires_on" nullable="true"/>
+
+        <field name="encryptionScheme" type="text" column="encryption_scheme" nullable="false"
+               enum-type="App\Module\Wallet\Domain\ValueObject\EncryptionScheme">
+            <options>
+                <option name="default">server_v1</option>
+            </options>
+        </field>
+
+        <!--
+            §5.4.3 的乐观锁。`version="true"` 让 Doctrine 自己递增，并在 UPDATE 上
+            带 `WHERE revision = :old`。
+
+            ⚠️ `DEFAULT 1` 不是装饰：Doctrine 的 prepareUpdateData() 会把 version
+            字段从 INSERT 里**跳过**，改由 INSERT 之后 SELECT 回来。
+            没有这个 DEFAULT，建卡当场撞 NOT NULL。
+        -->
+        <field name="revision" type="bigint" column="revision" nullable="false" version="true">
+            <options>
+                <option name="default">1</option>
+            </options>
+        </field>
+
+        <!-- 软删（§5.2：90 天后硬删）。仓储的每条查询都带 `deleted_at IS NULL`。 -->
+        <field name="deletedAt" type="datetimetz_immutable" column="deleted_at" nullable="true"/>
+
+        <field name="createdAt" type="datetimetz_immutable" column="created_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+        <field name="updatedAt" type="datetimetz_immutable" column="updated_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+    </entity>
+
+</doctrine-mapping>

@@ -161,6 +161,86 @@ trait RequiresOtpStack
     }
 
     /**
+     * 注册一个用户并**把 onboarding 走完**，返回可以打任意 `/v1` 端点的 access token。
+     *
+     * ============================================================================
+     * 为什么这是一个共用的 helper
+     * ============================================================================
+     * 从 T-108 起，`POST /auth/otp/verify` 建出来的用户 `username IS NULL`，
+     * 而 `OnboardingListener` 会把这种用户挡在除 `GET /me`、`POST /me/username`、
+     * `POST /auth/logout` 之外的**所有** `/v1` 端点之外。
+     *
+     * 也就是说凡是要测「登录之后能用某个端点」的用例都得先设 username。
+     * `SessionLifecycleTest::login()` 为设备管理那组用例写过一份，
+     * T-109 的 cards 用例又要一份 —— 第三份出现之前提到这里。
+     *
+     * ⚠️ 拿注册中间态**当被测对象**的用例（`UsernameEndpointTest`、
+     * `OnboardingCoverageTest`）**不该**用它：它们要的正是那个没有 username 的状态。
+     *
+     * @return array{access_token: string, user_id: string}
+     */
+    private function registerOnboardedUser(string $code = '551204'): array
+    {
+        $challenge = $this->seedChallenge($code);
+
+        $verified = $this->sendJson('POST', '/v1/auth/otp/verify', [
+            'challenge_id' => $challenge->id()->toString(),
+            'code' => $code,
+            'device' => [
+                'id' => bin2hex(random_bytes(4)).'-b2c3-7d4e-8f01-'.bin2hex(random_bytes(6)),
+                'platform' => 'android',
+                'model' => 'Pixel 7a',
+                'os_version' => '14',
+                'app_version' => '1.4.0',
+            ],
+        ]);
+
+        $body = json_decode((string) $verified->getContent(), true, 16, \JSON_THROW_ON_ERROR);
+        \assert(\is_array($body) && \is_array($body['user']));
+
+        $token = $body['access_token'];
+        \assert(\is_string($token));
+
+        $assigned = $this->sendJson('POST', '/v1/me/username', ['username' => self::uniqueUsername()], $token);
+
+        \assert(
+            200 === $assigned->getStatusCode(),
+            'onboarding 没走完的话，后续每个 /v1 请求都会是 403 username_required：'
+            .(string) $assigned->getContent(),
+        );
+
+        return ['access_token' => $token, 'user_id' => (string) $body['user']['id']];
+    }
+
+    /**
+     * 发一个 JSON 请求。**每次换一个源 IP** —— Redis 里的限流计数不在测试事务里、
+     * 回滚不掉，固定 IP 的话整组用例会在第 21 个请求开始全变 429。
+     *
+     * @param array<string, mixed>|null $body
+     */
+    private function sendJson(string $method, string $path, ?array $body = null, ?string $accessToken = null): \Symfony\Component\HttpFoundation\Response
+    {
+        $server = [
+            'HTTP_X_CLIENT' => 'android/1.4.0 (26)',
+            'REMOTE_ADDR' => self::uniqueIp(),
+            'CONTENT_TYPE' => 'application/json',
+        ];
+
+        if (null !== $accessToken) {
+            $server['HTTP_AUTHORIZATION'] = 'Bearer '.$accessToken;
+        }
+
+        $this->client->request(
+            $method,
+            $path,
+            server: $server,
+            content: null === $body ? '' : json_encode($body, \JSON_THROW_ON_ERROR),
+        );
+
+        return $this->client->getResponse();
+    }
+
+    /**
      * 直接种一条**码已知**的挑战，绕过 `POST /auth/otp/request`。
      *
      * ============================================================================

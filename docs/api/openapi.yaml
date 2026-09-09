@@ -777,6 +777,21 @@ paths:
         因此本端点**天然幂等**：同一个 `id` 重复提交返回同一张卡。若该 `id` 已属于
         **别人**，返回 `409 id_conflict`，客户端必须重新生成 id 重试。
 
+        ⚠️ **两个成功状态码，客户端必须能区分**（§5.4.3）：
+
+        | 码 | 含义 |
+        |---|---|
+        | `201` | 真的建了一张新卡，带 `Location` |
+        | `200` | 该 `id` 已存在且属于你 —— **请求体被整体忽略**，返回服务端现有的那一张 |
+
+        `200` 这一路**不做任何修改**：改卡走 `PATCH`，它有 `If-Match` 保护，
+        而重放一个建卡请求没有。也就是说一个迟到的离线 outbox 条目不会把
+        用户后来改过的标题覆盖回去。
+
+        与 `Idempotency-Key`（ADR-0003）是**两层**、互不冲突：那一层按请求指纹回放
+        整个响应并带 `Idempotency-Replayed: true`；这一层是资源本身的天然幂等，
+        不带该头，且在没有 `Idempotency-Key` 时同样成立。
+
         限额（§7.5）：每用户 500 张卡，超出 `422 limit_exceeded`。
         共享给我的卡**不计入**我的额度（Q11）。
       parameters:
@@ -802,6 +817,7 @@ paths:
           headers:
             X-Request-Id: { $ref: '#/components/headers/XRequestId' }
             Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+            Location: { $ref: '#/components/headers/Location' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Card' }
@@ -823,6 +839,34 @@ paths:
                 is_pinned: false
                 revision: 1
                 updated_at: "2026-08-29T10:30:12Z"
+        '200':
+          description: |
+            该 `id` 已存在且属于调用者 —— **没有创建任何东西**，返回服务端现有的
+            那张卡，请求体被整体忽略（§5.4.3 的天然幂等）。
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotency-Replayed: { $ref: '#/components/headers/IdempotencyReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Card' }
+              example:
+                id: 0192f3a1-b2c3-7d4e-8f01-23456789abcd
+                title: REWE Payback
+                merchant_label: REWE
+                color: blue_600
+                barcode_format: EAN_13
+                barcode_value: "4012345678901"
+                note: null
+                expires_on: null
+                owner_id: 0192f3a1-b2c3-7d4e-8f01-00000000a11a
+                owner_username: anna_b
+                my_role: owner
+                can_edit: true
+                member_count: 1
+                sort_order: 0
+                is_pinned: false
+                revision: 4
+                updated_at: "2026-08-29T11:47:03Z"
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1186,6 +1230,19 @@ components:
         type: string
         const: "true"
       example: "true"
+
+    Location:
+      description: |
+        新建资源的路径，**仅出现在 `201` 上**（`200` 的幂等重放没有创建任何东西，
+        因此不带它）。相对 `servers[].url`，例如 `/v1/cards/{cardId}`。
+
+        客户端不需要它就能定位资源 —— `id` 是它自己生成的，也在响应体里。
+        它在这里是为了让 `201` 是一个完整的 `201`：一个不带 `Location` 的 `201`
+        会让通用 HTTP 工具（以及将来的第三方集成）无从知道建出来的是什么。
+      required: true
+      schema:
+        type: string
+      example: /v1/cards/0192f3a1-b2c3-7d4e-8f01-23456789abcd
 
     RetryAfter:
       description: |
