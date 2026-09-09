@@ -350,11 +350,29 @@ T-101 落地。完整论证在
 `doctrine:schema:validate` 会把库里的外键与 ORM 元数据对账，映射成普通 uuid 列的话
 那条命令永远绿不了。join-column 必须写 `on-delete` —— Comparator 不比外键**名字**
 （所以迁移里用 §5.2 要求的 `fk_<table>_<column>`），但**比 onDelete**。
-⚠️ 这条只管**模块内部**的外键。**跨模块**的（`cards.owner_id → users`、
-T-110 的 `card_members`、M3 的 `friendships` / `share_invitations`）反过来办：
-实体只持有一个 uuid 列，外键由 `Shared\Infrastructure\Doctrine\CrossModuleForeignKeys`
-在 `postGenerateSchema` 上补进 ORM schema。加一条要同时改三处（那份清单、迁移、
+⚠️ 这条只管**模块内部**的外键。**跨模块**的反过来办：实体只持有一个 uuid 列，
+外键由 `Shared\Infrastructure\Doctrine\CrossModuleForeignKeys` 在
+`postGenerateSchema` 上补进 ORM schema。加一条要同时改三处（那份清单、迁移、
 引用侧的 `<index>` 声明），见 [ADR-0019](../docs/adr/0019-cross-module-foreign-keys-via-post-generate-schema.md)。
+
+目前清单里有四条，M3 还会加：
+
+| 约束 | 方向 | `on delete` |
+|---|---|---|
+| `cards.owner_id → users(id)` | Wallet → Identity | `RESTRICT` |
+| `card_members.card_id → cards(id)` | **Sharing → Wallet** | `CASCADE` |
+| `card_members.user_id → users(id)` | Sharing → Identity | `CASCADE` |
+| `card_members.added_by → users(id)` | Sharing → Identity | `SET NULL` |
+
+⚠️ **`card_members` 属 Sharing 而不是 Wallet**（§4.2 把「卡成员」划给它，
+M3 的 T-303/304/305 都在它上面写），所以它的**三条**外键全都跨模块 ——
+包括看起来像模块内部的 `card_id → cards`。ADR-0019 原先把 T-110 记成「两条」，
+那是按归 Wallet 算的，已随 T-110 修订。完整论证见
+[ADR-0020](../docs/adr/0020-card-members-belongs-to-sharing-and-wallet-reads-it-through-three-ports.md)。
+
+⚠️ `RESTRICT` 与 `CASCADE` 的不对称是有意的：**删一个用户会被他自己的卡挡住
+（要人处理的冲突），但他作为 viewer 的成员行可以随他一起消失。**
+别「顺手改成一致」。
 
 **5. 索引、唯一约束与每个 DEFAULT 都要在 XML 里再写一遍，名字与迁移逐字相同。**
 索引是**按名字**比的：不显式声明的话 DBAL 会自动补 `IDX_<hash>`（外键索引尤其容易忘），

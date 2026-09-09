@@ -6,9 +6,11 @@
 - **规格引用**: §3.7（账号删除）、§4.2（模块依赖规则）、§5.2、§12.2、§13.3、§17.1
 - **修订**: [ADR-0011](0011-doctrine-orm-xml-mapping-and-module-owned-foreign-keys.md) 的「遗留问题：T-109 的跨模块外键」——本 ADR 结掉它；
   ADR-0011 决定 3 的适用范围**收窄为模块内部**，这一点它自己已经写明，这里只是把另一半补上
-- **影响**：T-109（本 ADR 随其落地）、T-110（`card_members` 的**两条**外键指向 `users`）、
+- **影响**：T-109（本 ADR 随其落地）、T-110（`card_members` 的**三条**外键，见下方补记）、
   M3 的 `friendships` / `share_invitations`（同一个形状）、
   以及**每一个**将来引用他模块表的迁移
+- **修订记录**：2026-09-09（T-110）——「影响」行原写作「T-110 的**两条**外键指向 `users`」，
+  实测是**三条**。见末尾「T-110 补记」。
 
 ## Context
 
@@ -89,7 +91,7 @@ Symfony 自己的 `MessengerTransportDoctrineSchemaListener` 用的就是这个�
   就写不出跨模块 JOIN。要 owner 的用户名只能走 Identity 的 Port ——
   这比 skip_violations 方案**更**硬，而不是打了个折。
 - **`skip_violations` 保持为空**，那句「只允许缩短」还是真的。
-- **一处登记、到处适用。** T-110 的两条、M3 的四条都只是往 `FOREIGN_KEYS` 里加行，
+- **一处登记、到处适用。** T-110 的三条、M3 的四条都只是往 `FOREIGN_KEYS` 里加行，
   不需要再决定一次。
 - **零 deptrac 配置改动。** 监听器只用表名/列名字符串，deptrac 按 FQCN 收依赖，
   字符串不是依赖；用到的 `Doctrine\*` 落在 `Framework.Persistence`，
@@ -161,3 +163,44 @@ ADR-0011 已经点过：那是改 §4.2 的模块划分。而且它只解决「�
 放在哪一侧都是任意的，而放错的后果是两个模块各写一半、谁都不知道另一半在哪。
 收在 `Shared` 里一份清单，读的人一眼能看到全仓库的跨模块引用有几条。
 这也正是这份清单的第二个用途：它是模块耦合的**度量**，长了就该问为什么。
+
+## T-110 补记（2026-09-09）：那是**三条**，不是两条
+
+本 ADR 落地时把 T-110 记成「`card_members` 的**两条**外键指向 `users`」。
+数漏了一条，原因是当时默认 `card_members` 会落在 **Wallet**（那样
+`card_id → cards` 就是模块内部的外键，按 ADR-0011 决定 3 写成 `<many-to-one>`）。
+
+T-110 落地时按 §4.2 的模块图把这张表定在了 **Sharing**（「卡成员（owner/viewer）、
+共享邀请、退出共享、好友解除时的级联撤销」逐字划给 Sharing，而 M3 的 T-303 /
+T-304 / T-305 全都在它上面写）。于是三条外键**全都跨模块**：
+
+| 约束 | 方向 | `on delete` | 为什么 |
+|---|---|---|---|
+| `fk_card_members_card_id → cards(id)` | Sharing → **Wallet** | `CASCADE` | 卡硬删（90 天后的清理）时成员行没有独立存在的意义 |
+| `fk_card_members_user_id → users(id)` | Sharing → Identity | `CASCADE` | 一条授权记录，随人消失是对的 |
+| `fk_card_members_added_by → users(id)` | Sharing → Identity | `SET NULL` | 审计线索。邀请人删号不该连累**被邀请人**的成员关系 |
+
+⚠️ 第一条是本清单里**第一条指向另一个模块业务表**（而不是 `users`）的外键。
+本 ADR 的「Alternatives considered」已经点过这个形状
+（「`card_members → cards` 这种「Sharing 指向 Wallet」的外键还是同样的问题」），
+**决策本身覆盖得到，只有计数写岔了** —— 所以这里是修订计数，不是推翻决策。
+
+⚠️ **`ON DELETE` 的不对称是有意的，别「顺手改成一致」**：
+`fk_cards_owner_id` 是 `RESTRICT`，而 `fk_card_members_user_id` 是 `CASCADE`。
+读作一句话：**删一个用户会被他自己的卡挡住（那是要人处理的冲突），
+但他作为 viewer 的成员行可以随他一起消失。** §17.4 的删号脚本因此是
+「先删卡 → 成员行自动没 → 再删用户」。这一条也抄在
+`CrossModuleForeignKeys::FOREIGN_KEYS` 的注释里。
+
+**部分索引那条结论成立。** 本 ADR 末尾为 `uq_card_single_owner` 留的判断是对的：
+`WHERE role = 'owner' AND left_at IS NULL` 原样落地，`schema:validate` 第一次就同步。
+PG 规范化之后的谓词是
+
+```
+((role = 'owner'::text) AND (left_at IS NULL))
+```
+
+⚠️ 注意是 `role` 而不是 `(role)::text` —— 那一列是 **TEXT** 不是 VARCHAR，
+两者的规范化形式不同。抄错的症状是 dump-sql 反复吐 DROP + CREATE INDEX。
+真值由 `SharingSchemaTest::testTheOwnerIndexIsUniquePartialOnLiveOwnerRows()`
+对着 `pg_indexes.indexdef` 钉住。

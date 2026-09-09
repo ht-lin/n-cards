@@ -60,6 +60,15 @@ final readonly class CardFields
     public const MERCHANT_LABEL_MAX_CHARS = 100;
 
     /**
+     * PG `INTEGER` 的边界（T-110 的 `card_members.sort_order`）。
+     *
+     * 写死而不是用 `PHP_INT_MAX`：那个在 64 位平台上是 int64 的边界，
+     * 拿它当上限等于没有上限，见 {@see requiredInt32()}。
+     */
+    private const INT32_MIN = -2147483648;
+    private const INT32_MAX = 2147483647;
+
+    /**
      * 必填的非空字符串。
      *
      * @param array<string, mixed> $body
@@ -220,6 +229,88 @@ final readonly class CardFields
         foreach (array_diff(array_keys($body), $allowed) as $unknown) {
             $errors[] = new FieldError((string) $unknown, FieldErrorCode::UnknownField, 'This endpoint does not accept the field.');
         }
+    }
+
+    /**
+     * 必填的 32 位有符号整数（T-110 的 `sort_order`）。
+     *
+     * ============================================================================
+     * ⚠️ 范围检查不是可选的
+     * ============================================================================
+     * `card_members.sort_order` 是 PG 的 `INTEGER`（§17.1）。
+     * `{"sort_order": 9223372036854775807}` 是一个**合法的 JSON 整数**，
+     * `is_int()` 收得下，然后在 flush 的时候变成一条 DBAL 错误 ——
+     * 也就是一个 **500**，而它本该是契约写的 `400 validation_failed`。
+     *
+     * 一个字段级校验漏掉就直接送 500 的洞，所以边界写在这里而不是靠库层。
+     * 用 `out_of_range` 而不是 `invalid_type`：类型是对的，是值太大。
+     *
+     * ⚠️ PHP 在 64 位平台上 `PHP_INT_MAX` 远大于 int32，所以不能靠
+     * `is_int()` 兜底 —— 这两个常量必须写死。
+     *
+     * @param array<string, mixed> $body
+     * @param list<FieldError>     $errors
+     */
+    public static function requiredInt32(array $body, string $field, array &$errors): ?int
+    {
+        if (!\array_key_exists($field, $body)) {
+            $errors[] = new FieldError($field, FieldErrorCode::Required, \sprintf('The %s field is required.', $field));
+
+            return null;
+        }
+
+        $raw = $body[$field];
+
+        // ⚠️ `is_int()` 而不是 `is_numeric()`：契约写的是 `type: integer`，
+        // 而 `"3"` 与 `3.0` 都不是。收下它们等于让客户端的类型 bug 静默通过，
+        // 口径同 CardFields::string() 对 `is_string()` 的坚持。
+        if (!\is_int($raw)) {
+            $errors[] = new FieldError($field, FieldErrorCode::InvalidType, \sprintf('The %s field must be an integer.', $field));
+
+            return null;
+        }
+
+        if ($raw < self::INT32_MIN || $raw > self::INT32_MAX) {
+            $errors[] = new FieldError($field, FieldErrorCode::OutOfRange, \sprintf(
+                'The %s field must be between %d and %d.',
+                $field,
+                self::INT32_MIN,
+                self::INT32_MAX,
+            ));
+
+            return null;
+        }
+
+        return $raw;
+    }
+
+    /**
+     * 必填的布尔（T-110 的 `is_pinned`）。
+     *
+     * ⚠️ 只收真正的 `true` / `false`。`"true"` / `1` / `0` 一律 `invalid_type` ——
+     * 契约写的是 `type: boolean`，而「1 算不算 true」这种宽容一旦开了口子，
+     * 客户端两端就会对它有不同的理解。
+     *
+     * @param array<string, mixed> $body
+     * @param list<FieldError>     $errors
+     */
+    public static function requiredBool(array $body, string $field, array &$errors): ?bool
+    {
+        if (!\array_key_exists($field, $body)) {
+            $errors[] = new FieldError($field, FieldErrorCode::Required, \sprintf('The %s field is required.', $field));
+
+            return null;
+        }
+
+        $raw = $body[$field];
+
+        if (!\is_bool($raw)) {
+            $errors[] = new FieldError($field, FieldErrorCode::InvalidType, \sprintf('The %s field must be a boolean.', $field));
+
+            return null;
+        }
+
+        return $raw;
     }
 
     /**

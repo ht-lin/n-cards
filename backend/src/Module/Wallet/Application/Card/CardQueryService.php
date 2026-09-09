@@ -29,8 +29,26 @@ use App\Shared\Domain\Identity\Uuid;
  *
  * ⚠️ 与 `PATCH` / `DELETE` 的 `403 insufficient_role` 是**两个码**，别合并 ——
  * 见 {@see DomainException::insufficientRole()} 的注释。
- * T-109 阶段「非 owner」与「非成员」是同义的（没有成员表），
- * T-110 接上 `card_members` 后这里会分成两支。
+ *
+ * ============================================================================
+ * ⚠️⚠️ T-110 之后这里有**两个真相来源**，M3 必须把它收掉
+ * ============================================================================
+ * 本类的**可见性**判据仍是 `Card::isOwnedBy()`，而 `my_role` / `can_edit` 已经
+ * 改由 `card_members` 决定（{@see CardViewAssembler}）。同一个问题两个答案，
+ * 现在恰好一致**只因为 M1 没有任何 viewer** —— T-110 只建表、不改可见性。
+ *
+ * T-304 插进第一行 viewer 的那一刻它们就分叉：`get()` 会对一个 assembler
+ * 本来乐意给出 `my_role: viewer` 的用户返回 403。
+ *
+ * **修法是把检查挪过去，不是再加一次查询。** assembler 已经为同一个 viewer
+ * 取过那张成员表了（`CardMembershipReaderInterface::membershipsFor()`），
+ * M3 该做的是让这里也读它：有活跃成员行 → 放行，没有 → `not_a_member`。
+ * `page()` 同理，但它还要先解决「跨模块分页」——`findOwnedPage()` 现在按
+ * `owner_id` 过滤，而 §4.2 规则 5 不许它 JOIN `card_members`。那是 T-305 的
+ * 交付物（「成员管理、权限矩阵与成员可见性裁剪」），不是本卡的。
+ *
+ * 在这里加第二次成员查询是错的方向：它会让两个真相来源变成两次查询，
+ * 而不是一个。
  */
 final readonly class CardQueryService
 {

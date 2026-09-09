@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    `card_members`（§5.2 / §17.1）—— Sharing 模块的第一张表。
+
+    映射为什么是 XML、以及「三处必须与迁移逐字对齐」，见 User.orm.xml 的注释与 ADR-0011。
+
+    ============================================================================
+    ⚠️ 复合主键：本仓库第一个
+    ============================================================================
+    §17.1 给这张表的主键是 `(card_id, user_id)`，没有代理 id。所以下面有**两个**
+    <id> 元素，各带 <generator strategy="NONE"/>。其余每个实体都是单列主键，
+    照抄它们会得到一个「只有 card_id 是主键」的映射，症状是同一张卡的第二个成员
+    在 identity map 里覆盖掉第一个 —— 而库层的主键会拦下它，于是变成一个费解的
+    「插入时说主键冲突，但我查出来只有一行」。
+
+    ============================================================================
+    ⚠️ 三个 uuid 列都是普通 <field>，没有一个 <many-to-one>
+    ============================================================================
+    ADR-0011 第 3 条（外键必须建成 ORM 关联）的适用范围是**模块内部**。
+    这张表的三条外键**全都跨模块**：
+
+        card_id  → cards(id)   Sharing → Wallet
+        user_id  → users(id)   Sharing → Identity
+        added_by → users(id)   Sharing → Identity
+
+    而 deptrac 里 `Sharing.Domain: [Shared.Domain]` —— 既看不见 Wallet.Domain
+    也看不见 Identity.Domain，写成 <many-to-one> 会直接 violation。
+
+    库层的三条外键照建（迁移 Version20260909110000 里那三条 ALTER），ORM 侧由
+    `App\Shared\Infrastructure\Doctrine\CrossModuleForeignKeys` 在
+    postGenerateSchema 上补进 schema，于是 schema:validate 仍然对得上。
+    完整论证见 ADR-0019。
+
+    ⚠️ 本文件是 ADR-0019 那条规则的第二个使用者，也是第一个**指向另一个模块
+    业务表**（cards，而不是 users）的。ADR-0019 原先把 T-110 记成「两条外键」，
+    那是按这张表归 Wallet 算的；归属定在 Sharing 之后是三条，该 ADR 已随本卡修订。
+
+    ============================================================================
+    ⚠️ 下面两条索引必须留着，删了 schema:validate 会红
+    ============================================================================
+    迁移建了 `uq_card_single_owner` 与 `idx_card_members_user`，ORM 侧不声明的话
+    它们就是「库里有、映射里没有」的索引 → `schema:update` 的 dump-sql 会吐
+    DROP INDEX，schema:validate 报不同步。（与 Card.orm.xml 里记的是同一个坑。）
+
+    **不需要**为三条外键列各补一条索引：DBAL 会给外键列自动补一条
+    `IDX_<hash>`，而那个自动补的过程在**两侧都**会跑 —— ORM 侧由
+    CrossModuleForeignKeys 添加外键时触发，库侧由内省 hydration 时触发
+    （Table::_addForeignKeyConstraint() 自己的注释说明了后者）。索引名由
+    表名 + 列名确定性生成，两边同名、互相抵消。
+
+    ============================================================================
+    ⚠️⚠️ 两条 where 谓词是**实测**抄回来的，不是手写的
+    ============================================================================
+    §17.1 要求这两条都是**部分索引**。要过 schema:validate，ORM 侧声明的谓词
+    必须与 PG 存回来的**逐字**相同：
+
+      - DBAL 4 的 `PostgreSQLSchemaManager::selectIndexColumns()` 用
+        `pg_get_expr(indpred, indrelid)` 读回谓词，PG 吐的是**规范化**结果。
+      - `Index::samePartialIndex()` 拿两侧的 where 选项做 `===` 字符串比较。
+
+    本机 compose 实测（2026-09-09，PG 16），`pg_indexes.indexdef` 里读到的是：
+
+        role = 'owner' AND left_at IS NULL
+          → ((role = 'owner'::text) AND (left_at IS NULL))
+        left_at IS NULL
+          → (left_at IS NULL)
+
+    ⚠️ 注意左边是 `role` 而不是 `(role)::text` —— 那一列是 **TEXT** 不是 VARCHAR。
+    抄错成 varchar 的形状是这里最容易犯的错，症状是 dump-sql 反复吐 DROP + CREATE。
+
+    `uq_card_single_owner` 的谓词**是不变量本身**（「每张卡有且仅有一行
+    role='owner' 且 left_at IS NULL」），去不掉 —— ADR-0019 末尾专门为这张卡
+    确认过部分索引在 DBAL 4 上是能用的。
+    `SharingSchemaTest` 另外直接对着 pg_indexes.indexdef 断言了一次，
+    好让失败信息指向真正的原因而不是一句「不同步」。
+
+    ============================================================================
+    ⚠️ uq_card_single_owner 走的是 <unique-constraints> 而不是 <indexes>
+    ============================================================================
+    Doctrine 的 SchemaTool 对 table['uniqueConstraints'] 调的是
+    `$table->addUniqueIndex($cols, $name, $options)` —— 生成的是
+    **UNIQUE INDEX 而不是 UNIQUE CONSTRAINT**，所以带 WHERE 谓词是合法的。
+    这一点是必需的：PG 的 UNIQUE **约束**不能是部分的，
+    走成那条路会在建表时当场炸。
+
+    ⚠️ XML 注释里不能出现两个连续的减号（libxml 直接拒绝整个文件，而
+    `validate_xml_mapping: true` 会让它在容器编译期就炸）。所以上面写的是
+    「`schema:update` 的 dump-sql」而不是那个带两根减号的选项名。
+-->
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="http://doctrine-project.org/schemas/orm/doctrine-mapping
+                                      https://www.doctrine-project.org/schemas/orm/doctrine-mapping.xsd">
+
+    <entity name="App\Module\Sharing\Domain\Entity\CardMember" table="card_members">
+
+        <unique-constraints>
+            <unique-constraint name="uq_card_single_owner" columns="card_id">
+                <options>
+                    <option name="where">((role = 'owner'::text) AND (left_at IS NULL))</option>
+                </options>
+            </unique-constraint>
+        </unique-constraints>
+
+        <indexes>
+            <index name="idx_card_members_user" columns="user_id">
+                <options>
+                    <option name="where">(left_at IS NULL)</option>
+                </options>
+            </index>
+        </indexes>
+
+        <!--
+            复合主键（§17.1）。两个 <id>，都是 strategy=NONE：
+            card_id 由客户端生成（UUIDv7，§5.4.3 的离线优先前提），
+            user_id 来自 JWT 的 sub。两个都不是本表分配的。
+        -->
+        <id name="cardId" type="uuid" column="card_id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <id name="userId" type="uuid" column="user_id">
+            <generator strategy="NONE"/>
+        </id>
+
+        <!--
+            owner / viewer（§5.2，v1.1 已移除 editor）。
+            ⚠️ 这是本仓库唯一在库层带 CHECK 的枚举列 —— 取值域是**封闭**的，
+            与 cards.color / barcode_format 那两个开放词汇的取舍相反，
+            理由见 CardRole 的类注释。
+        -->
+        <field name="role" type="text" column="role" nullable="false"
+               enum-type="App\Module\Sharing\Domain\ValueObject\CardRole"/>
+
+        <!--
+            每成员私有（§5.2）。走 PUT /v1/cards/{id}/placement 修改，
+            **不参与卡的 revision**。
+            ⚠️ 是 integer 不是 bigint：§17.1 就是 INTEGER，而 CardPlacementPayload
+            负责把越界的值挡成 400（不挡的话那是一个 500）。
+        -->
+        <field name="sortOrder" type="integer" column="sort_order" nullable="false">
+            <options>
+                <option name="default">0</option>
+            </options>
+        </field>
+
+        <field name="isPinned" type="boolean" column="is_pinned" nullable="false">
+            <options>
+                <option name="default">false</option>
+            </options>
+        </field>
+
+        <!--
+            谁把他加进来的（审计线索，不是权限来源）。owner 行恒为 NULL。
+            外键是 ON DELETE SET NULL —— 邀请人删号不该连累被邀请人的成员关系。
+        -->
+        <field name="addedBy" type="uuid" column="added_by" nullable="true"/>
+
+        <field name="joinedAt" type="datetimetz_immutable" column="joined_at" nullable="false">
+            <options>
+                <option name="default">now()</option>
+            </options>
+        </field>
+
+        <!--
+            成员墓碑（§5.2）。M3 重度使用：移除成员 / 退出共享 / 好友解除的
+            级联撤销都写它，而不是删行 —— §5.4 要靠这一行给对方下发
+            「你已失去访问」的同步记录。
+            仓储的每条查询都带 `left_at IS NULL`。
+        -->
+        <field name="leftAt" type="datetimetz_immutable" column="left_at" nullable="true"/>
+
+    </entity>
+
+</doctrine-mapping>
