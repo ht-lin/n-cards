@@ -79,4 +79,5 @@
 | [0017](0017-username-assignment-and-lifetime-attempt-counter.md) | username 的 10 次总计落在 `users` 新增一列上、用尽返回 422 而非 429、只有「探到占用」的请求消耗它；**Q9 起草**为 12 个词的精确匹配黑名单 | Accepted |
 | [0018](0018-onboarding-interceptor-placement-and-the-first-inverted-shared-port.md) | onboarding 拦截器落在 Shared、经**第一个反转的** Shared 端口读 Identity；优先级 10（晚于限流早于幂等）；用户行消失返回 401 而非 403；`PATCH /me` 的 409 不走 `assignUsername()`；通知偏好延后 | Accepted |
 | [0019](0019-cross-module-foreign-keys-via-post-generate-schema.md) | **结掉 ADR-0011 的遗留问题**：跨模块外键建在库里、经 `postGenerateSchema` 补进 ORM schema，实体只持有 uuid 列（于是 §4.2 规则 5 结构性成立、`skip_violations` 保持为空）；附带推翻 T-106「部分索引不能用」的结论 | Accepted |
+| [0020](0020-card-members-belongs-to-sharing-and-wallet-reads-it-through-three-ports.md) | `card_members` 归 **Sharing**（不是 Wallet），Wallet 经**三个窄端口**读写它；placement 端点仍留在 `Wallet.Http`（否则要复制 `CardView` 与 `CardBody`，且出现 deptrac 抓不到的模块环）；建卡与 owner 行同事务，幂等重放不补成员行 | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。

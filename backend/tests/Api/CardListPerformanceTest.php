@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Tests\Api;
 
+use App\Module\Sharing\Domain\Entity\CardMember;
+use App\Module\Sharing\Domain\Repository\CardMemberRepositoryInterface;
 use App\Module\Wallet\Domain\Entity\Card;
 use App\Module\Wallet\Domain\Repository\CardRepositoryInterface;
 use App\Module\Wallet\Domain\ValueObject\BarcodeFormat;
@@ -111,12 +113,22 @@ final class CardListPerformanceTest extends WebTestCase
     }
 
     /**
-     * 直接经仓储种 200 张卡。
+     * 直接经仓储种 200 张卡**及其 owner 成员行**。
      *
      * ⚠️ **不**走 200 次 `POST /v1/cards`：那会花掉 600 次 Vault 往返
      * （每张卡两次加密 + 一次 HMAC），把用例本身变成几十秒 ——
      * 而被测的是**读**路径。加密仍然走真实的 `CryptoServiceInterface`，
      * 所以库里躺的是真密文，读路径要真的解开它们。
+     *
+     * ⚠️ T-110：绕开 `CreateCardService` 就绕开了那个事务，所以成员行要在这里
+     * 自己补。不补的话 `CardViewAssembler::assertComplete()` 会直接抛
+     * ——「每张卡都必然有一行 owner 成员记录」是它依赖的不变量。
+     * （落地时这条用例确实先红了一次，失败信息把 200 个 cardId 全列了出来，
+     * 指向的正是这里。）
+     *
+     * 顺带：这也让本用例继续是那条**先行指标** —— 读路径现在有**两次**批量
+     * 查找（Vault 解密 + 成员查询），下面那个 700 ms 的上限同时护着两条。
+     * 谁把成员查询改成 per-card 的，200 次主键查找会把它撞穿。
      */
     private function seedCards(Uuid $owner): void
     {
@@ -128,15 +140,18 @@ final class CardListPerformanceTest extends WebTestCase
         $hasher = $container->get(HmacHasherInterface::class);
         /** @var CardRepositoryInterface $cards */
         $cards = $container->get(CardRepositoryInterface::class);
+        /** @var CardMemberRepositoryInterface $members */
+        $members = $container->get(CardMemberRepositoryInterface::class);
 
         $now = new \DateTimeImmutable('2026-09-08T12:00:00+00:00');
 
         for ($i = 0; $i < self::CARDS; ++$i) {
             $plaintext = 'code-'.$i;
+            $cardId = Uuid::fromString(\sprintf('0192f3a1-b2c3-7d4e-8f01-%012x', $i));
 
             $cards->save(Card::create(
                 // 递增的 id → 列表按 id 升序返回，于是上面可以逐条比对明文。
-                Uuid::fromString(\sprintf('0192f3a1-b2c3-7d4e-8f01-%012x', $i)),
+                $cardId,
                 $owner,
                 'Karte '.$i,
                 'REWE',
@@ -149,6 +164,8 @@ final class CardListPerformanceTest extends WebTestCase
                 null,
                 $now,
             ));
+
+            $members->save(CardMember::owner($cardId, $owner, $now));
         }
     }
 }

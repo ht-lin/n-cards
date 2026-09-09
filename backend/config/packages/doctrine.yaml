@@ -132,6 +132,16 @@ doctrine:
                 prefix: 'App\Module\Wallet\Domain\Entity'
                 alias: Wallet
 
+            # T-110。§4.2 把「卡成员（owner/viewer）」划给 Sharing，所以
+            # card_members 是这个模块的表，不是 Wallet 的 —— M3 的 T-303/304/305
+            # 全都在它上面写。
+            Sharing:
+                type: xml
+                is_bundle: false
+                dir: '%kernel.project_dir%/src/Module/Sharing/Infrastructure/Doctrine/Mapping'
+                prefix: 'App\Module\Sharing\Domain\Entity'
+                alias: Sharing
+
 when@test:
     doctrine:
         dbal:

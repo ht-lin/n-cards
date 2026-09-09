@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Module\Wallet\Http;
 
 use App\Module\Wallet\Application\Card\CardCreatePayload;
+use App\Module\Wallet\Application\Card\CardPlacementPayload;
 use App\Module\Wallet\Application\Card\CardQueryService;
 use App\Module\Wallet\Application\Card\CardUpdatePayload;
 use App\Module\Wallet\Application\Card\CardView;
 use App\Module\Wallet\Application\Card\CreateCardService;
 use App\Module\Wallet\Application\Card\DeleteCardService;
+use App\Module\Wallet\Application\Card\UpdateCardPlacementService;
 use App\Module\Wallet\Application\Card\UpdateCardService;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\FieldError;
@@ -25,14 +27,34 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 
 /**
- * `/v1/cards` 的五个端点（§6.2，T-109）。
+ * `/v1/cards` 的六个端点（§6.2，T-109 的五个 + T-110 的 placement）。
  *
- * 一个控制器五条路由，与 {@see \App\Module\Identity\Http\DeviceController}
- * 的三条同一个做法：它们是同一个资源的 CRUD，拆成五个文件只会让
- * 「路径参数怎么解析」「响应体怎么组装」各出现五份。
+ * 一个控制器六条路由，与 {@see \App\Module\Identity\Http\DeviceController}
+ * 的三条同一个做法：它们是同一个资源的 CRUD，拆成六个文件只会让
+ * 「路径参数怎么解析」「响应体怎么组装」各出现六份。
  *
- * ⚠️ `PUT /v1/cards/{cardId}/placement` **不在这里**，它是 T-110 的 ——
- * 那个端点改的是 `card_members`，不是这张卡，而且 owner 与 viewer 都能调用。
+ * ============================================================================
+ * ⚠️ placement 改的是 Sharing 的表，为什么控制器还在 Wallet
+ * ============================================================================
+ * `PUT /v1/cards/{cardId}/placement` 写的是 `card_members`，而那张表属
+ * **Sharing** 模块（§4.2）。直觉是把控制器也放过去，但那要付两次复制的代价，
+ * 两次都是本仓库明文在拦的：
+ *
+ *   - `Sharing.Http` 的 deptrac 允许列表只有 `+_Ports`（各模块的 `.Port` 与
+ *     `.Dto`），**看不见** `Wallet.Application` —— 于是要克隆一个装**明文码值**
+ *     的 `CardView`，而它「只能由 `CardViewAssembler` 构造」这条不变量
+ *     （＝「谁解的密只有一个答案」）当场作废。
+ *   - 同样看不见 `Wallet.Http`，于是要克隆 {@see CardBody} —— 而那个类的注释
+ *     写着它存在的全部理由就是「组装代码有第二份的话，加字段时必然漏一处，
+ *     且漏掉的那个端点的契约测试照样是绿的」。T-110 正是给 `Card` 加两个字段
+ *     的那次提交。
+ *
+ * 模块级还有一个真环（Wallet 要 Sharing 的角色，Sharing 要 Wallet 的渲染），
+ * 而 deptrac 两条边都放行且**不做环检测** —— CI 抓不到它。
+ *
+ * 放在这里则只有两条边、单向：`Wallet.Http → Wallet.Application`、
+ * `Wallet.Application → Sharing.Port`。「写的是别人的表」由那个端口满足，
+ * Wallet 从头到尾不知道 `card_members` 存在。
  *
  * ============================================================================
  * 这五条路由自动进三张门禁表，不需要登记
@@ -66,6 +88,7 @@ final class CardController extends AbstractApiController
         private readonly CreateCardService $creator,
         private readonly UpdateCardService $updater,
         private readonly DeleteCardService $deleter,
+        private readonly UpdateCardPlacementService $placement,
         private readonly CursorPaginator $paginator,
     ) {
     }
@@ -166,6 +189,31 @@ final class CardController extends AbstractApiController
         $this->deleter->delete($this->authContext($request), self::cardId($cardId));
 
         return $this->noContent();
+    }
+
+    /**
+     * `PUT /v1/cards/{cardId}/placement` —— 调用者自己对这张卡的排序与置顶。
+     *
+     * ⚠️ **没有** `IfMatch::revision()`：契约的参数表里没有 `If-Match`，
+     * 而且这个端点不会递增卡的 `revision` —— 它改的是 `card_members`，
+     * 不是这张卡。理由见 {@see UpdateCardPlacementService} 的类注释。
+     *
+     * ⚠️ owner 与 viewer **都能**调用（这是 viewer 唯一的上行写入端点），
+     * 所以这里也没有任何角色判断 —— 鉴权判据是「有没有活跃成员行」，
+     * 由服务层那次写内联完成。
+     */
+    #[Route('/v1/cards/{cardId}/placement', name: 'cards_placement_update', methods: ['PUT'])]
+    public function updatePlacement(Request $request, string $cardId): JsonResponse
+    {
+        $payload = CardPlacementPayload::fromArray($this->decodeBody($request));
+
+        $card = $this->placement->update(
+            $this->authContext($request),
+            self::cardId($cardId),
+            $payload,
+        );
+
+        return $this->json(CardBody::of($card));
     }
 
     /**

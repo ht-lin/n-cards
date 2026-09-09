@@ -86,6 +86,31 @@ final readonly class CrossModuleForeignKeys
         // T-109。RESTRICT 而不是 CASCADE：§3.7 的账号删除流程靠它挡住
         // 「还持有卡的用户被删掉」，那是一个要人来处理的冲突，不是可以静默级联的事。
         'fk_cards_owner_id' => ['cards', 'owner_id', 'users', 'id', 'RESTRICT'],
+
+        // ------------------------------------------------------------- T-110
+        // `card_members` 属 **Sharing**（§4.2 的模块图），而 `cards` 属 Wallet、
+        // `users` 属 Identity —— 所以这张表的**三条**外键全都跨模块。
+        //
+        // ⚠️ ADR-0019 的「影响」行原先写的是「T-110 的**两条**外键指向 users」。
+        // 那是按 card_members 归 Wallet 算的（那样 card_id 会是模块内的
+        // <many-to-one>）。归属定在 Sharing 之后是三条，该 ADR 已随 T-110 修订。
+        //
+        // `fk_card_members_card_id` 是本清单里第一条指向**另一个模块业务表**
+        // （而不是 users）的外键 —— ADR-0019 的 Alternatives 一节点过这个形状
+        // 「card_members → cards 这种『Sharing 指向 Wallet』的外键还是同样的问题」，
+        // 决策覆盖得到，只是那个计数写岔了。
+        'fk_card_members_card_id' => ['card_members', 'card_id', 'cards', 'id', 'CASCADE'],
+
+        // ⚠️ 这里是 CASCADE，而上面 `fk_cards_owner_id` 是 RESTRICT ——
+        // 看起来不一致，其实是 §3.7 删号编排要的顺序：删一个用户会被他
+        // **自己的卡**挡住（RESTRICT，要人来处理），但他作为 viewer 的成员行
+        // 可以随他一起消失（CASCADE，那只是一条授权记录）。
+        // 于是 §17.4 的删号脚本是「先删卡 → 成员行自动没 → 再删用户」。
+        'fk_card_members_user_id' => ['card_members', 'user_id', 'users', 'id', 'CASCADE'],
+
+        // SET NULL：`added_by` 只是「谁把他加进来的」这条审计线索。
+        // 邀请人删号不该把**被邀请人**的成员关系一起删掉 —— 那张卡的共享还在。
+        'fk_card_members_added_by' => ['card_members', 'added_by', 'users', 'id', 'SET NULL'],
     ];
 
     public function postGenerateSchema(GenerateSchemaEventArgs $args): void

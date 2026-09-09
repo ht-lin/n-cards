@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Module\Wallet\Application\Card;
 
+use App\Module\Sharing\Application\Dto\CardMembershipMap;
+use App\Module\Sharing\Application\Port\CardMembershipReaderInterface;
 use App\Module\Wallet\Domain\Entity\Card;
 use App\Shared\Application\Crypto\BatchDecryptorInterface;
 use App\Shared\Domain\Crypto\Ciphertext;
@@ -41,15 +43,36 @@ use App\Shared\Domain\Identity\Uuid;
  * 空批次不打 Vault
  * ============================================================================
  * `decryptAll([])` 按接口约定返回空数组且不发请求，所以「一页 0 张卡」
- * 不需要在这里特判。
+ * 不需要在这里特判。成员查询同样（`membershipsFor()` 对空数组不查库）。
+ *
+ * ============================================================================
+ * ⚠️ T-110：第二份批量查找，同一条纪律
+ * ============================================================================
+ * `my_role` / `can_edit` / `sort_order` / `is_pinned` 都来自 `card_members`，
+ * 而那张表属 **Sharing** 模块（§4.2），所以这里经
+ * {@see CardMembershipReaderInterface} 跨模块取 —— 它和 Vault 一样是
+ * **一次批量查询**，与卡数无关。
+ *
+ * 理由与上面那段解密的逐字相同：§9.1 给 `GET /v1/sync/bootstrap`（200 张卡）
+ * 的预算是 P95 ≤ 700 ms。200 次主键查找不会当场把预算吃光，但「加一张表就多
+ * 一轮 N+1」是会被复制的形状，加到第三张表就晚了。那个接口因此也**没有**
+ * 单条版本。
+ *
+ * 于是本类的不变量从「一个入口、一次批量解密」变成
+ * 「一个入口、**两次**批量查找」。真正要守的那条没变：不许 per-row 远程调用。
+ *
+ * ⚠️ 成员查询排在解密**之前**：它便宜得多，而且结果不完整时能在花掉一次
+ * Vault 往返之前就失败。
  */
 final readonly class CardViewAssembler
 {
     private const BARCODE_PREFIX = 'b:';
     private const NOTE_PREFIX = 'n:';
 
-    public function __construct(private BatchDecryptorInterface $decryptor)
-    {
+    public function __construct(
+        private BatchDecryptorInterface $decryptor,
+        private CardMembershipReaderInterface $memberships,
+    ) {
     }
 
     /**
@@ -60,12 +83,23 @@ final readonly class CardViewAssembler
      */
     public function assemble(array $cards, Uuid $viewerId): array
     {
+        $cardIds = array_map(static fn (Card $card): Uuid => $card->id(), $cards);
+
+        // 一次跨模块批量查询，先于 Vault —— 见类注释。
+        $memberships = $this->memberships->membershipsFor($viewerId, $cardIds);
+
+        self::assertComplete($memberships, $cardIds);
+
         $plaintexts = $this->decryptor->decryptAll(CryptoKey::Card, $this->ciphertexts($cards));
 
         $views = [];
 
         foreach ($cards as $card) {
             $id = $card->id()->toString();
+
+            // assertComplete() 已经保证它不是 null。
+            $membership = $memberships->for($card->id());
+            \assert(null !== $membership);
 
             $views[] = new CardView(
                 $card->id(),
@@ -77,18 +111,59 @@ final readonly class CardViewAssembler
                 $plaintexts[self::NOTE_PREFIX.$id] ?? null,
                 $card->expiresOn(),
                 $card->ownerId(),
-                // T-109 阶段这两个恒为 owner / true —— 不是占位，是**真的**：
-                // 没有 card_members，能看到一张卡的只有它的 owner，而
-                // 服务层已经把非 owner 挡在外面了。T-110 接上成员表后，
-                // 这两行会变成一次真正的角色查找，而调用方一行都不用改。
-                $card->isOwnedBy($viewerId) ? 'owner' : 'viewer',
-                $card->isOwnedBy($viewerId),
+                // T-110：这四个全部来自 `card_members` 上调用者自己那一行。
+                // `canEdit` 是 Sharing 算好的（CardRole::canEdit()）——
+                // 这里**不写**任何角色比较，那正是把它放在 DTO 里的目的。
+                $membership->role,
+                $membership->canEdit,
+                $membership->sortOrder,
+                $membership->isPinned,
                 $card->revision(),
                 $card->updatedAt(),
             );
         }
 
         return $views;
+    }
+
+    /**
+     * 每张卡都必须有调用者的成员行，否则**抛**。
+     *
+     * ============================================================================
+     * ⚠️ 为什么不回退到一个默认值
+     * ============================================================================
+     * 走到这里说明调用方**已经判过权限**了（`CardQueryService::get()` 的
+     * `not_a_member`、`UpdateCardService` / `DeleteCardService` 的
+     * `insufficient_role` 都在前面，placement 的鉴权就是那次写本身）。
+     * 所以「卡在、成员行不在」不是一种输入，是数据破损。
+     *
+     * 三条备选都更糟：
+     *
+     *   - 回退成 `viewer` / `false` → 一张卡的 owner 悄悄看到只读界面，
+     *     Android 把编辑入口灰掉，用户报「我的卡变成只读了」——
+     *     而没有测试覆盖、没有日志、没有任何东西是红的。
+     *   - 回退成 `owner` / `true` → 从**缺失的**数据里推导出一个授权结论。
+     *     M3 有 viewer 之后这是一个越权。
+     *   - 跳过那张卡 → 卡从 `GET /v1/cards` 里凭空消失，而游标照样越过了它，
+     *     客户端连「少了一张」都看不出来。
+     *
+     * `LogicException` 而不是 `DomainException`：没有任何客户端输入能造出这个
+     * 状态，也就没有客户端可以分支的 code。它经
+     * `ApiProblemExceptionListener` 变成 500 `internal_error` 并进日志。
+     *
+     * M1 里这一支走不到 —— T-110 的迁移把 `cards` 全表回填了 owner 行
+     * （含软删的），此后每张新卡的 owner 行与卡在同一个事务里。
+     * 正因为走不到，它必须很响：一个安静的回退会让破损在生产里躺几个月。
+     *
+     * @param list<Uuid> $cardIds
+     */
+    private static function assertComplete(CardMembershipMap $memberships, array $cardIds): void
+    {
+        $missing = $memberships->missingFrom($cardIds);
+
+        if ([] !== $missing) {
+            throw new \LogicException(\sprintf('Card(s) without a card_members row for the current viewer: %s. Every card must have an owner member row (T-110); this is data corruption, not a permission problem — the caller already authorised this read.', implode(', ', $missing)));
+        }
     }
 
     /**

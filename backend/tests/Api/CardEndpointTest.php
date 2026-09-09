@@ -72,10 +72,19 @@ final class CardEndpointTest extends WebTestCase
         self::assertSame('owner', $body['my_role']);
         self::assertTrue($body['can_edit']);
 
-        // ⚠️ T-109 刻意**不发**这四个 —— 它们来自 card_members（T-110）与 Identity。
-        // 发常量占位的话，客户端会把 sort_order: 0 当成用户真实的排序存进本地库。
-        self::assertArrayNotHasKey('sort_order', $body);
-        self::assertArrayNotHasKey('is_pinned', $body);
+        // T-110：这两个现在**是真的** —— 建卡在同一个事务里写了一行
+        // card_members(role='owner')，它们是那一行的列默认值，不是占位。
+        self::assertSame(0, $body['sort_order']);
+        self::assertFalse($body['is_pinned']);
+
+        // ⚠️ 这两个仍然刻意**不发**：
+        //   member_count —— §5.2 要求它只对 owner 可见（C11），而 M1 阶段它恒为 1，
+        //                   连同那条按角色裁剪的逻辑一起留给 T-305；
+        //   owner_username —— 要跨模块读 Identity 的 UserDirectoryInterface，
+        //                     而 M1 阶段 owner 恒为调用者本人，用户名已经在
+        //                     `GET /v1/me` 里了。
+        // 发常量占位的话，客户端会把它当成真的存进本地库，等它变成假的那天
+        // 本地与服务端不一致且没有任何信号提示要重拉。
         self::assertArrayNotHasKey('member_count', $body);
         self::assertArrayNotHasKey('owner_username', $body);
 

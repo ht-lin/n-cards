@@ -76,6 +76,69 @@ final class CrossModuleForeignKeysTest extends KernelTestCase
     }
 
     /**
+     * T-110 的三条。`card_members` 属 Sharing，而 `cards` 属 Wallet、
+     * `users` 属 Identity —— 所以这张表的**每一条**外键都跨模块。
+     *
+     * ⚠️ `fk_card_members_card_id` 是清单里第一条指向**另一个模块业务表**
+     * （而不是 `users`）的。ADR-0019 的「影响」行原先把 T-110 记成「两条」，
+     * 那是按 `card_members` 归 Wallet 算的；归属定在 Sharing 之后是三条。
+     */
+    public function testTheThreeCardMemberForeignKeysAreInjectedIntoTheOrmSchema(): void
+    {
+        $members = $this->schema()->getTable('card_members');
+
+        $expected = [
+            'fk_card_members_card_id' => ['card_id', 'cards', 'CASCADE'],
+            'fk_card_members_user_id' => ['user_id', 'users', 'CASCADE'],
+            // SET NULL：邀请人删号不该把被邀请人的成员关系一起删掉。
+            'fk_card_members_added_by' => ['added_by', 'users', 'SET NULL'],
+        ];
+
+        foreach ($expected as $name => [$column, $foreignTable, $onDelete]) {
+            self::assertTrue(
+                $members->hasForeignKey($name),
+                \sprintf(
+                    'ADR-0019：%s 由 CrossModuleForeignKeys 在 postGenerateSchema 上补进 ORM schema。'
+                    .'它不见了的话 schema:validate 会报「多出一条待删外键」，'
+                    .'而那条信息不会告诉你是哪一条、也不会告诉你监听器没跑。',
+                    $name,
+                ),
+            );
+
+            $fk = $members->getForeignKey($name);
+
+            self::assertSame([$column], $fk->getLocalColumns(), $name);
+            self::assertSame($foreignTable, $fk->getForeignTableName(), $name);
+            self::assertSame(['id'], $fk->getForeignColumns(), $name);
+            // Comparator::diffForeignKey() 不比约束名，但**比 onDelete**。
+            self::assertSame($onDelete, $fk->getOption('onDelete'), $name);
+        }
+    }
+
+    /**
+     * ⚠️ `CardMember` 一个 ORM 关联都不该有 —— 它的三个 uuid 列全指向别的模块。
+     *
+     * 与 {@see testTheCardEntityHasNoAssociationToUser()} 同一条理由，
+     * 但这里更紧：`card_id → cards` 看起来**像**是可以写成 `<many-to-one>` 的
+     * （两张表都在「卡」这个话题下），而它跨的正是 Sharing → Wallet 那条边。
+     * 写成关联就能拿到 `$member->getCard()->getBarcodeValueEncrypted()`，
+     * §4.2 规则 5 当场失效。
+     */
+    public function testTheCardMemberEntityHasNoAssociations(): void
+    {
+        /** @var EntityManagerInterface $em */
+        $em = self::getContainer()->get(EntityManagerInterface::class);
+
+        $metadata = $em->getClassMetadata(\App\Module\Sharing\Domain\Entity\CardMember::class);
+
+        self::assertSame([], $metadata->associationMappings, 'CardMember 不该有任何 ORM 关联。');
+
+        foreach (['cardId', 'userId', 'addedBy'] as $field) {
+            self::assertContains($field, $metadata->getFieldNames(), $field.' 是一个普通的 uuid 列。');
+        }
+    }
+
+    /**
      * 监听器跑两次不会炸。
      *
      * `getSchemaFromMetadata()` 在一条用例里被调多次是常事（本文件就调了两次），
@@ -89,6 +152,11 @@ final class CrossModuleForeignKeysTest extends KernelTestCase
 
         self::assertCount(1, $first->getForeignKeys());
         self::assertCount(1, $second->getForeignKeys());
+
+        // 同一条守护对 T-110 那张表也要成立 —— 它有三条外键，
+        // 重复添加的 deprecation 在 failOnWarning 下同样是一条失败。
+        self::assertCount(3, $this->schema()->getTable('card_members')->getForeignKeys());
+        self::assertCount(3, $this->schema()->getTable('card_members')->getForeignKeys());
     }
 
     private function schema(): Schema

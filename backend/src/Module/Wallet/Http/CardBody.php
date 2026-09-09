@@ -10,10 +10,15 @@ use App\Module\Wallet\Application\Card\CardView;
  * {@see CardView} → 契约 `Card` schema 的数组。
  *
  * 与 {@see \App\Module\Identity\Http\UserBody} 同一个角色、同一条理由：
- * 契约里 `Card` 是**一个** schema，而服务端有五个端点会返回它
- * （`GET` 列表 / `POST` / `GET` 单卡 / `PATCH`，T-110 还要加 `PUT …/placement`）。
+ * 契约里 `Card` 是**一个** schema，而服务端有**五个**端点会返回它
+ * （`GET` 列表 / `POST` / `GET` 单卡 / `PATCH` / `PUT …/placement`）。
  * 组装代码有第二份的话，加字段时必然漏一处 —— 而漏掉的那个端点的契约测试
  * 照样是绿的（`Card` 的 `required` 里没有那个新字段）。
+ *
+ * ⚠️ T-110 是这条理由的第一次兑现：它给 `Card` 加了 `sort_order` / `is_pinned`
+ * 两个字段，而五个端点一行都不用改。它也是 placement 端点必须留在
+ * `Wallet.Http` 的原因 —— `Sharing.Http` 的 deptrac 允许列表里没有
+ * `Wallet.Http`，放过去就得复制本类。
  *
  * ⚠️ 本类**不做任何判断**，只搬字段。`my_role` / `can_edit` 该是什么
  * 由 {@see \App\Module\Wallet\Application\Card\CardViewAssembler} 决定 ——
@@ -41,6 +46,11 @@ final readonly class CardBody
             'owner_id' => $card->ownerId->toString(),
             'my_role' => $card->myRole,
             'can_edit' => $card->canEdit,
+            // T-110。每成员私有（`card_members`，§5.2）——同一张共享卡，
+            // Anna 置顶、Bob 不置顶。改它走 `PUT /v1/cards/{id}/placement`，
+            // 而那**不会**递增下面的 `revision`。
+            'sort_order' => $card->sortOrder,
+            'is_pinned' => $card->isPinned,
             'revision' => $card->revision,
             // 与 UserBody 逐字相同的时间格式：先转 UTC 再格式化。
             // 不转的话，服务器时区一变，响应里的字面量就跟着变 ——

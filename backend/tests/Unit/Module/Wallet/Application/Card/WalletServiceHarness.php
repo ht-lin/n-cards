@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace App\Tests\Unit\Module\Wallet\Application\Card;
 
+use App\Module\Sharing\Application\Membership\CardMembershipService;
+use App\Module\Sharing\Domain\Entity\CardMember;
 use App\Module\Wallet\Application\Card\CardSecrets;
 use App\Module\Wallet\Application\Card\CardViewAssembler;
 use App\Module\Wallet\Application\Card\CreateCardService;
 use App\Module\Wallet\Application\Card\DeleteCardService;
+use App\Module\Wallet\Application\Card\UpdateCardPlacementService;
 use App\Module\Wallet\Application\Card\UpdateCardService;
 use App\Module\Wallet\Domain\Entity\Card;
 use App\Shared\Domain\Http\AuthContext;
@@ -16,7 +19,9 @@ use App\Shared\Domain\Limit\LimitEnforcer;
 use App\Tests\Double\Crypto\InMemoryBatchDecryptor;
 use App\Tests\Double\Crypto\InMemoryCryptoService;
 use App\Tests\Double\Crypto\RecordingHmacHasher;
+use App\Tests\Double\Sharing\InMemoryCardMemberRepository;
 use App\Tests\Double\Time\FrozenClock;
+use App\Tests\Double\Transaction\RecordingTransactionRunner;
 use App\Tests\Double\Wallet\InMemoryCardRepository;
 use App\Tests\Double\Wallet\WalletEntities;
 
@@ -40,18 +45,68 @@ final class WalletServiceHarness
 
     public FrozenClock $clock;
 
+    public InMemoryCardMemberRepository $members;
+
+    public RecordingTransactionRunner $transactions;
+
+    /**
+     * T-110。构造器给每张传进来的卡自动补一行 owner 成员记录 ——
+     * 见 {@see seedOwnerRows()}。
+     */
     public function __construct(Card ...$cards)
     {
         $this->cards = new InMemoryCardRepository(...$cards);
         $this->crypto = new InMemoryCryptoService();
         $this->decryptor = new InMemoryBatchDecryptor();
+        $this->members = new InMemoryCardMemberRepository();
+        $this->transactions = new RecordingTransactionRunner();
         // FrozenClock 收的是毫秒，不是 DateTimeImmutable。
         $this->clock = new FrozenClock(WalletEntities::now()->getTimestamp() * 1000);
+
+        $this->seedOwnerRows(...$cards);
     }
 
     public function creator(): CreateCardService
     {
-        return new CreateCardService($this->cards, $this->secrets(), $this->assembler(), self::limits(), $this->clock);
+        return new CreateCardService(
+            $this->cards,
+            $this->secrets(),
+            $this->assembler(),
+            self::limits(),
+            $this->clock,
+            $this->membership(),
+            $this->transactions,
+        );
+    }
+
+    public function placement(): UpdateCardPlacementService
+    {
+        return new UpdateCardPlacementService($this->cards, $this->membership(), $this->assembler());
+    }
+
+    /** Sharing 的三个端口，一个实现类 —— 与生产接线一致。 */
+    public function membership(): CardMembershipService
+    {
+        return new CardMembershipService($this->members, $this->transactions);
+    }
+
+    /**
+     * 给预置的卡补上 owner 成员行。
+     *
+     * ⚠️ 这不是方便，是**保真**：T-110 之后每张卡在库里都必然有一行 owner
+     * 成员记录（建卡时同事务写入，历史卡由迁移回填），而
+     * {@see CardViewAssembler} 会对缺失的成员行直接抛。
+     * 不补的话，每一条「预置一张卡然后读它」的既有用例都会红在一个
+     * 与它无关的地方。
+     *
+     * 反过来说：要测「成员行缺失」那一支，别用这个构造器 —— 直接把卡塞进
+     * `$this->cards` 而不碰 `$this->members`。
+     */
+    private function seedOwnerRows(Card ...$cards): void
+    {
+        foreach ($cards as $card) {
+            $this->members->save(CardMember::owner($card->id(), $card->ownerId(), $card->createdAt()));
+        }
     }
 
     public function updater(): UpdateCardService
@@ -66,7 +121,7 @@ final class WalletServiceHarness
 
     public function assembler(): CardViewAssembler
     {
-        return new CardViewAssembler($this->decryptor);
+        return new CardViewAssembler($this->decryptor, $this->membership());
     }
 
     public function secrets(): CardSecrets

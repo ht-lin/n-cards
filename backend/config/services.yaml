@@ -163,6 +163,18 @@ services:
     App\Module\Notification\Application\Port\MailTransportInterface: '@App\Module\Notification\Infrastructure\Mail\SymfonyMailerTransport'
     App\Module\Notification\Application\Port\MailVolumeCounterInterface: '@App\Module\Notification\Infrastructure\Redis\RedisMailVolumeCounter'
 
+    # ------------------------------------------------------------------ T-110
+    # Sharing 的成员端口（§4.2 规则 2：跨模块同步调用只能经对方的 Port）。
+    #
+    # 三个接口**一个实现类**，所以 Symfony 的「单实现自动别名」在这里不成立
+    # （它按接口 → 唯一实现类推断，而这个类实现三个接口时那条推断仍然可用，
+    # 但反过来说：将来任何一个接口出现第二个实现，三条别名会一起失效）。
+    # 显式写出来的理由与上面几条一样 —— 「生产里注进去的到底是哪个类」
+    # 应该在配置里一眼可查，而这次答案对三个接口是同一个，更值得写明。
+    App\Module\Sharing\Application\Port\CardOwnershipRegistrarInterface: '@App\Module\Sharing\Application\Membership\CardMembershipService'
+    App\Module\Sharing\Application\Port\CardMembershipReaderInterface: '@App\Module\Sharing\Application\Membership\CardMembershipService'
+    App\Module\Sharing\Application\Port\CardPlacementWriterInterface: '@App\Module\Sharing\Application\Membership\CardMembershipService'
+
     # 要注入的是**具名**的 mail.bus，不是默认的 command.bus ——
     # 后者恒同步（见 messenger.yaml），路由到异步 transport 会抛
     # 「Message was handled zero times」。
