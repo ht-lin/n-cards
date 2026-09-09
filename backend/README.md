@@ -181,6 +181,37 @@ $this->limiter->consumeAll([
 username 的 10 次总计归 users 行（T-107）。它们是生命周期计数而不是滑动窗口，
 而 §8.2 的 ROPA 规定限流计数只保留 24 小时。
 
+### 强制点登记（T-111）
+
+**一个限额有配置值不等于它被 enforce 了。** `ncards_limits.yaml` 里躺着 §7.5 的
+全部数字，但其中一半现在没有任何调用点 —— 下表是那份对照，加一条限额时一并更新。
+
+| §7.5 | `SystemLimit` | 强制点 | |
+|---|---|---|---|
+| 每用户卡数 500 | `CardsPerUser` | [`CreateCardService::enforceLimits()`](src/Module/Wallet/Application/Card/CreateCardService.php) | ✅ |
+| barcode payload 1024 **字节** | `BarcodePayloadBytes` | `Create` / [`UpdateCardService::enforceLimits()`](src/Module/Wallet/Application/Card/UpdateCardService.php) | ✅ |
+| note 2000 字符 | `NoteChars` | 同上 | ✅ |
+| title 100 字符 | `TitleChars` | 同上 | ✅ |
+| username 3–20 / `[a-z0-9_]` | —— | [`Identity\Domain\ValueObject\Username`](src/Module/Identity/Domain/ValueObject/Username.php) | ✅ |
+| username 设定 10 次总计 | `UsernameAttemptsPerUser` | [`AssignUsernameService`](src/Module/Identity/Application/Me/AssignUsernameService.php) | ✅ |
+| 每卡成员数 20 | `MembersPerCard` | **无** | ⏳ T-304 |
+| 每用户好友数 500 | `FriendsPerUser` | **无** | ⏳ T-301 |
+| 每日好友请求 50 | `FriendRequestsPerDay` | **无** | ⏳ T-301 |
+| 每日共享邀请 100 | `ShareInvitesPerDay` | **无** | ⏳ M2 |
+
+后四行**故意为空**，不是漏了：`friendships` 表与邀请端点在 M1 还不存在，
+往一条不存在的写路径上挂钩子只会得到一个没人走的分支和一段假的覆盖率。
+
+⚠️ `MembersPerCard` 尤其容易被误认为漏了 —— 建卡确实写一行 `card_members`。
+但那个 20 管的是**邀请**（1 owner + 19 viewer），owner 是第 1 行、永远不可能超限；
+在每次建卡上花一次 `COUNT(*)` 去证明「1 ≤ 20」是买零信息。
+完整论证在 [`CardOwnershipRegistrarInterface`](src/Module/Sharing/Application/Port/CardOwnershipRegistrarInterface.php) 的类注释里。
+
+**不在这张表里的长度限制**：`cards.merchant_label` 的 100 字符是契约的字段约束
+（`maxLength`），不是 §7.5 的额度 —— 所以它是 `400 validation_failed` + `too_long`，
+由 [`CardFields`](src/Module/Wallet/Application/Card/CardFields.php) 管。
+把它挪进 `LimitEnforcer` 会静默地把码从 400 改成 422。
+
 **待接入（T-1xx）**：`RateLimitSubjectResolverInterface` 现在是匿名实现（回落到 IP），
 认证落地后把 `config/services.yaml` 里的 alias 指向 Authenticated 版本 ——
 与 `IdempotencyScopeResolverInterface` 是同一个待办，最好一起改。

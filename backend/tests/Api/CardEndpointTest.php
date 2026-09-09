@@ -4,8 +4,16 @@ declare(strict_types=1);
 
 namespace App\Tests\Api;
 
+use App\Module\Sharing\Domain\Entity\CardMember;
+use App\Module\Wallet\Domain\Entity\Card;
+use App\Module\Wallet\Domain\ValueObject\BarcodeFormat;
 use App\Module\Wallet\Http\CardController;
+use App\Shared\Application\Crypto\CryptoServiceInterface;
+use App\Shared\Application\Crypto\HmacHasherInterface;
+use App\Shared\Domain\Crypto\CryptoKey;
+use App\Shared\Domain\Crypto\HashDigest;
 use App\Shared\Domain\Error\ErrorCode;
+use App\Shared\Domain\Identity\Uuid;
 use App\Tests\Api\Support\OpenApiContract;
 use App\Tests\Api\Support\ProblemDetailsAssertions;
 use App\Tests\Api\Support\RequiresOtpStack;
@@ -134,6 +142,78 @@ final class CardEndpointTest extends WebTestCase
         self::assertIsProblemDetails($response, ErrorCode::LimitExceeded);
     }
 
+    /**
+     * ⚠️ 超长 note 是 `422 limit_exceeded`，**不是** `400 validation_failed`。
+     *
+     * 两者对客户端是两种处置：422 说「额度满了」（§7.5 的限额），
+     * 400 说「这个字段的形状不对」。`CardFields` 只做类型与格式，
+     * 长度归服务层的 `LimitEnforcer` —— 把 note 的 2000 挪进 `CardFields`
+     * 会静默地把码从 422 改成 400，而契约里这个端点两个码都声明了，
+     * 没有任何契约断言会红。
+     */
+    public function testAnOverlongNoteIsALimitNotAValidationError(): void
+    {
+        $response = $this->sendJson('POST', '/v1/cards', self::body(note: str_repeat('b', 2001)), $this->token);
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertIsProblemDetails($response, ErrorCode::LimitExceeded);
+    }
+
+    /**
+     * ⚠️ payload 的限额是 1024 **字节**，不是字符（§7.5）。
+     *
+     * 513 个 `ä` 在 UTF-8 里是 1026 字节但只有 513 个字符 —— 按 `mb_strlen`
+     * 判的话它会一路通过。单测层 `CreateCardServiceTest` 已经钉过一次，
+     * 这里再钉一次是因为 HTTP 层多了一次 JSON 解码：解码把 `ä` 还原成
+     * 两个字节之后，长度才是服务层看到的那个长度。
+     */
+    public function testAnOverlongBarcodePayloadIsALimitCountedInBytes(): void
+    {
+        $response = $this->sendJson(
+            'POST',
+            '/v1/cards',
+            self::body(barcodeValue: str_repeat('ä', 513)),
+            $this->token,
+        );
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertIsProblemDetails($response, ErrorCode::LimitExceeded);
+    }
+
+    /**
+     * §7.5 的第一句、T-111 的交付物正题：**第 501 张卡是 `422 limit_exceeded`**。
+     *
+     * ⚠️ 前 499 张经仓储直接种，不走 499 次 `POST /v1/cards` —— 那是一千多次
+     * Vault 往返，会把这条用例变成几十秒，而被测的是**第 500、501 次**建卡。
+     * 形状与理由同 {@see CardListPerformanceTest::seedCards()}。
+     *
+     * 第 500 张仍然走真实的 HTTP 路径：`enforceCanAdd()` 的判据是
+     * `current >= max`，499 存量放行 / 500 存量拒绝，两侧都要真的被执行一次
+     * 才叫「边界」。差一错误（写成 `>` 或忘了 +1）只在这两次之间现形。
+     */
+    public function testTheFiveHundredAndFirstCardIsRejectedWithLimitExceeded(): void
+    {
+        $this->seedCards(Uuid::fromString($this->userId), 499);
+
+        $five_hundredth = $this->sendJson('POST', '/v1/cards', self::body(), $this->token);
+        self::assertSame(Response::HTTP_CREATED, $five_hundredth->getStatusCode(), (string) $five_hundredth->getContent());
+
+        $response = $this->sendJson(
+            'POST',
+            '/v1/cards',
+            self::body(id: '0192f3a1-b2c3-7d4e-8f01-23456789ffff'),
+            $this->token,
+        );
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        $problem = self::assertIsProblemDetails($response, ErrorCode::LimitExceeded);
+        // 限额名是**面向客户端的稳定标识**（SystemLimit 的类注释）——
+        // 客户端只对 code 分支，但支持工单要靠 detail 分辨是哪一条额度满了。
+        self::assertStringContainsString('cards_per_user', $problem['detail']);
+
+        self::assertResponseMatchesContract('post', '/v1/cards', $response);
+    }
+
     public function testABodyThatIsNotContractShapedIsRejected(): void
     {
         $response = $this->sendJson('POST', '/v1/cards', [...self::body(), 'sort_order' => 3], $this->token);
@@ -247,6 +327,31 @@ final class CardEndpointTest extends WebTestCase
         // 没提到的字段一个都不能动。
         self::assertSame('bleibt', $body['note']);
         self::assertSame('4012345678901', $body['barcode_value']);
+
+        self::assertResponseMatchesContract('patch', '/v1/cards/'.self::CARD_ID, $response);
+    }
+
+    /**
+     * §7.5 的长度限额在 `PATCH` 上与 `POST` 上是同一组数字。
+     *
+     * ⚠️ 顺序也在这里被钉住：`UpdateCardService` 先查限额、**再**做乐观锁写入，
+     * 所以这里给的是**正确**的 `If-Match`。给一个过期的 `If-Match` 也能拿到
+     * 一个非 200，但那证明不了限额生效 —— 它只证明了 409 在 422 前面。
+     */
+    public function testALengthLimitAlsoAppliesOnPatch(): void
+    {
+        $this->sendJson('POST', '/v1/cards', self::body(), $this->token);
+
+        $response = $this->sendJson(
+            'PATCH',
+            '/v1/cards/'.self::CARD_ID,
+            ['title' => str_repeat('a', 101)],
+            $this->token,
+            ifMatch: '"1"',
+        );
+
+        self::assertSame(Response::HTTP_UNPROCESSABLE_ENTITY, $response->getStatusCode());
+        self::assertIsProblemDetails($response, ErrorCode::LimitExceeded);
 
         self::assertResponseMatchesContract('patch', '/v1/cards/'.self::CARD_ID, $response);
     }
@@ -391,6 +496,7 @@ final class CardEndpointTest extends WebTestCase
         string $id = self::CARD_ID,
         string $title = 'REWE Payback',
         ?string $note = null,
+        string $barcodeValue = '4012345678901',
     ): array {
         return [
             'id' => $id,
@@ -398,10 +504,71 @@ final class CardEndpointTest extends WebTestCase
             'merchant_label' => 'REWE',
             'color' => 'blue_600',
             'barcode_format' => 'EAN_13',
-            'barcode_value' => '4012345678901',
+            'barcode_value' => $barcodeValue,
             'note' => $note,
             'expires_on' => null,
         ];
+    }
+
+    /**
+     * 经仓储直接种 `$count` 张卡**及其 owner 成员行**，只为把配额顶到某个存量。
+     *
+     * ⚠️ **不**走 `$count` 次 `POST /v1/cards`：每张卡两次加密 + 一次 HMAC，
+     * 499 张就是一千多次 Vault 往返。被测的是第 500、501 次建卡，不是这些种子。
+     * 同一条论证与形状见 {@see CardListPerformanceTest::seedCards()}。
+     *
+     * ⚠️ 密文与指纹**只算一次，所有行共用**。`Card.orm.xml` 里
+     * `barcode_value_fingerprint` 没有唯一索引（同一张会员卡在多个用户手里
+     * 本来就该有相同的指纹 —— §5.3 的重复检测靠的正是它），所以复用是合法的，
+     * 而它把这条用例的 Vault 往返从一千多次降到 1 次。
+     * 这些卡在本用例里从不被读，明文是什么无所谓。
+     *
+     * ⚠️ 成员行要在这里自己补：绕开 `CreateCardService` 就绕开了它那个事务，
+     * 而「每张卡都有一行 owner 成员记录」是 T-110 之后的库内不变量。
+     *
+     * ⚠️ `persist()` 一千行、**只 `flush()` 一次**，不走
+     * `CardRepositoryInterface::save()` —— 那个方法每次调用都 flush，
+     * 于是 998 次种子就是 998 次往返（实测 5.8 秒，占整个 Api 套件的五分之一）。
+     * 这里不需要它的乐观锁异常翻译：种子不会冲突。
+     */
+    private function seedCards(Uuid $owner, int $count): void
+    {
+        $container = static::getContainer();
+
+        /** @var CryptoServiceInterface $crypto */
+        $crypto = $container->get(CryptoServiceInterface::class);
+        /** @var HmacHasherInterface $hasher */
+        $hasher = $container->get(HmacHasherInterface::class);
+
+        $now = new \DateTimeImmutable('2026-09-08T12:00:00+00:00');
+        $encrypted = $crypto->encrypt(CryptoKey::Card, 'kontingent');
+        $fingerprint = HashDigest::fromRaw($hasher->hash('kontingent'));
+
+        for ($i = 0; $i < $count; ++$i) {
+            // ⚠️ 前缀避开 self::CARD_ID —— 撞上的话第 500 张会走成幂等重放（200），
+            // 而这条用例要的是一次真的 201。
+            $cardId = Uuid::fromString(\sprintf('0192f3a1-b2c3-7d4e-8f01-0000%08x', $i));
+
+            $this->entityManager->persist(Card::create(
+                $cardId,
+                $owner,
+                'Karte '.$i,
+                'REWE',
+                'blue_600',
+                BarcodeFormat::Ean13,
+                $encrypted,
+                $fingerprint,
+                null,
+                null,
+                $now,
+            ));
+
+            $this->entityManager->persist(CardMember::owner($cardId, $owner, $now));
+        }
+
+        $this->entityManager->flush();
+        // 后面那两次 POST 要走真实的读路径，别让它们读到 UnitOfWork 里的对象。
+        $this->entityManager->clear();
     }
 
     /**

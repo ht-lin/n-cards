@@ -88,7 +88,10 @@ interface CardRepositoryInterface
      *
      * §7.5 的 `cards_per_user`（500）用它。⚠️ 只数 `owner_id = :user` ——
      * 共享给他的卡**不计入**（§17.5 Q11），否则 owner 可以通过共享消耗别人的配额。
-     * 强制点在 T-111。
+     *
+     * ⚠️ 所以实现**不许 join `card_members`**，哪怕看起来「顺手就能把共享卡也算上」。
+     * 那个改动在替身层看不出任何区别（`InMemoryCardRepository` 根本不知道成员表存在），
+     * 真库上的护栏是 `tests/Integration/Module/Wallet/Doctrine/CardQuotaScopeTest`。
      */
     public function countOwnedBy(Uuid $ownerId): int;
 }
