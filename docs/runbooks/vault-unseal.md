@@ -191,17 +191,87 @@ curl -o /dev/null -w '%{http_code}\n' https://api.n-cards.de/health/ready
 #    仍然 503 → Vault 好了但别的依赖没好（PG / Redis），看应用日志
 
 # 3) 加解密真的能用（这一步才真正证明 AppRole + policy 是通的）
-docker compose exec app php -r '
-  require "/app/vendor/autoload.php";
-  // 用应用自己的容器跑一次加解密往返
-' 2>/dev/null || \
-docker compose exec app bin/console debug:container --parameter=kernel.environment >/dev/null
-#    更直接的办法：调一个真实的涉密端点（T-109 之后）并确认返回 200 而非 503
+#    见下方「第 3 步：三把 key 分别验」——一条命令验不完，理由在那里。
 ```
 
 > ⚠️ `/health/ready` 返回 200 **不代表**加解密可用 ——
 > 探针打的是免认证的 `sys/health`，不验证 AppRole 凭据（ADR-0004 的偏差 2）。
 > 真正的确认是第 3 步。
+
+### 第 3 步：三把 key 分别验
+
+`infra/vault/policies/ncards-app.hcl` 里 **encrypt / decrypt / hmac 是三条独立的路径、
+各自一条 capability**，而它们分属**两把**数据密钥（`ncards-card`、`ncards-pii`）加一把
+HMAC key（`ncards-hmac`）。所以「调一个端点返回 200」证明不了全部 ——
+policy 掉了一条、或者某把 key 的 `min_decryption_version` 被调过，
+都会表现成「一部分功能好、一部分 500」。
+
+下面三条按**从便宜到完整**排，能跑到哪条算哪条。
+
+**3a. 应用侧、不需要任何凭据**（覆盖 `ncards-hmac` 的 hmac + `ncards-pii` 的 encrypt）
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://api.n-cards.de/v1/auth/otp/request \
+  -H 'Content-Type: application/json' -H 'X-Client: ops/1.0.0 (1)' \
+  -d '{"email":"ops-smoke@n-cards.de","locale":"de"}'
+#    期望：202
+#    503 → Vault 那一侧还没通（AppRole 登录失败 / key 不存在 / 仍是封印态）
+#    500 → Vault 通了但别的地方坏了，看应用日志
+```
+
+> ⚠️ 有副作用：真的会发一封信、并在 `otp_challenges` 里留一行（10 分钟后过期，
+> T-113 的清理任务会收走）。用一个**运维自己的**地址，别拿用户邮箱试。
+> 同一个地址 1 分钟只能打一次（§7.5），连打会拿到 429 —— 那也说明应用是活的。
+
+**3b. Vault 侧、用 AppRole 凭据把三把 key 全走一遍**（唯一能覆盖 `ncards-card` 的 decrypt）
+
+3a 打不到 `ncards-card` —— 那把 key 只有钱包端点用。而 §5.3 的信封加密里
+**decrypt 掉了比 encrypt 掉了更糟**：encrypt 坏了是建卡失败（用户看得见、会报障），
+decrypt 坏了是**已有的卡全部打不开**。
+
+```bash
+# 用应用自己的 role_id / secret_id 登录，拿一枚**和应用同权限**的 token
+VT=$(docker compose exec -T vault vault write -field=token \
+      auth/approle/login role_id="$ROLE_ID" secret_id="$SECRET_ID")
+
+for KEY in ncards-card ncards-pii; do
+  CT=$(docker compose exec -T -e VAULT_TOKEN="$VT" vault vault write -field=ciphertext \
+        "transit/encrypt/$KEY" plaintext="$(printf 'unseal-probe' | base64)")
+  PT=$(docker compose exec -T -e VAULT_TOKEN="$VT" vault vault write -field=plaintext \
+        "transit/decrypt/$KEY" ciphertext="$CT" | base64 -d)
+  printf '%-12s %s\n' "$KEY" "$([ "$PT" = 'unseal-probe' ] && echo ✓ || echo ✗)"
+done
+
+docker compose exec -T -e VAULT_TOKEN="$VT" vault vault write -field=hmac \
+  transit/hmac/ncards-hmac input="$(printf 'unseal-probe' | base64)" >/dev/null \
+  && echo 'ncards-hmac  ✓'
+
+unset VT
+#    期望：三行全 ✓
+#    某一行 ✗ 或报 403 → 是 **policy** 问题，不是 unseal 问题：
+#                        比对 infra/vault/policies/ncards-app.hcl 与
+#                        `vault policy read ncards-app`，见下方故障表那一行
+```
+
+> ⚠️ `role_id` / `secret_id` 写在命令行上会进 shell history。先
+> `export HISTCONTROL=ignorespace` 再在命令前加一个空格，或者从环境读。
+> **`secret_id` 是凭据**，与 root token 同等对待（§7.4）。
+>
+> ⚠️ 这里的 `transit/...` 路径前面 Vault 自己还有一层 `/v1/`（Vault 的 API 版本号），
+> 与我们应用的 `/v1` 没有关系。用 CLI 就不用管这一层。
+
+**3c. 端到端、最接近用户**（需要一枚 access token）
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://api.n-cards.de/v1/cards \
+  -H 'X-Client: ops/1.0.0 (1)' -H "Authorization: Bearer $ACCESS_TOKEN"
+#    期望：200（列表可能是空的，空列表也算通过 —— 它不打 Vault，见下）
+```
+
+> ⚠️ **空钱包的 200 是假绿。** `BatchDecryptorInterface::decryptAll([])` 按约定
+> 直接返回空数组、**不打 Vault**，所以一个没有卡的账号即使 `ncards-card` 全坏了
+> 也会拿到 200。要用这一条，得用一个**至少有一张卡**的账号。
+> 拿不到这样的令牌就跳过 3c —— 3b 已经覆盖了同一条 decrypt 路径。
 
 ---
 
@@ -250,4 +320,7 @@ Vault 好了但应用侧的 token 是坏的。见下面「升级路径」。
 - `secret_id` 目前不过期（`secret_id_ttl=0`），与 §7.4 字面的「24h 自动续期」不一致。
   偏差与理由记录在 ADR-0004，正解是 Vault Agent，归 T-406。
 - key 持有人的轮值与交接流程尚未定义。
-- 本手册的第 3 步验证还比较将就，等 T-109 有真实涉密端点后应替换为一条具体的 curl。
+- **第 3 步的 3c 需要「一个至少有一张卡的账号的 access token」，而运维手上通常没有。**
+  T-109 把 3a / 3b 补成了不依赖它的形式，但真正端到端的那一条仍然要靠人准备凭据。
+  正解是一个专用的冒烟账号 + 它的长期刷新令牌存进 Vault 的 `secret/` 下，
+  归 T-406 与 §9.2 的负载测试一起做（那边本来也需要同一个东西）。
