@@ -46,3 +46,43 @@ ncards_wait_for_ready: true
 
 # 部署时是否执行 Doctrine 迁移。CI 默认 true；首启和纯回滚时由命令行关掉。
 ncards_run_migrations: true
+
+# ------------------------------------------- 客户端版本与维护窗口（T-112）
+# 两个环境同值，所以在这里而不是各自的 group_vars 里。
+#
+# ⚠️ 在 T-112 之前这两个值在整个 infra 里**一次都没出现过** —— 生产读的是烤进
+# 镜像的 backend/.env（prod overlay 把 dev 的 bind-mount reset 掉了，prod target
+# 直接 COPY . .）。那时无人可见所以无害；而 `GET /v1/config` 一上线就开始把
+# MIN_SUPPORTED_CLIENT **对外宣告**成强制升级基线，于是抬高基线这个纯运维动作
+# 此前需要重新构建并推送一个镜像。这两行把它变回一次 deploy.yml。
+#
+# 格式 `platform/x.y.z (build)`，与 `X-Client` 同一形态。配错时是 500，不是 4xx ——
+# 服务端配置错误该以 5xx 示人。
+#
+# ⚠️ 爆炸半径不同，部署前要知道：min 配坏会让**每个**请求 500（含 /health/*），
+# 于是这个 playbook 的健康门禁会当场拦住它；latest 或下面那个窗口配坏**只**影响
+# /v1/config，/health/ready 照样 200，部署照过 —— 唯一的安全网是 §14.4 的 5xx 告警。
+# 完整论证在 backend/src/Shared/Application/Config/ClientConfigProvider.php 的类注释。
+#
+# 值保守是刻意的：App 还没发布，把任何客户端挡在门外都是纯粹的误伤。
+ncards_min_supported_client: "android/0.0.0 (1)"
+
+# 商店上最新的版本。消费者是**仍在支持范围内**的客户端（「有新版可用」软提示），
+# 不是强制墙 —— 强制墙的信号是 426 本身。抬高它跟着 Play 发布走。
+ncards_latest_client: "android/0.1.0 (1)"
+
+# §9.2 的计划维护窗口：每周二 03:00–04:00 CET，提前 24 小时通过 /v1/config 下发，
+# 客户端展示横幅（维护期间离线读卡不受影响 —— 离线优先架构的额外收益）。
+#
+# ⚠️ 两头**必须成对**填写，RFC 3339 且 **offset 必填**（德国是 CET/CEST 两个
+# offset，不带 offset 的值会按容器时区解释，于是同一份配置在两个环境指向不同时刻）。
+# 都留空即「无窗口」，这是常态。只配一头 → 500，刻意如此。
+#
+# 发一次公告 = 改这两行 + 跑一次 deploy.yml（app 容器重建）。为什么接受这个代价
+# 而不是做成免重启的运行时开关，见 backend/config/packages/ncards_maintenance.yaml。
+#
+# 只给某一个环境公告时，在那个环境的 group_vars/main.yml 里覆盖这两行。
+#   ncards_maintenance_window_start: "2026-09-15T03:00:00+02:00"
+#   ncards_maintenance_window_end: "2026-09-15T04:00:00+02:00"
+ncards_maintenance_window_start: ""
+ncards_maintenance_window_end: ""

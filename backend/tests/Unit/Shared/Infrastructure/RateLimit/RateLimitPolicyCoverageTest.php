@@ -16,7 +16,7 @@ use Symfony\Component\Yaml\Yaml;
  * ============================================================================
  * 为什么需要这个测试
  * ============================================================================
- * §7.5 里的九条速率限制，**没有一条在 T-006 时有对应端点** —— 第一个消费者是
+ * §7.5 的速率限制在 T-006 时**没有一条有对应端点** —— 第一个消费者是
  * M1 的 T-103。于是「配置写错了」在几周内没有任何东西会发现：功能测试全绿，
  * 因为根本没有功能碰它。
  *
@@ -27,7 +27,7 @@ use Symfony\Component\Yaml\Yaml;
  * ⚠️ 「总计」两条刻意不在配置里
  * ============================================================================
  * 见 {@see NOT_RATE_LIMITED} 的注释。登记在这里是为了让
- * 「§7.5 有 11 行、配置只有 9 条」不会被当成漏配 —— 也为了下一个读 §7.5 的人
+ * 「§7.5 的行数多于配置的条数」不会被当成漏配 —— 也为了下一个读 §7.5 的人
  * 不用重新推导一遍为什么。
  */
 #[CoversNothing]
@@ -57,7 +57,11 @@ final class RateLimitPolicyCoverageTest extends TestCase
         'user_lookup_user' => ['user', [[30, 60], [300, 86400]], true],
         // `GET /v1/users/lookup` | IP | 100/h
         'user_lookup_ip' => ['ip', [[100, 3600]], true],
-        // 全部写接口 | user | 300/min —— 唯一的 fail-open，见下
+        // `GET /v1/config` | IP | 300/min（T-112）—— 两条 fail-open 之一，见下。
+        // ⚠️ 按分钟而不像上面三条 IP 策略按小时：本端点是客户端每次冷启动都拉的那一个，
+        // 而配额的约束是 CGNAT（一个运营商出口背后可能上千订户），不是攻击者。
+        'config_ip' => ['ip', [[300, 60]], false],
+        // 全部写接口 | user | 300/min —— 两条 fail-open 之一，见下
         'write_endpoints' => ['user', [[300, 60]], false],
     ];
 
@@ -119,13 +123,20 @@ final class RateLimitPolicyCoverageTest extends TestCase
     }
 
     /**
-     * ⚠️⚠️ 全仓库只允许**一条** `on_store_failure: allow`。
+     * ⚠️⚠️ 全仓库只允许**这两条** `on_store_failure: allow`，白名单是**封闭集合**。
      *
-     * 这条断言存在的理由：fail-open 是一个诱人的「让测试变绿」的旋钮。
+     * 这条断言存在的理由一个字没变：fail-open 是一个诱人的「让测试变绿」的旋钮。
      * 多标一条就等于悄悄关掉一条安全防线，而症状只在 Redis 故障期间出现 ——
      * 那时没有人在看测试。
+     *
+     * 两条共用**同一个判据**（ADR-0005 决定 3 定的）：纯防 DoS，不是安全控制。
+     * 逐条对照见 ADR-0021 的决定 1 —— `config_ip` 守的端点响应对所有人同值、
+     * 没有可枚举的东西、不发信、不碰任何密钥。
+     *
+     * ⚠️ 想加第三条的话：先写 ADR。`on_store_failure` 省略时仍然是 `deny`，
+     * 也就是说放松必须**主动声明**，而不是主动记得收紧。
      */
-    public function testOnlyTheGenericWriteLimiterFailsOpen(): void
+    public function testOnlyTheTwoDocumentedDosPoliciesFailOpen(): void
     {
         $registry = self::registry();
 
@@ -135,11 +146,14 @@ final class RateLimitPolicyCoverageTest extends TestCase
         ));
 
         self::assertSame(
-            ['write_endpoints'],
+            ['config_ip', 'write_endpoints'],
             $failOpen,
-            "只有通用写接口限流（纯防 DoS）允许 fail-open。\n"
+            "只有这两条纯防 DoS 的策略允许 fail-open：\n"
+            ."  - write_endpoints（ADR-0005 决定 3）\n"
+            ."  - config_ip（ADR-0021）—— GET /v1/config，它是唯一一个刻意不依赖\n"
+            ."    PG / Redis / Vault 的端点，fail-closed 等于给它新增一个 Redis 依赖\n"
             ."其余每一条都是安全控制：fail-open 等于在 Redis 故障期间关掉 §7.5 的\n"
-            .'OTP 与 username 枚举防线。理由见 ADR-0003 与 ADR-0005。',
+            .'OTP 与 username 枚举防线。理由见 ADR-0003、ADR-0005 与 ADR-0021。',
         );
     }
 

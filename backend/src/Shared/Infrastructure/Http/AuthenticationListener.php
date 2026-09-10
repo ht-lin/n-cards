@@ -100,6 +100,12 @@ final readonly class AuthenticationListener
         'auth_otp_verify',
         'auth_magic_consume',
         'auth_token_refresh',
+        // §6.2「元信息（无需认证）」（T-112）。这一条与上面四条不是一类：
+        // 前四条是「还没有 token 的人怎么拿到 token」，它是「任何人都可以读的
+        // 部署配置」。免鉴权**不等于**免 `X-Client` —— 一个过旧的客户端在
+        // `/v1/config` 上拿到的仍然是 426，而那正是升级墙的信号源
+        // （论证在 Shared\Http\Controller\ConfigController 的类注释里）。
+        'config_get',
     ];
 
     /**

@@ -17,10 +17,23 @@ parameters:
     # （目前还是 Proposed）真定下来时能一处改掉。
     ncards.problem_type_base_uri: '%env(PROBLEM_TYPE_BASE_URI)%'
 
+    # ------------------------------------------------------------ T-004 / T-112
     # §6.1 的强制升级基线：低于此版本的客户端一律 426 client_too_old。
-    # ClientVersionListener 做判定，T-112 的 GET /v1/config 读**同一个参数**下发给客户端 ——
-    # 两处必须同源，否则会出现「服务端拒了但客户端不知道该升到哪个版本」。
+    #
+    # ⚠️ 两个读者，**同一个参数**：`ClientVersionListener` 做 426 判定，
+    # `Shared\Application\Config\ClientConfigProvider` 把它下发给客户端
+    # （`GET /v1/config` 的 `min_supported_client`）。拆成两个参数的话，漂了之后
+    # 的症状是「客户端拿着服务端下发的最低版本，却仍然被拒」—— 而它没有任何办法
+    # 判断是谁错了。`tests/Api/ConfigEndpointTest` 有一条专门钉这个同源性。
     ncards.min_supported_client: '%env(MIN_SUPPORTED_CLIENT)%'
+
+    # 商店上最新的版本。消费者是**仍在支持范围内**的客户端 —— 用来做「有新版可用」
+    # 这种软提示，不是强制墙（强制墙的信号是 426 本身）。
+    #
+    # 与上一行紧邻不是排版习惯：两者必须被**成对**读取。`ClientConfigProvider`
+    # 在构造期断言 `latest >= min`，因为反过来的含义是「请升级到一个已经不被支持
+    # 的版本」—— 客户端照做之后仍然是 426，而它会以为自己已经是最新的。
+    ncards.latest_client: '%env(LATEST_CLIENT)%'
 
     # 超过这个大小的响应体不进幂等存储（只释放锁）。
     # php.prod.ini 的 post_max_size = 2M 本来就兜了底，这里是第二道。
@@ -325,8 +338,13 @@ services:
 # ---------------------------------------------------------------------- T-004
 # 仅 test 环境的 /v1 探针端点。
 #
-# T-004 交付的是横切层，本身不含任何 /v1 路由（第一个真实端点 /v1/config 属 T-112），
-# 但验收标准要求契约测试跑在真实 HTTP 上。这个夹具提供那个 /v1 面。
+# T-004 交付的是横切层，本身不含任何 /v1 路由，但验收标准要求契约测试跑在真实
+# HTTP 上。这个夹具提供那个 /v1 面。
+#
+# ⚠️ 原注释写的是「第一个真实端点 /v1/config 属 T-112」。那个判断过时了：
+# auth（T-103/104）、me（T-108）、cards（T-109/110）都先于 T-112 落地。
+# 夹具仍然留着 —— 幂等 / 限流 / problem+json / trusted proxy 的契约测试不该
+# 依赖任何一个真实端点的业务前提（鉴权、onboarding、数据库里有行）。
 #
 # App\Tests\ 在 composer.json 的 autoload-dev 里；#[Route] 的 autoconfiguration
 # 会打上 `routing.controller` 标签，由 config/routes.yaml 的

@@ -1325,7 +1325,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/v1/config` | `{min_supported_client, latest_client, maintenance:{active,message_key,retry_after}, feature_flags:{}}` |
+| `GET` | `/v1/config` | `{min_supported_client, latest_client, maintenance:{active,message_key,retry_after}, feature_flags:{}}`。T-112 落地时把三处语义定死：① `maintenance.message_key` 取值仅 `maintenance.scheduled`（窗口 24h 内将开始）/ `maintenance.in_progress` / `null`，窗口两头来自 env（RFC 3339，offset 必填），三个字段全部按服务端时钟派生；② `retry_after` 是 §6.1 那个 `Retry-After` 的同义物，**仅 `active` 为 true 时有值**（到窗口结束的秒数）—— 提前公告阶段刻意不给，横幅里的时间由客户端按本节固定的窗口写死；③ **`feature_flags` 永不下发 §7.5 的限额数字**（T-111 移交笔记）。⚠️ 本端点免认证但**不免 `X-Client`**：过旧客户端在这里拿到的是 `426`，而那正是强制升级墙的信号源（T-158），不是缺陷。它也是整个 `/v1` 里**唯一可缓存**的响应（`public, max-age=60` + `Vary: X-Client`） |
 | `GET` | `/health/live` / `/health/ready` | 探活 / 就绪（不在 `/v1` 下，不对外暴露细节） |
 
 ### 6.3 关键流程时序
@@ -1592,6 +1592,7 @@ Bob:  【选择接受或拒绝】
 | `GET /v1/sync` | device | 60/min |
 | **`GET /v1/users/lookup`** | **user** | **30/min，300/day**（v1.1，抑制 username 枚举 T18） |
 | **`GET /v1/users/lookup`** | **IP** | **100/h**（覆盖多账号协同枚举） |
+| **`GET /v1/config`** | **IP** | **300/min**（T-112 追加）。免鉴权，IP 是唯一可用的主体。⚠️ 按**分钟**而不像上面三条 IP 策略按小时：那几条守的是登录与枚举（真实用户一天碰几次），而本端点是客户端**每次冷启动都拉一次**的那一个。⚠️ 配额留足 **CGNAT** 余量 —— 德国移动运营商一个公网 IPv4 背后可能有上千订户共用这一个桶；配紧的症状是一整个运营商出口在晚高峰被限流，那批用户的强制升级墙与维护横幅一起失灵，而日志里看起来完全像「限流生效了」。⚠️ 这是本表**第二条** fail-open 的策略，见 [ADR-0021](adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md) |
 | ~~`POST /v1/me/username`~~ | ~~user~~ | **已移入上面的限额表**（T-107）。它不是滑动窗口，也不返回 429 —— 见那一行与 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md)。`POST /auth/otp/verify` 的「challenge_id 5 次总计」出于同一个理由也是持久层计数（`otp_challenges.attempts`），只是它的失败码本来就是 401 |
 | 全部写接口 | user | 300/min |
 | 全局 | 邮件外发总量 | 阈值告警 + 熔断（保留 OTP） |
@@ -1599,6 +1600,8 @@ Bob:  【选择接受或拒绝】
 > **为什么 lookup 要同时按 user 和 IP 限速**：单账号 300/day 看似很紧，但注册成本仅为一个邮箱。IP 维度是对"批量注册 + 分摊枚举"的第二道闸。两者都触发时优先返回更长的 `Retry-After`。
 
 限流响应**必须**带 `Retry-After` 与 `X-RateLimit-Remaining`。
+
+> **降级方向**：本表默认 **fail-closed**（Redis 不可达 → `503 service_unavailable`，不是 429 —— 429 的语义是「我判定你超限了」，而真实情况是「我**无法判定**」）。例外**恰好两条**，判据相同（纯防 DoS，不是安全控制）：`全部写接口`（[ADR-0005](adr/0005-rate-limiting-topology.md) 决定 3）与 `GET /v1/config`（[ADR-0021](adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md)）。`RateLimitPolicyCoverageTest` 把这个白名单断言成封闭集合 —— 加第三条要先写 ADR。
 
 ---
 

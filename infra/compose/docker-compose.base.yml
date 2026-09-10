@@ -109,6 +109,26 @@ services:
       # `private_ranges` 覆盖本 compose 网络的网段。
       TRUSTED_PROXIES: private_ranges
 
+      # ⚠️⚠️ T-112：这四行补的是一个**既有的洞**，不是新功能的配置面。
+      #
+      # 在它们之前，`MIN_SUPPORTED_CLIENT` 在整个 infra 里一次都没出现过，于是
+      # 生产读的是**烤进镜像的** backend/.env（prod overlay 把 dev 的 bind-mount
+      # `!reset null` 掉了，Dockerfile 的 prod target 直接 `COPY . .`）。
+      # 那个值是放行一切的 `android/0.0.0 (1)` —— 在 T-112 之前无人可见所以无害，
+      # 而 `GET /v1/config` 一上线就开始把它**对外宣告**成强制升级基线。
+      # 也就是说抬高基线这个运维动作，此前需要重新构建并推送一个镜像。
+      #
+      # 值本身仍然保守：App 还没发布，把任何客户端挡在门外都是纯粹的误伤。
+      MIN_SUPPORTED_CLIENT: ${MIN_SUPPORTED_CLIENT:-android/0.0.0 (1)}
+      LATEST_CLIENT: ${LATEST_CLIENT:-android/0.1.0 (1)}
+
+      # §9.2 的计划维护窗口。两头**必须成对**填写（只配一头 → 500，刻意如此），
+      # RFC 3339 且 offset 必填；都留空即「无窗口」，这是常态。
+      # 格式与「为什么是 env 而不是 Redis / DB」见
+      # backend/config/packages/ncards_maintenance.yaml。
+      MAINTENANCE_WINDOW_START: ${MAINTENANCE_WINDOW_START:-}
+      MAINTENANCE_WINDOW_END: ${MAINTENANCE_WINDOW_END:-}
+
     # §7.4：非 root（Dockerfile 里 USER ncards）+ 只读根文件系统。
     read_only: true
     security_opt:

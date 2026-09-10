@@ -37,8 +37,10 @@
 # 本文件的范围（T-007 首版）
 # ============================================================================
 # Auth + Cards + 全套通用组件。§6.2 的其余端点（Me/Devices、Sharing、Friends、
-# Sync、Config）由各自的任务在「先改契约」时补入——这不是遗漏，是契约优先的
+# Sync）由各自的任务在「先改契约」时补入——这不是遗漏，是契约优先的
 # 正常工作方式。通用组件已经全部就位，补端点时直接 $ref 即可。
+#
+# 已补入：Me/Devices 的读写（T-108）、Cards（T-109/T-110）、Config（T-112）。
 
 openapi: 3.1.0
 
@@ -92,12 +94,22 @@ tags:
     description: 当前用户与他的设备（§6.2）。全部需要 Bearer。
   - name: cards
     description: 卡的 CRUD 与摆放。owner 是唯一的写入者；viewer 只能看，以及摆放自己钱包里的位置（§5.2）。
+  - name: meta
+    description: |
+      元信息（§6.2「元信息（无需认证）」）。整组 `security: []`。
+
+      ⚠️ 免鉴权**不等于**免 `X-Client`：`GET /config` 同样受 §6.1 的强制升级判定
+      约束，一个过旧的客户端在这里拿到的是 `426`，不是配置。那是刻意的——
+      `426` 本身就是升级墙的信号（T-158），客户端不需要先读到 `latest_client`
+      才知道该弹墙。详见该操作的 description。
+
+      `/health/live` 与 `/health/ready` 不在 `/v1` 下，刻意不出现在本契约里。
 
 # 默认全局要求 Bearer。
 #
-# ⚠️ 覆盖它的是 auth 组里的**四个**端点（otp/request、otp/verify、
-# magic/consume、token/refresh），**不含 logout** —— 它是这一组里唯一
-# 需要 Bearer 的那个。服务端侧的对应物是
+# ⚠️ 覆盖它的是**五个**端点：auth 组里的四个（otp/request、otp/verify、
+# magic/consume、token/refresh，**不含 logout** —— 它是那一组里唯一需要
+# Bearer 的那个），加上 meta 组的 `GET /config`（T-112）。服务端侧的对应物是
 # `Shared\Infrastructure\Http\AuthenticationListener::PUBLIC_ROUTES`，
 # 两者由 `tests/Api/AuthenticationCoverageTest` 逐条对账。
 security:
@@ -1078,6 +1090,71 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
+  # ==========================================================================
+  # 元信息（§6.2）—— 无需 Bearer
+  # ==========================================================================
+  /config:
+    get:
+      tags: [meta]
+      operationId: getConfig
+      security: []
+      summary: 客户端运行时配置
+      description: |
+        强制升级基线、维护窗口公告与 feature flag（§3.10、§6.2、§9.2）。
+        **无需 Bearer**，客户端在**每次启动时**拉一次。
+
+        ⚠️ **一个过旧的客户端在这里拿到的是 `426`，不是配置。** `X-Client` 的强制
+        升级判定对 `/v1/*` 一视同仁，本端点不例外。这不是缺陷：`426` 本身就是
+        强制升级墙的信号（T-158 的拉取逻辑正是「调本端点 → `426` → 弹墙」），
+        客户端不需要先读到 `latest_client` 才知道该弹墙。`latest_client` 的消费者
+        是**仍在支持范围内**的客户端——它用来做「有新版可用」的软提示。
+
+        ⚠️ `maintenance.message_key` 是**本地化键，不是文案**。面向用户的德语文案
+        由客户端生成（§11.1）；窗口时间本身固定为每周二 03:00–04:00 CET（§9.2），
+        所以文案里可以写死它，本端点不下发时间戳。
+
+        ⚠️ `feature_flags` 里**永远不会出现 §7.5 的限额数字**。那些是服务端强制的
+        绝对上限，客户端持有一份可能过期的副本只会制造「本地预校验说没满、服务端
+        说满了」这种无法由客户端判断对错的矛盾（T-111 移交笔记）。
+
+        本端点是整个 `/v1` 里**唯一可缓存**的响应（`Cache-Control: public, max-age=60`，
+        §7.4 的 `no-store` 在此例外：它不含任何个人数据）。响应带 `Vary: X-Client` ——
+        响应**体**与该头无关，但**状态码**与它强相关（过旧 → 426），少了 `Vary`
+        的共享缓存会把 200 喂给旧客户端，升级墙就再也不出现了。
+
+        **限流**：按 IP **300/min**（§7.5）。超限是 `429`，按 `Retry-After` 退避。
+        配额按分钟而非小时、且留足 CGNAT 余量，因为这是客户端每次冷启动都会拉的端点。
+
+        ⚠️ 本端点的限流是 §7.5 里**两条 fail-open 策略**之一
+        （[ADR-0021](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md)）：
+        限流器自身不可用时本端点**仍然返回 200**，不会 503。所以客户端的退避逻辑
+        只按 `429` 写 —— 这里的 `503` 永远不是「限流器无法判定」，而是真的服务不可用。
+      parameters:
+        - $ref: '#/components/parameters/XClient'
+      responses:
+        '200':
+          description: 当前配置
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Cache-Control: { $ref: '#/components/headers/CacheControl' }
+            Vary: { $ref: '#/components/headers/Vary' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClientConfig' }
+              example:
+                min_supported_client: android/0.0.0 (1)
+                latest_client: android/0.1.0 (1)
+                maintenance:
+                  active: false
+                  message_key: null
+                  retry_after: null
+                feature_flags: {}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '426': { $ref: '#/components/responses/ClientTooOld' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
 components:
 
   # ==========================================================================
@@ -1266,6 +1343,35 @@ components:
         type: integer
         minimum: 0
       example: 0
+
+    CacheControl:
+      description: |
+        ⚠️ **只出现在 `GET /config` 的 `200` 上。** `/v1` 的其余响应一律
+        `no-store`（§7.4：每个响应都是用户特定的，不希望任何中间层缓存），
+        实现侧的默认值在 `Shared\Http\Controller\AbstractApiController::json()`。
+
+        `/config` 是唯一的例外，因为它不含任何个人数据，而客户端**每次启动**
+        都会拉一次。
+
+        ⚠️ 线上实际收到的字节是 `max-age=60, public` —— Symfony 的 `ResponseHeaderBag`
+        会把指令重新排序后再发。两者语义相同（RFC 9111 的指令无序），但按字面量
+        断言这个头的测试要按实际形态写，别按本例写。
+      required: true
+      schema:
+        type: string
+      example: public, max-age=60
+
+    Vary:
+      description: |
+        ⚠️ **承重，不是装饰。** 只出现在 `GET /config` 的 `200` 上，恒为 `X-Client`。
+
+        该响应**体**与 `X-Client` 无关，但**状态码**与它强相关（过旧 → `426`）。
+        少了这个头，一个只按 URL 做键的共享缓存会把缓存下来的 `200` 喂给旧客户端，
+        于是强制升级墙再也不出现——而且没有任何错误可查。
+      required: true
+      schema:
+        type: string
+      example: X-Client
 
   # ==========================================================================
   # 可复用的错误响应
@@ -2114,3 +2220,106 @@ components:
             locale: de
             onboarding_complete: true
             created_at: "2026-08-29T10:30:12Z"
+
+    # -------------------------------------------------------------- 元信息
+    # ⚠️ pattern 与 components/parameters/XClient.schema.pattern **必须逐字相同**，
+    # 由 backend/tests/Api/OpenApiDocumentTest::testClientVersionSchemaAndXClientShareOnePattern
+    # 钉死。没做成 $ref 是因为那个参数的 pattern 另有一条「与
+    # App\Shared\Domain\Client\ClientVersion::PATTERN 逐例一致」的对账用例，
+    # 它直接读 parameters.XClient.schema.pattern 这一条原始路径。
+    ClientVersion:
+      type: string
+      pattern: '^[a-z]{1,16}/\d{1,4}\.\d{1,4}\.\d{1,4}\s*\(\d{1,9}\)$'
+      description: |
+        `platform/x.y.z (build)`，与 `X-Client` 同一形态（§6.1）。
+        比较时先比 `x.y.z` 三元组、相等再比 build，**不比 platform**
+        ——「android 1.4.0 ≥ ios 1.2.0」这个问题本身没有意义。
+      examples:
+        - android/1.4.0 (26)
+
+    Maintenance:
+      type: object
+      additionalProperties: true
+      required: [active, message_key, retry_after]
+      description: |
+        计划维护窗口的公告（§9.2）。窗口固定为**每周二 03:00–04:00 CET**，
+        提前 24 小时通过本字段下发，客户端展示横幅。
+
+        ⚠️ 维护期间**离线读卡不受影响**——横幅文案要体现这一点（T-158）。
+      properties:
+        active:
+          type: boolean
+          description: 当前是否处于维护窗口内。
+        message_key:
+          type: [string, "null"]
+          enum: [maintenance.scheduled, maintenance.in_progress, null]
+          description: |
+            **本地化键，不是文案**（§11.1：面向用户的德语文案由客户端生成）。
+
+            - `maintenance.scheduled` —— 窗口将在 24 小时内开始，`active` 仍为 `false`；
+            - `maintenance.in_progress` —— 正在窗口内，`active` 为 `true`；
+            - `null` —— 无公告（无窗口、窗口在 24 小时以外、或窗口已结束）。
+
+            取值与 `App\Shared\Domain\Config\MaintenanceMessageKey` 逐项一致，
+            由 `backend/tests/Api/OpenApiDocumentTest` 对账。
+        retry_after:
+          type: [integer, "null"]
+          minimum: 1
+          description: |
+            距窗口结束的秒数。**仅在 `active` 为 `true` 时有值**，否则恒为 `null`。
+
+            ⚠️ 提前公告阶段**刻意不给**这个数字：本字段是 §6.1 里 `503` 那个
+            `Retry-After` 的同义物，「多久以后可以重试」对一个还没开始的窗口
+            没有意义。横幅需要的时间写在客户端文案里（窗口由 §9.2 固定）。
+      examples:
+        - active: false
+          message_key: null
+          retry_after: null
+        - active: true
+          message_key: maintenance.in_progress
+          retry_after: 1800
+
+    ClientConfig:
+      type: object
+      additionalProperties: true
+      required: [min_supported_client, latest_client, maintenance, feature_flags]
+      description: |
+        `GET /config` 的响应（§3.10、§6.2、§9.2）。**不含任何个人数据**——
+        这正是它能被缓存的原因。
+      properties:
+        min_supported_client:
+          $ref: '#/components/schemas/ClientVersion'
+          description: |
+            强制升级基线。低于它的客户端对**任何** `/v1` 端点（含本端点）
+            都只会拿到 `426 client_too_old`。
+
+            ⚠️ 服务端的判定读的是**同一个**配置值
+            （`%ncards.min_supported_client%`，`ClientVersionListener` 与
+            `ClientConfigProvider` 共用），所以这里下发的数字与实际被拒的门槛
+            不可能不一致。
+        latest_client:
+          $ref: '#/components/schemas/ClientVersion'
+          description: |
+            商店上最新的版本。消费者是**仍在支持范围内**的客户端——用来做
+            「有新版可用」的软提示，不是强制墙。恒 `>= min_supported_client`。
+        maintenance: { $ref: '#/components/schemas/Maintenance' }
+        feature_flags:
+          type: object
+          additionalProperties: true
+          description: |
+            远程功能开关（§13.2：未完成功能用 feature flag 合入 main，不要长期分支）。
+            M1 恒为空对象。
+
+            ⚠️ 这里**永远不会出现 §7.5 的限额数字**。那些是服务端强制的绝对上限；
+            客户端持有一份可能过期的副本，只会制造「本地预校验说没满、服务端说满了」
+            这种它自己无法判断对错的矛盾（T-111 移交笔记）。
+          examples:
+            - {}
+      examples:
+        - min_supported_client: android/0.0.0 (1)
+          latest_client: android/0.1.0 (1)
+          maintenance:
+            active: false
+            message_key: null
+            retry_after: null
+          feature_flags: {}

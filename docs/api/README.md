@@ -11,11 +11,13 @@ npm run lint:api      # Spectral，见下方「CI 校验」
 
 **Auth（5 个）+ Cards（6 个）+ 全套通用组件**。
 
-§6.2 的其余端点 —— Me/Devices、Sharing、Friends、Sync、`/v1/config` ——
+§6.2 的其余端点 —— Sharing、Friends、Sync ——
 **故意还没在里面**。这不是遗漏，是「契约优先」的正常工作方式：端点与它的 schema
 由**拥有它的那个任务**在同一个 PR 里一并加进来（§13.1 第 1 条）。提前把 schema
 全摆好，只会得到一堆没人对照实现校对过的定义，和 Spectral 的
 `oas3-unused-component` 告警。
+
+已经照这个方式补进来的：Me/Devices（T-108）、`GET /v1/config`（T-112）。
 
 通用组件已经全部就位，补端点时直接 `$ref` 即可：
 
