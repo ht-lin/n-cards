@@ -64,7 +64,7 @@
 | [0002](0002-brand-name-and-domain.md) | 品牌名与域名采用 N-Cards / n-cards.de | Accepted |
 | [0003](0003-problem-details-and-idempotency-semantics.md) | Problem Details 错误码表扩展 8 个 code，幂等冲突用 409/422，幂等 fail-open | Accepted |
 | [0004](0004-manual-vault-unseal.md) | Vault 采用人工 unseal（Shamir 3-of-5），auto-unseal 关闭 | Accepted |
-| [0005](0005-rate-limiting-topology.md) | 限流用自研 Redis 滑动窗口，默认 fail-closed，只对通用写限流开一个 allow 例外 | Accepted |
+| [0005](0005-rate-limiting-topology.md) | 限流用自研 Redis 滑动窗口，默认 fail-closed，~~只对通用写限流开一个 allow 例外~~（决定 3 的「唯一」已被 0021 放宽为**两条**，其余五个决定不受影响） | Accepted（决定 3 的「唯一」除外） |
 | [0006](0006-android-module-graph-enforcement.md) | Android 模块依赖规则用配置期的 Gradle 规则表强制，不用自定义 lint 规则 | Accepted |
 | [0007](0007-android-secret-storage-without-jetpack-security.md) | Android 端的密钥存储自建 Keystore 门面，不用 androidx.security 的 EncryptedSharedPreferences | Accepted |
 | [0008](0008-ci-gate-topology.md) | CI 用一个总是运行的 `pr-gate` 汇总，各条流水线改为 reusable workflow | Accepted |
@@ -80,4 +80,5 @@
 | [0018](0018-onboarding-interceptor-placement-and-the-first-inverted-shared-port.md) | onboarding 拦截器落在 Shared、经**第一个反转的** Shared 端口读 Identity；优先级 10（晚于限流早于幂等）；用户行消失返回 401 而非 403；`PATCH /me` 的 409 不走 `assignUsername()`；通知偏好延后 | Accepted |
 | [0019](0019-cross-module-foreign-keys-via-post-generate-schema.md) | **结掉 ADR-0011 的遗留问题**：跨模块外键建在库里、经 `postGenerateSchema` 补进 ORM schema，实体只持有 uuid 列（于是 §4.2 规则 5 结构性成立、`skip_violations` 保持为空）；附带推翻 T-106「部分索引不能用」的结论 | Accepted |
 | [0020](0020-card-members-belongs-to-sharing-and-wallet-reads-it-through-three-ports.md) | `card_members` 归 **Sharing**（不是 Wallet），Wallet 经**三个窄端口**读写它；placement 端点仍留在 `Wallet.Http`（否则要复制 `CardView` 与 `CardBody`，且出现 deptrac 抓不到的模块环）；建卡与 owner 行同事务，幂等重放不补成员行 | Accepted |
+| [0021](0021-second-fail-open-rate-limit-for-the-config-endpoint.md) | **放宽 ADR-0005 决定 3 的「唯一」**：`GET /v1/config` 的按 IP 300/min 限流标 `on_store_failure: allow`，成为第二条（也是最后一条）fail-open 策略 —— 判据不变（纯防 DoS、无可枚举信息、不发信、不碰密钥），而 fail-closed 会把唯一一个刻意无依赖、可缓存的端点绑在单容器无 AOF 的 Redis 上；配额按分钟而非小时，约束是 CGNAT 不是攻击者 | Accepted |
 > §2 中的 ADR-01 ~ ADR-11 是规格书内嵌的既有决策摘要，编号体系独立于本目录。本目录从 `0001` 起记录规格书**之后**的决策。

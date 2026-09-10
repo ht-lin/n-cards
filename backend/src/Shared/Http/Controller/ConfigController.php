@@ -6,7 +6,9 @@ namespace App\Shared\Http\Controller;
 
 use App\Shared\Application\Config\ClientConfig;
 use App\Shared\Application\Config\ClientConfigProvider;
+use App\Shared\Application\RateLimit\RateLimiterInterface;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
 
 /**
@@ -60,16 +62,58 @@ use Symfony\Component\Routing\Attribute\Route;
  *
  * 不需要动 `OnboardingListener::EXEMPT_ROUTES`：那个拦截器只在请求带着
  * `AuthContext` 时才判定，而公开路由永远不带 —— 结构上就在它之外。
+ *
+ * ============================================================================
+ * 限流为什么在控制器里，而不是某个监听器
+ * ============================================================================
+ * `RateLimitListener`（priority 12）只管 §7.5 的「全部写接口」那一条，而它的
+ * `WRITE_METHODS` 刻意不含 `GET`。那个类的注释写了理由：
+ *
+ * > §7.5 对读接口的限流是按端点配的（`GET /v1/sync` 60/min、
+ * > `GET /v1/users/lookup` 30/min），在这里一刀切会与那些更严格的策略
+ * > 叠加成一个说不清的复合限额。
+ *
+ * 所以读端点自己调 {@see RateLimiterInterface}。本仓库里最接近的结构先例是
+ * `tests/Fixture/Http/ProbeApiController`（同样是 GET、免鉴权、在控制器里直接
+ * `consume()`）。业务端点把这一步放在 Application 层是因为主体要等请求体解析或
+ * 认证之后才知道（`RequestOtpService` 的 `email_hash`）—— 这里的主体只是 IP，
+ * 而且这个端点没有任何领域用例可以挂。
+ *
+ * ⚠️ {@see ClientConfigProvider} 刻意**不**碰限流：它是个纯配置读取器，
+ * 它的单测不该为此每条都塞一个限流替身。
+ *
+ * ⚠️ 配额只对**格式正确**的请求生效：`ClientVersionListener`(40) 与路由都排在
+ * 控制器之前，所以缺 `X-Client` 的 400 与过旧客户端的 426 都不烧配额。这是既有
+ * 房规而不是疏漏 —— 同 `RateLimitListener` 注释里「一个即将因缺 `X-Client` 而
+ * 400 的请求不该烧配额」。`ConfigEndpointTest` 有两条用例钉着它。
  */
 final class ConfigController extends AbstractApiController
 {
-    public function __construct(private readonly ClientConfigProvider $provider)
-    {
+    /** `config/packages/rate_limiter.yaml` 里的策略名（§7.5：IP 300/min）。 */
+    public const POLICY = 'config_ip';
+
+    /**
+     * 取不到客户端 IP 时的占位主体。
+     *
+     * ⚠️ 回落到一个固定串而**不是跳过限流** —— 跳过等于给任何能造出这种请求的
+     * 调用方开一个绕过 §7.5 的后门。口径同 `RequestOtpService::IP_FALLBACK`
+     * 与 `RateLimitListener::subject()`。
+     */
+    private const IP_FALLBACK = 'unknown';
+
+    public function __construct(
+        private readonly ClientConfigProvider $provider,
+        private readonly RateLimiterInterface $limiter,
+    ) {
     }
 
     #[Route('/v1/config', name: 'config_get', methods: ['GET'])]
-    public function get(): JsonResponse
+    public function get(Request $request): JsonResponse
     {
+        // ⚠️ `ip:` 前缀不能省：不带前缀的话，一个 IP 字符串与一个恰好相同的
+        // 别种主体会共用同一个计数桶 —— 概率极低，但后果完全无法从日志里看出来。
+        $this->limiter->consume(self::POLICY, 'ip:'.($request->getClientIp() ?? self::IP_FALLBACK));
+
         return $this->json(
             self::body($this->provider->current()),
             headers: [

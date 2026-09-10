@@ -179,7 +179,11 @@ $this->limiter->consumeAll([
    后者会让攻击者打爆共享 IP 配额后，远程烧掉任意受害者自己的 email 配额。
 3. **⚠️ 限流 fail-CLOSED，与 T-004 的幂等 fail-open 相反。** Redis 不可达 →
    `503 service_unavailable`（不是 429：我们不是「判定超限」，是「无法判定」）。
-   唯一的例外是 `write_endpoints`（纯防 DoS，标了 `on_store_failure: allow`）。
+   例外**恰好两条**，判据相同（纯防 DoS，不是安全控制），都标了 `on_store_failure: allow`：
+   `write_endpoints`（[ADR-0005](../docs/adr/0005-rate-limiting-topology.md) 决定 3）与
+   `config_ip`（T-112 追加，[ADR-0021](../docs/adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md)）。
+   `RateLimitPolicyCoverageTest::testOnlyTheTwoDocumentedDosPoliciesFailOpen` 把这个白名单
+   断言成**封闭集合** —— 加第三条要先写 ADR，省略 `on_store_failure` 时默认仍是 `deny`。
    两处方向相反看起来像 bug，**它不是** —— 理由见
    [ADR-0003](../docs/adr/0003-problem-details-and-idempotency-semantics.md) §4 与
    [ADR-0005](../docs/adr/0005-rate-limiting-topology.md)。
@@ -542,7 +546,21 @@ compose healthcheck 与 §14.3 的部署当场失败（判定在 `ClientVersionL
 §14.4 的 5xx 告警。把 `ClientConfigProvider` 做成一项就绪检查能让后者也红，
 但那等于「一个维护公告的时间戳打错字让整个 API 下线」—— 刻意没做。
 
-⚠️ **不为本端点配限流。** §7.5 的速率表里没有它，而
-`RateLimitPolicyCoverageTest` 拿 `rate_limiter.yaml` 与 §7.5 逐行对照，凭空加一条
-会直接红。它是免鉴权、每次冷启动都会被打的端点，M1 的防护只有 Caddy 层 ——
-真要给它配额，先改 §7.5。
+**限流**：按 IP **300/min**（§7.5 的 `config_ip`，T-112 追加）。消费点在
+`ConfigController::get()` 里显式 `consume()` —— `RateLimitListener` 只管写接口，
+读接口的限流按端点配，那个类的注释解释了为什么。
+
+⚠️ 它是 §7.5 里**两条 fail-open 策略**之一（`on_store_failure: allow`，
+[ADR-0021](../docs/adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md)）：
+Redis 不可达时本端点**仍然 200**。这是刻意的 —— fail-closed 等于给唯一一个刻意
+不依赖 PG / Redis / Vault、且可缓存的端点新增一个 Redis 依赖，于是 Redis 一挂，
+每次冷启动都 503，客户端连「要不要弹升级墙」都问不出来。
+
+⚠️ 配额按**分钟**而不像 §7.5 其余 IP 策略（20/h、60/h、100/h）按小时，而且留得很松：
+约束是 **CGNAT** 不是攻击者 —— 德国移动运营商一个公网 IPv4 背后可能上千订户共用这一个桶，
+配紧的症状是一整个运营商出口在晚高峰被限流，那批用户的升级墙与维护横幅一起失灵。
+
+⚠️ 配额只对**格式正确**的请求生效：`ClientVersionListener`(40) 与路由都排在控制器之前，
+所以缺 `X-Client` 的 400 与过旧客户端的 426 都不烧配额（既有房规，两条用例钉着）。
+那一类最廉价的洪水只有边缘层挡得住，而 `infra/caddy/Caddyfile` **今天没有任何限流
+或连接数限制** —— 留给后续的基础设施卡，记在 ADR-0021 的负面一节。

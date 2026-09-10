@@ -1121,6 +1121,14 @@ paths:
         §7.4 的 `no-store` 在此例外：它不含任何个人数据）。响应带 `Vary: X-Client` ——
         响应**体**与该头无关，但**状态码**与它强相关（过旧 → 426），少了 `Vary`
         的共享缓存会把 200 喂给旧客户端，升级墙就再也不出现了。
+
+        **限流**：按 IP **300/min**（§7.5）。超限是 `429`，按 `Retry-After` 退避。
+        配额按分钟而非小时、且留足 CGNAT 余量，因为这是客户端每次冷启动都会拉的端点。
+
+        ⚠️ 本端点的限流是 §7.5 里**两条 fail-open 策略**之一
+        （[ADR-0021](https://github.com/ht-lin/n-cards/blob/main/docs/adr/0021-second-fail-open-rate-limit-for-the-config-endpoint.md)）：
+        限流器自身不可用时本端点**仍然返回 200**，不会 503。所以客户端的退避逻辑
+        只按 `429` 写 —— 这里的 `503` 永远不是「限流器无法判定」，而是真的服务不可用。
       parameters:
         - $ref: '#/components/parameters/XClient'
       responses:

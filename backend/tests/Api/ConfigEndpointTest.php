@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Tests\Api;
 
 use App\Shared\Application\Config\ClientConfigProvider;
+use App\Shared\Application\RateLimit\RateLimiterInterface;
 use App\Shared\Domain\Config\MaintenanceMessageKey;
 use App\Shared\Domain\Error\ErrorCode;
+use App\Shared\Domain\Error\RateLimitExceeded;
 use App\Shared\Http\Controller\ConfigController;
 use App\Shared\Infrastructure\Http\ClientVersionListener;
 use App\Tests\Api\Support\OpenApiContract;
 use App\Tests\Api\Support\ProblemDetailsAssertions;
+use App\Tests\Double\RateLimit\RecordingRateLimiter;
 use App\Tests\Double\Time\FrozenClock;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -342,6 +345,123 @@ final class ConfigEndpointTest extends WebTestCase
         self::assertSame(Response::HTTP_OK, $response->getStatusCode(), (string) $response->getContent());
         self::assertSame($expected, self::decode($response)['maintenance']);
         self::assertResponseMatchesContract('get', self::PATH, $response);
+    }
+
+    // ========================================================================
+    // 限流（§7.5 的 `GET /v1/config` | IP | 300/min，T-112 追加）
+    // ========================================================================
+
+    /**
+     * 策略名与主体前缀 —— `RecordingRateLimiter` 存在的全部理由。
+     *
+     * 滑动窗口本身由 `tests/Api/RateLimitTest` 打真 Redis 验（走 `/v1/_probe/limited`
+     * 夹具，`PROBE_LIMIT=3` 正是为了不在测试里发几百个请求）。这里要答的是另一个
+     * 问题：这个端点扣的是**哪一条策略**、主体**带没带前缀**。
+     *
+     * ⚠️ 这一条 `RateLimitPolicyCoverageTest` 抓不到：那个文件只看
+     * `rate_limiter.yaml` 与 §7.5 对不对得上，完全不知道有没有人真的去消费它。
+     * 把策略名拼错成 `config`，那个文件照常全绿。
+     */
+    public function testTheConfiguredPolicyIsConsumedWithAnIpSubject(): void
+    {
+        $client = self::createClient();
+        $client->disableReboot();
+
+        $limiter = new RecordingRateLimiter();
+        self::getContainer()->set(RateLimiterInterface::class, $limiter);
+
+        $client->request('GET', self::PATH, server: [
+            'HTTP_X_CLIENT' => self::CLIENT,
+            'REMOTE_ADDR' => '203.0.113.9',
+        ]);
+
+        self::assertResponseIsSuccessful();
+        // ⚠️ 策略名写**字面量**，不是 ConfigController::POLICY —— 用常量的话两边
+        // 一起改，这条断言对「改了常量忘了改 rate_limiter.yaml」就失去判别力了。
+        // 字面量让它与 §7.5 / 配置里的那个名字对账（那个名字本身由
+        // RateLimitPolicyCoverageTest 与 §7.5 对账）。
+        //
+        // ⚠️ 也**不要**再补一条 `assertSame('config_ip', ConfigController::POLICY)`：
+        // phpstan level 8 会把对着常量自比的断言判成恒真并报错（T-108 的落地记录里
+        // 记过同一件事）。而且那条是多余的 —— 控制器消费的是 self::POLICY，
+        // 所以常量改了，下面这个 lastBatch() 的键就对不上，本条当场红。
+        self::assertSame(
+            ['config_ip' => 'ip:203.0.113.9'],
+            $limiter->lastBatch(),
+            "策略名必须逐字是 §7.5 / rate_limiter.yaml 里那一条；\n"
+            ."而 `ip:` 前缀不能省：不带前缀时一个 IP 串与一个恰好相同的别种主体会共用计数桶，\n"
+            .'而那件事完全无法从日志里看出来。',
+        );
+    }
+
+    /**
+     * 超限时的渲染：429 + **两个**头，并且仍然符合契约。
+     *
+     * ⚠️ §7.5 明文要求限流响应同时带 `Retry-After` 与 `X-RateLimit-Remaining`，
+     * 缺一不可。契约里 `/config` 的 `'429'` 在本卡之前从来没有被任何真实响应校验过 ——
+     * 声明了一个响应却从不产生它，等于那一段契约没有任何强制点。
+     */
+    public function testExceedingTheQuotaIsRenderedAsAContractValidProblem(): void
+    {
+        $client = self::createClient();
+        $client->catchExceptions(true);
+        $client->disableReboot();
+
+        $limiter = new RecordingRateLimiter();
+        $limiter->denyWith(new RateLimitExceeded(42, 0, ConfigController::POLICY));
+        self::getContainer()->set(RateLimiterInterface::class, $limiter);
+
+        $response = self::get($client);
+
+        self::assertIsProblemDetails($response, ErrorCode::RateLimited);
+        self::assertSame('42', $response->headers->get('Retry-After'));
+        self::assertSame('0', $response->headers->get('X-RateLimit-Remaining'));
+        self::assertResponseMatchesContract('get', self::PATH, $response);
+    }
+
+    /**
+     * ⚠️ 一个注定 426 的请求**不烧配额**。
+     *
+     * `ClientVersionListener` 是 priority 40、早于路由，控制器根本不会跑 ——
+     * 所以这条断言真正钉住的是「限流排在横切校验之后」这个房规
+     * （同 `RateLimitListener` 注释里「一个即将因缺 `X-Client` 而 400 的请求
+     * 不该烧配额」）。哪天有人把 `consume()` 挪进一个监听器、排到 40 之前，
+     * 一个被强制升级墙挡住的旧客户端会顺带把那个出口 IP 的配额烧光 ——
+     * 而同一个出口后面的**新**客户端跟着一起 429。CGNAT 下这正是最坏的那种耦合。
+     */
+    public function testARejectedOldClientDoesNotBurnQuota(): void
+    {
+        $client = self::createClient();
+        $client->catchExceptions(true);
+        $client->disableReboot();
+
+        $limiter = new RecordingRateLimiter();
+        self::getContainer()->set(RateLimiterInterface::class, $limiter);
+        self::getContainer()->set(
+            ClientVersionListener::class,
+            new ClientVersionListener('android/2.0.0 (100)'),
+        );
+
+        self::assertIsProblemDetails(self::get($client), ErrorCode::ClientTooOld);
+        self::assertSame([], $limiter->batches(), '426 不该消耗配额');
+    }
+
+    /**
+     * 同上，另一半：缺 `X-Client` 的 400 也不烧配额。
+     */
+    public function testAMalformedRequestDoesNotBurnQuota(): void
+    {
+        $client = self::createClient();
+        $client->catchExceptions(true);
+        $client->disableReboot();
+
+        $limiter = new RecordingRateLimiter();
+        self::getContainer()->set(RateLimiterInterface::class, $limiter);
+
+        $client->request('GET', self::PATH);
+
+        self::assertIsProblemDetails($client->getResponse(), ErrorCode::ValidationFailed);
+        self::assertSame([], $limiter->batches(), '400 不该消耗配额');
     }
 
     // ========================================================================
