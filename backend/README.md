@@ -127,6 +127,19 @@ M0 阶段模块目录全是空壳（`.gitkeep`），由 T-004 起逐个填充。
 > 另有 `tests/Api/ClientVersionEnforcementTest::testHealthEndpointsAreExempt`
 > 直接守着两个探活端点 —— 它红了就说明 compose 起栈与 §14.3 的部署健康检查要挂。
 
+> ⚠️ **T-112 起有一个容易被当成 bug 的推论**：`GET /v1/config` 自己也在 `/v1/` 下，
+> 所以一个过旧的客户端在**那个端点上**拿到的也是 426，而不是配置。
+> 这是对的 —— 426 本身就是 T-158 强制升级墙的信号源，客户端不需要先读到
+> `latest_client` 才知道该弹墙；`latest_client` 的消费者是仍在支持范围内的客户端。
+> **不要给 `/v1/config` 开豁免口子**，完整论证在
+> [`ConfigController`](src/Shared/Http/Controller/ConfigController.php) 的类注释，
+> `tests/Api/ConfigEndpointTest::testAnOldClientIsRejectedHereToo` 钉着它。
+>
+> 它同时是全仓库**唯一**一处 `AbstractApiController::json(noStore: false)` ——
+> `public, max-age=60` + **`Vary: X-Client`**。那个 `Vary` 是承重的：响应体与该头
+> 无关，但状态码与它强相关，少了它的共享缓存会把 200 喂给旧客户端，升级墙就再也
+> 不出现。
+
 ## 限额与限流（T-006）
 
 §7.5 的两张表，**机制完全不同，不要混**：
@@ -504,3 +517,32 @@ Deptrac 同时强制**两个维度**，用「模块 × 分层」的交叉积图�
 `.env` 与 `.env.test` 是 Symfony 约定的**非密钥默认值**文件，入库
 （仓库根 `.gitignore` 对这两个文件开了窄口，其余 `.env*` 一律忽略）。
 真实密钥走 `.env.local` / 容器环境变量 / sops(age)，见 §14 与 T-003 / T-012。
+
+### 客户端版本与维护窗口（T-112）
+
+四个**非凭据**变量，`GET /v1/config` 的全部输入。三处配置面都已打通：
+`infra/compose/docker-compose.base.yml` 的 app `environment`、
+`infra/compose/.env.example`、以及 Ansible 的 `env.j2` + `group_vars/all/main.yml`。
+
+| 变量 | 说明 |
+|---|---|
+| `MIN_SUPPORTED_CLIENT` | §6.1 的强制升级基线。**两个读者共用同一个值**：`ClientVersionListener` 的 426 判定，与 `/v1/config` 下发给客户端的那个数字（`config/services.yaml` 的注释解释了为什么不能拆成两个参数） |
+| `LATEST_CLIENT` | 商店上最新的版本，软提示用。恒 `>= MIN`，否则启动即 500 |
+| `MAINTENANCE_WINDOW_START` / `_END` | §9.2 的计划维护窗口。**成对出现**，RFC 3339 且 **offset 必填**；都留空即无窗口（常态）。`active` / `message_key` / `retry_after` 三个下发字段全部由 `MaintenanceWindow::statusAt()` 按时钟派生 |
+
+⚠️ **T-112 之前 `MIN_SUPPORTED_CLIENT` 在整个 infra 里一次都没出现**：prod overlay
+把 dev 的 bind-mount `!reset null` 掉、prod target 直接 `COPY . .`，于是生产读的是
+**烤进镜像的** `.env` 默认值。那时无人可见所以无害，而 `/v1/config` 一上线就把它
+对外宣告成基线 —— 抬高基线这个纯运维动作因此曾需要重新构建并推送一个镜像。
+
+⚠️ **爆炸半径不对称，排查时别混**：`MIN` 配坏 → **每个**请求 500（含 `/health/*`），
+compose healthcheck 与 §14.3 的部署当场失败（判定在 `ClientVersionListener` 的构造期，
+而 `kernel.request` 的监听器在任何请求处理之前就被实例化）。`LATEST` 或窗口配坏 →
+**只有** `/v1/config` 500，`/health/ready` 照样 200，部署照过，唯一的安全网是
+§14.4 的 5xx 告警。把 `ClientConfigProvider` 做成一项就绪检查能让后者也红，
+但那等于「一个维护公告的时间戳打错字让整个 API 下线」—— 刻意没做。
+
+⚠️ **不为本端点配限流。** §7.5 的速率表里没有它，而
+`RateLimitPolicyCoverageTest` 拿 `rate_limiter.yaml` 与 §7.5 逐行对照，凭空加一条
+会直接红。它是免鉴权、每次冷启动都会被打的端点，M1 的防护只有 Caddy 层 ——
+真要给它配额，先改 §7.5。

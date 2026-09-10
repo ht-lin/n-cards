@@ -1325,7 +1325,7 @@ Room 表 sync_outbox(id, entity_type, entity_id, op, payload_json, attempt_count
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/v1/config` | `{min_supported_client, latest_client, maintenance:{active,message_key,retry_after}, feature_flags:{}}` |
+| `GET` | `/v1/config` | `{min_supported_client, latest_client, maintenance:{active,message_key,retry_after}, feature_flags:{}}`。T-112 落地时把三处语义定死：① `maintenance.message_key` 取值仅 `maintenance.scheduled`（窗口 24h 内将开始）/ `maintenance.in_progress` / `null`，窗口两头来自 env（RFC 3339，offset 必填），三个字段全部按服务端时钟派生；② `retry_after` 是 §6.1 那个 `Retry-After` 的同义物，**仅 `active` 为 true 时有值**（到窗口结束的秒数）—— 提前公告阶段刻意不给，横幅里的时间由客户端按本节固定的窗口写死；③ **`feature_flags` 永不下发 §7.5 的限额数字**（T-111 移交笔记）。⚠️ 本端点免认证但**不免 `X-Client`**：过旧客户端在这里拿到的是 `426`，而那正是强制升级墙的信号源（T-158），不是缺陷。它也是整个 `/v1` 里**唯一可缓存**的响应（`public, max-age=60` + `Vary: X-Client`） |
 | `GET` | `/health/live` / `/health/ready` | 探活 / 就绪（不在 `/v1` 下，不对外暴露细节） |
 
 ### 6.3 关键流程时序

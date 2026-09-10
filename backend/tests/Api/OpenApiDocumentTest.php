@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Tests\Api;
 
 use App\Shared\Domain\Client\ClientVersion;
+use App\Shared\Domain\Config\MaintenanceMessageKey;
 use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Domain\Error\FieldErrorCode;
@@ -273,6 +274,82 @@ final class OpenApiDocumentTest extends WebTestCase
         ] as $header) {
             yield ('' === $header ? '(空)' : $header) => [$header];
         }
+    }
+
+    /**
+     * 契约里 `Maintenance.message_key` 的 `enum` 与 `MaintenanceMessageKey` 逐项一致（T-112）。
+     *
+     * ⚠️ 漂了的症状是**静默的**，而且只在生产显形：客户端（T-158）按这个值分支
+     * 渲染两种横幅，契约里少一个值 → 生成出来的 Kotlin 枚举里也少一个 →
+     * 公告期的响应反序列化失败或落到 else 分支，于是横幅直接不显示。
+     * 而这一切只会在真的有维护公告的那天发生。
+     *
+     * `null` 在契约的列表里是一个合法取值（「无公告」），PHP 侧用 `?enum` 表达，
+     * 所以比较前要把它摘掉。
+     */
+    public function testMaintenanceMessageKeysAgreeWithTheContract(): void
+    {
+        /** @var array<string, mixed> $components */
+        $components = self::rawContract()['components'];
+        /** @var array<string, mixed> $schemas */
+        $schemas = $components['schemas'];
+        /** @var array<string, mixed> $maintenance */
+        $maintenance = $schemas['Maintenance'];
+        /** @var array<string, mixed> $properties */
+        $properties = $maintenance['properties'];
+        /** @var array<string, mixed> $messageKey */
+        $messageKey = $properties['message_key'];
+
+        /** @var list<string|null> $enum */
+        $enum = $messageKey['enum'];
+
+        self::assertContains(
+            null,
+            $enum,
+            '`null` 必须是合法取值 —— 「无公告」是常态（无窗口、窗口在 24 小时以外、窗口已结束）。',
+        );
+
+        self::assertSame(
+            MaintenanceMessageKey::values(),
+            array_values(array_filter($enum, static fn (?string $value): bool => null !== $value)),
+            '契约的 Maintenance.message_key 与 App\Shared\Domain\Config\MaintenanceMessageKey 漂了。'
+            ."\n改枚举时必须同步改契约（§13.6 允许**新增**枚举值，不允许改名）。",
+        );
+    }
+
+    /**
+     * `components/schemas/ClientVersion` 与 `components/parameters/XClient` 的
+     * pattern **逐字相同**（T-112）。
+     *
+     * ⚠️ 为什么是两份拷贝而不是一个 `$ref`：
+     * {@see testXClientPatternAgreesWithClientVersion()} 直接读
+     * `components.parameters.XClient.schema.pattern` 这一条原始路径，把它换成
+     * `$ref` 之后那条与 `ClientVersion::PATTERN` 的逐例对账就读不到东西了。
+     *
+     * 两份拷贝加一条「必须相同」的断言，与一个 $ref 的效果等价，而且不需要在
+     * 测试里实现 $ref 解析。
+     */
+    public function testClientVersionSchemaAndXClientShareOnePattern(): void
+    {
+        /** @var array<string, mixed> $components */
+        $components = self::rawContract()['components'];
+        /** @var array<string, mixed> $parameters */
+        $parameters = $components['parameters'];
+        /** @var array<string, mixed> $xClient */
+        $xClient = $parameters['XClient'];
+        /** @var array<string, mixed> $headerSchema */
+        $headerSchema = $xClient['schema'];
+
+        /** @var array<string, mixed> $schemas */
+        $schemas = $components['schemas'];
+        /** @var array<string, mixed> $clientVersion */
+        $clientVersion = $schemas['ClientVersion'];
+
+        self::assertSame(
+            $headerSchema['pattern'],
+            $clientVersion['pattern'],
+            'ClientConfig 下发的版本串与 X-Client 收到的是同一个形态，pattern 必须逐字相同。',
+        );
     }
 
     /**
