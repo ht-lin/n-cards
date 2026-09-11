@@ -86,6 +86,26 @@ interface AuthRepository {
     suspend fun fetchMe(): ApiResult<User>
 
     /**
+     * `POST /v1/me/username`。注册中间态（`username IS NULL`）**唯一**的出口。
+     *
+     * ⚠️ **一次性写入，且不可逆**（§3.8 / §16 R13）。调用方必须先过二次确认对话框。
+     *
+     * 入参会在这里再做一次 `trim` + `toLowerCase(Locale.ROOT)`
+     * （`UsernameRules.normalize`）—— UI 那一侧的归一化是为了让用户在输入框里就看到
+     * 最终形态，不是这里可以省掉它的理由。
+     *
+     * 四种失败要**分开**处理，别合并成一句「出错了」（契约 `/me/username` 的说明表）：
+     *
+     * | `ApiError` | 处置 |
+     * |---|---|
+     * | [de.ncards.core.network.impl.error.ApiError.UsernameInvalid]（422） | 输入框下标红。**不消耗** 10 次计数 |
+     * | [de.ncards.core.network.impl.error.ApiError.UsernameTaken]（409） | 输入框下标红。**消耗**一次 |
+     * | [de.ncards.core.network.impl.error.ApiError.UsernameImmutable]（409） | 不是输入错误：本机状态过期，重新 [fetchMe] |
+     * | [de.ncards.core.network.impl.error.ApiError.LimitExceeded]（422） | **终局**，重试永远不会成功（ADR-0017） |
+     */
+    suspend fun setUsername(username: String): ApiResult<User>
+
+    /**
      * `POST /v1/auth/logout`（要 Bearer），然后**无论结果如何**清空本机会话。
      *
      * 返回值是服务端那一半的结果，给调用方上报用；它是 `Failure` 也不代表

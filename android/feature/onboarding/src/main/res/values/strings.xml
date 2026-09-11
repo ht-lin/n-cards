@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/（§11.1）。
+  不存在 values-de/ —— checkGermanIsDefaultLocale 会拦下建它的改动。
+
+  两条文案是**规格逐字规定**的，改动前先读对应条款：
+    onboarding_username_immutable_warning     §3.8 加粗段 / §16 R13
+    onboarding_username_discoverability_notice §3.8「可发现性」（GDPR 数据最小化）
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <!-- ==================== 通用 ==================== -->
+
+    <!-- §11.2：不以颜色作为唯一信息载体 —— 错误提示带一个前缀符号。 -->
+    <string name="onboarding_error_prefix">⚠ %1$s</string>
+
+    <string name="onboarding_open_terms">Nutzungsbedingungen lesen</string>
+    <string name="onboarding_open_privacy">Datenschutzerklärung lesen</string>
+
+    <!-- ==================== 1. Willkommen ==================== -->
+
+    <string name="onboarding_welcome_title">Willkommen bei N-Cards</string>
+    <string name="onboarding_welcome_intro">Alle deine Kundenkarten an einem Ort – auch ohne Netz.</string>
+    <string name="onboarding_welcome_language_label">Sprache</string>
+    <!-- ⚠️ Beide Sprachnamen stehen in der jeweiligen Sprache selbst und sind in values-en/ identisch. -->
+    <string name="onboarding_language_german">Deutsch</string>
+    <string name="onboarding_language_english">English</string>
+    <string name="onboarding_welcome_privacy_summary">Wir speichern deine Karten verschlüsselt und binden keine Analyse- oder Werbedienste ein. Für die Anmeldung brauchen wir nur deine E-Mail-Adresse – kein Passwort.</string>
+    <string name="onboarding_welcome_continue">Los geht\'s</string>
+
+    <!-- ==================== 2. E-Mail ==================== -->
+
+    <string name="onboarding_email_title">Anmelden</string>
+    <string name="onboarding_email_intro">Gib deine E-Mail-Adresse ein. Wir schicken dir einen sechsstelligen Code. Wenn du noch kein Konto hast, wird es dabei angelegt.</string>
+    <string name="onboarding_email_label">E-Mail-Adresse</string>
+    <string name="onboarding_email_submit">Code anfordern</string>
+    <string name="onboarding_email_legal_notice">Wenn du fortfährst, stimmst du den Nutzungsbedingungen zu und bestätigst, die Datenschutzerklärung gelesen zu haben.</string>
+
+    <!-- ==================== 3. Code ==================== -->
+
+    <string name="onboarding_otp_title">Code eingeben</string>
+    <string name="onboarding_otp_intro">Wir haben einen sechsstelligen Code an %1$s geschickt. Er ist 10 Minuten gültig.</string>
+    <string name="onboarding_otp_label">Sechsstelliger Code</string>
+    <string name="onboarding_otp_submit">Bestätigen</string>
+    <string name="onboarding_otp_resend">Code erneut senden</string>
+    <string name="onboarding_otp_resend_in">Erneut senden in %1$d Sekunden</string>
+    <string name="onboarding_otp_magic_link_hint">In der E-Mail findest du außerdem einen Link, mit dem du dich ohne Code anmelden kannst.</string>
+
+    <!-- ==================== 4. Nutzername ==================== -->
+
+    <string name="onboarding_username_title">Nutzernamen wählen</string>
+    <string name="onboarding_username_intro">Noch ein Schritt: Wähle einen Nutzernamen. Freunde brauchen ihn, um Karten mit dir zu teilen.</string>
+    <string name="onboarding_username_label">Nutzername</string>
+    <string name="onboarding_username_rules">3 bis 20 Zeichen: Kleinbuchstaben, Ziffern und Unterstriche.</string>
+    <string name="onboarding_username_normalized_preview">Gespeichert wird: %1$s</string>
+    <!-- ⚠️ §3.8「可发现性」：UI **必须**提示这一条。GDPR 数据最小化 + 用户知情。 -->
+    <string name="onboarding_username_discoverability_notice">Andere können dich über diesen Namen finden. Verwende deshalb weder deinen echten Namen noch deine E-Mail-Adresse.</string>
+    <!-- ⚠️ §3.8 / §16 R13：这句话是**逐字规定**的。 -->
+    <string name="onboarding_username_immutable_warning">Dieser Name kann später nicht geändert werden.</string>
+    <string name="onboarding_username_submit">Nutzernamen festlegen</string>
+
+    <string name="onboarding_username_dialog_title">Nutzernamen endgültig festlegen?</string>
+    <string name="onboarding_username_dialog_body">Du legst den Namen „%1$s“ fest.</string>
+    <string name="onboarding_username_dialog_confirm">Endgültig festlegen</string>
+    <string name="onboarding_username_dialog_cancel">Abbrechen</string>
+
+    <!-- ==================== Fehler ==================== -->
+
+    <string name="onboarding_error_email_invalid">Das sieht nicht nach einer E-Mail-Adresse aus.</string>
+    <!-- ⚠️ Eine einzige Meldung für alle Ablehnungen: Der Server unterscheidet
+         absichtlich nicht zwischen falsch, abgelaufen, schon benutzt und zu oft
+         versucht (§6.3.1 Anm. 3). Fordere einen neuen Code an. -->
+    <string name="onboarding_error_code_rejected">Der Code stimmt nicht oder ist nicht mehr gültig. Fordere einen neuen Code an.</string>
+    <string name="onboarding_error_too_many_requests">Zu viele Versuche. Bitte warte einen Moment.</string>
+    <string name="onboarding_error_too_many_requests_in">Zu viele Versuche. Bitte warte %1$d Sekunden.</string>
+    <string name="onboarding_error_offline">Keine Verbindung. Prüfe dein Netz und versuche es noch einmal.</string>
+    <string name="onboarding_error_service_unavailable">Der Dienst ist gerade nicht erreichbar. Bitte versuche es später noch einmal.</string>
+    <string name="onboarding_error_client_too_old">Diese App-Version ist zu alt. Bitte aktualisiere die App.</string>
+    <string name="onboarding_error_unexpected">Das hat nicht geklappt. Bitte versuche es noch einmal.</string>
+
+    <string name="onboarding_username_error_too_short">Mindestens 3 Zeichen.</string>
+    <string name="onboarding_username_error_too_long">Höchstens 20 Zeichen.</string>
+    <string name="onboarding_username_error_charset">Erlaubt sind nur Kleinbuchstaben, Ziffern und Unterstriche.</string>
+    <string name="onboarding_username_error_taken">Dieser Name ist schon vergeben. Wähle einen anderen.</string>
+    <string name="onboarding_username_error_invalid">Dieser Name ist nicht zulässig. Wähle einen anderen.</string>
+    <!-- ⚠️ 终局错误（ADR-0017）：这个计数永不恢复，**不得**写「稍后再试」。 -->
+    <string name="onboarding_username_error_attempts_exhausted">Du hast die maximale Anzahl an Versuchen erreicht. Ein Nutzername kann für dieses Konto nicht mehr festgelegt werden – bitte wende dich an den Support.</string>
+
+</resources>

@@ -1,5 +1,6 @@
 package de.ncards.data.auth
 
+import de.ncards.core.model.user.UsernameRules
 import de.ncards.core.network.api.AuthApi
 import de.ncards.core.network.api.MeApi
 import de.ncards.core.network.api.model.MagicLinkConsumption
@@ -8,6 +9,8 @@ import de.ncards.core.network.api.model.OtpRequest
 import de.ncards.core.network.api.model.OtpVerification
 import de.ncards.core.network.api.model.Session
 import de.ncards.core.network.api.model.User
+import de.ncards.core.network.api.model.UserEnvelope
+import de.ncards.core.network.api.model.UsernameAssignment
 import de.ncards.core.network.impl.ApiResult
 import de.ncards.core.network.impl.NetworkConfig
 import de.ncards.core.network.impl.error.ApiErrorMapper
@@ -15,6 +18,7 @@ import de.ncards.core.network.impl.execute
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -98,20 +102,18 @@ internal class DefaultAuthRepository
                 )
             }
 
-        override suspend fun fetchMe(): ApiResult<User> =
-            when (val result = mapper.execute { meApi.getMe(config.clientHeader) }) {
-                is ApiResult.Success -> {
-                    ApiResult.Success(
-                        value = result.value.user,
-                        requestId = result.requestId,
-                        idempotencyReplayed = result.idempotencyReplayed,
-                    )
-                }
+        override suspend fun fetchMe(): ApiResult<User> = unwrappingUser { meApi.getMe(config.clientHeader) }
 
-                is ApiResult.Failure -> {
-                    result
-                }
+        override suspend fun setUsername(username: String): ApiResult<User> {
+            val normalized = UsernameRules.normalize(username)
+            return unwrappingUser {
+                meApi.setUsername(
+                    xClient = config.clientHeader,
+                    usernameAssignment = UsernameAssignment(normalized),
+                    idempotencyKey = idempotencyKeyFor(normalized),
+                )
             }
+        }
 
         /**
          * ⚠️ 本机会话**无条件**清掉，不看服务端那一半的结果。
@@ -149,4 +151,60 @@ internal class DefaultAuthRepository
                     result
                 }
             }
+
+        /**
+         * `GET /me` 与 `POST /me/username` 共用的拆包：契约里两者返回的是**同一个**
+         * `UserEnvelope`（那个 schema 的注释逐字解释了它为什么必须是具名的）。
+         */
+        private suspend fun unwrappingUser(call: suspend () -> retrofit2.Response<UserEnvelope>): ApiResult<User> =
+            when (val result = mapper.execute(call)) {
+                is ApiResult.Success -> {
+                    ApiResult.Success(
+                        value = result.value.user,
+                        requestId = result.requestId,
+                        idempotencyReplayed = result.idempotencyReplayed,
+                    )
+                }
+
+                is ApiResult.Failure -> {
+                    result
+                }
+            }
+
+        /**
+         * ⚠️ `Idempotency-Key` 在这个端点上守的是**用户的账号**，不是便利。
+         *
+         * §7.5 给 `POST /me/username` 的配额是按 user **10 次总计的生命周期计数**
+         * （`users.username_attempts`，永不恢复）。用尽 = 这个账号永远完成不了
+         * onboarding，而 T-108 的拦截器连注销路径都挡着 —— 没有任何自助出路
+         * （ADR-0017）。
+         *
+         * 于是「服务端已经把名字记上了、响应在回来的路上丢了、用户再按一次确认」
+         * 这条完全正常的路径，不带 key 就会白烧掉一次。带上导出式的 key，
+         * 中间件回放此前那次的响应，计数不动。
+         *
+         * ⚠️ **由归一化后的 username 导出，不是 `UUID.randomUUID()`。** 随机 key
+         * 每次都不同，回放永远命中不了 —— 那就等于没带。理由与 [RefreshGate]
+         * 里那一处完全同构，两处的取舍要一起读。
+         *
+         * 换个名字就换个 key，所以不会撞上 ADR-0003 的
+         * 「同 key 异体 → `422 idempotency_key_reused`」。
+         *
+         * 先过一次 SHA-256 再交给 `nameUUIDFromBytes`（内部是 MD5），
+         * 这样这枚 key 不是 username 的可逆函数 —— username 是伪名不是秘密，
+         * 但没有理由让它在服务端日志里多一份副本。吐出来的是 v3 UUID，
+         * 服务端的 `Uuid::PATTERN` 只比形状、不看版本位。
+         */
+        private fun idempotencyKeyFor(normalizedUsername: String): UUID {
+            val digest =
+                MessageDigest
+                    .getInstance("SHA-256")
+                    .digest("$IDEMPOTENCY_NAMESPACE$normalizedUsername".toByteArray(Charsets.UTF_8))
+            return UUID.nameUUIDFromBytes(digest)
+        }
+
+        private companion object {
+            /** 换一个用途就该换一个命名空间，免得两处导出撞到同一个 key。 */
+            const val IDEMPOTENCY_NAMESPACE = "ncards-username:"
+        }
     }

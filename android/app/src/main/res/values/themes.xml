@@ -3,10 +3,19 @@
   Compose 应用只需要一个「不带 ActionBar 的空壳主题」——真正的主题在
   core:designsystem 的 NcardsTheme（§12.3）。这里的颜色只在 Compose 接管之前的
   那几帧可见（启动窗口背景）。
+
+  ⚠️ **父主题必须是 AppCompat 的，别换回 android:Theme.Material.***（T-151）。
+  MainActivity 是 AppCompatActivity —— 那是 per-app locales
+  （AppCompatDelegate.setApplicationLocales，J1 第一屏的语言切换）唯一的落地方式，
+  而 AppCompatActivity 在非 AppCompat 主题下**启动即崩**：
+  "You need to use a Theme.AppCompat theme (or descendant) with this activity."
+
+  这两件事绑在一起：改主题父类要同时把 Activity 基类换回去，
+  而那意味着语言切换在 API < 33 上静默失效（设了但不生效）。
 -->
 <resources>
 
-    <style name="Theme.NCards" parent="android:Theme.Material.Light.NoActionBar">
+    <style name="Theme.NCards" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowBackground">@color/ncards_window_background</item>
     </style>
 

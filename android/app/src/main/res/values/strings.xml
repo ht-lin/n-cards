@@ -15,9 +15,18 @@
 
     <string name="app_name">N-Cards</string>
 
-    <!-- 骨架页面。由 T-151（Onboarding）与 T-153（钱包列表）替换。 -->
-    <string name="skeleton_title">N-Cards</string>
-    <string name="skeleton_body">Das Gerüst der App steht. Die Kartenverwaltung folgt in Kürze.</string>
-    <string name="skeleton_refresh_content_description">Ansicht aktualisieren</string>
+    <!--
+      「上一次为什么被登出」。四格里只有两格要说话 —— SignedOutReason 的
+      类注释解释了为什么它们不能合并成一句（尤其 KeyMaterialLost）。
+    -->
+    <string name="signed_out_title">Du bist abgemeldet</string>
+    <string name="signed_out_session_revoked">Deine Sitzung ist abgelaufen oder wurde beendet. Bitte melde dich erneut an.</string>
+    <string name="signed_out_key_material_lost">Die Daten auf diesem Gerät lassen sich nicht mehr entschlüsseln – das passiert zum Beispiel nach einer Systemwiederherstellung. Melde dich erneut an; deine Karten werden dann neu geladen.</string>
+    <string name="signed_out_acknowledge">Verstanden</string>
+
+    <!-- Platzhalter-Wallet (T-151); T-153 ersetzt sie durch feature:wallet. -->
+    <string name="wallet_empty_title">Deine Karten</string>
+    <string name="wallet_empty_body">Hier ist noch nichts. Füge deine erste Karte hinzu, um sie an der Kasse in Sekunden griffbereit zu haben.</string>
+    <string name="wallet_add_first_card">Erste Karte hinzufügen</string>
 
 </resources>

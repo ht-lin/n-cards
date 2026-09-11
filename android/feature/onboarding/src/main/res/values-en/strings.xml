@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  English translations. The **default** locale is German and lives in values/ (§11.1).
+  Every string in values/strings.xml must have an entry here — MissingTranslation
+  is an error (§13.3).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
+
+    <!-- ==================== Shared ==================== -->
+
+    <string name="onboarding_error_prefix">⚠ %1$s</string>
+
+    <string name="onboarding_open_terms">Read the terms of use</string>
+    <string name="onboarding_open_privacy">Read the privacy policy</string>
+
+    <!-- ==================== 1. Welcome ==================== -->
+
+    <string name="onboarding_welcome_title">Welcome to N-Cards</string>
+    <string name="onboarding_welcome_intro">All your loyalty cards in one place — even offline.</string>
+    <string name="onboarding_welcome_language_label">Language</string>
+    <!-- ⚠️ Both language names stay in their own language and are identical to values/. -->
+    <string name="onboarding_language_german">Deutsch</string>
+    <string name="onboarding_language_english">English</string>
+    <string name="onboarding_welcome_privacy_summary">We store your cards encrypted and do not integrate any analytics or advertising services. All we need to sign you in is your email address — no password.</string>
+    <string name="onboarding_welcome_continue">Get started</string>
+
+    <!-- ==================== 2. Email ==================== -->
+
+    <string name="onboarding_email_title">Sign in</string>
+    <string name="onboarding_email_intro">Enter your email address. We will send you a six-digit code. If you do not have an account yet, one will be created.</string>
+    <string name="onboarding_email_label">Email address</string>
+    <string name="onboarding_email_submit">Request code</string>
+    <string name="onboarding_email_legal_notice">By continuing you agree to the terms of use and confirm that you have read the privacy policy.</string>
+
+    <!-- ==================== 3. Code ==================== -->
+
+    <string name="onboarding_otp_title">Enter the code</string>
+    <string name="onboarding_otp_intro">We sent a six-digit code to %1$s. It is valid for 10 minutes.</string>
+    <string name="onboarding_otp_label">Six-digit code</string>
+    <string name="onboarding_otp_submit">Confirm</string>
+    <string name="onboarding_otp_resend">Send a new code</string>
+    <string name="onboarding_otp_resend_in">You can request a new code in %1$d seconds</string>
+    <string name="onboarding_otp_magic_link_hint">The email also contains a link that signs you in without a code.</string>
+
+    <!-- ==================== 4. Username ==================== -->
+
+    <string name="onboarding_username_title">Choose a username</string>
+    <string name="onboarding_username_intro">One more step: choose a username. Friends need it in order to share cards with you.</string>
+    <string name="onboarding_username_label">Username</string>
+    <string name="onboarding_username_rules">3 to 20 characters: lowercase letters, digits and underscores.</string>
+    <string name="onboarding_username_normalized_preview">Will be saved as: %1$s</string>
+    <!-- ⚠️ §3.8 "discoverability": the UI **must** show this. -->
+    <string name="onboarding_username_discoverability_notice">Other people can find you by this name. For that reason, do not use your real name or your email address.</string>
+    <!-- ⚠️ §3.8 / §16 R13: the German wording of this line is prescribed verbatim. -->
+    <string name="onboarding_username_immutable_warning">This name cannot be changed later.</string>
+    <string name="onboarding_username_submit">Set username</string>
+
+    <string name="onboarding_username_dialog_title">Set this username permanently?</string>
+    <string name="onboarding_username_dialog_body">You are setting the name “%1$s”.</string>
+    <string name="onboarding_username_dialog_confirm">Set permanently</string>
+    <string name="onboarding_username_dialog_cancel">Cancel</string>
+
+    <!-- ==================== Errors ==================== -->
+
+    <string name="onboarding_error_email_invalid">That does not look like an email address.</string>
+    <!-- ⚠️ One single message for every rejection: the server deliberately does not
+         distinguish wrong, expired, already used and too many attempts (§6.3.1 note 3). -->
+    <string name="onboarding_error_code_rejected">That code is wrong or no longer valid. Request a new code.</string>
+    <string name="onboarding_error_too_many_requests">Too many attempts. Please wait a moment.</string>
+    <string name="onboarding_error_too_many_requests_in">Too many attempts. Please wait %1$d seconds.</string>
+    <string name="onboarding_error_offline">No connection. Check your network and try again.</string>
+    <string name="onboarding_error_service_unavailable">The service is currently unavailable. Please try again later.</string>
+    <string name="onboarding_error_client_too_old">This version of the app is too old. Please update it.</string>
+    <string name="onboarding_error_unexpected">That did not work. Please try again.</string>
+
+    <string name="onboarding_username_error_too_short">At least 3 characters.</string>
+    <string name="onboarding_username_error_too_long">At most 20 characters.</string>
+    <string name="onboarding_username_error_charset">Only lowercase letters, digits and underscores are allowed.</string>
+    <string name="onboarding_username_error_taken">That name is already taken. Please choose another one.</string>
+    <string name="onboarding_username_error_invalid">That name cannot be used. Please choose another one.</string>
+    <!-- ⚠️ Terminal error (ADR-0017): the counter never recovers — do not write "try again later". -->
+    <string name="onboarding_username_error_attempts_exhausted">You have reached the maximum number of attempts. A username can no longer be set for this account — please contact support.</string>
+
+</resources>

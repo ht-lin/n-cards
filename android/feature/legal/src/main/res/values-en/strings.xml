@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  English translations. The **default** locale is German and lives in values/ (§11.1).
+  Every string in values/strings.xml must have an entry here — MissingTranslation
+  is an error (§13.3).
+
+  ⚠️ Placeholder legal copy; T-450 replaces it with the lawyer-reviewed wording.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
+
+    <string name="legal_back">Back</string>
+
+    <string name="legal_placeholder_notice">Note: this is placeholder text from the development phase. The binding version will be added before release.</string>
+
+    <!-- Terms of use -->
+    <string name="legal_terms_title">Terms of Use</string>
+    <string name="legal_terms_scope">These terms govern your use of the N-Cards app. The app stores your loyalty and membership cards on your device and syncs them with your account.</string>
+    <string name="legal_terms_account">All you need for an account is an email address. There is no password: you sign in each time with a six-digit code we email to you.</string>
+    <string name="legal_terms_username">Your username is unique and cannot be changed once it has been set. If you want a different name, you have to delete your account and register again.</string>
+    <string name="legal_terms_availability">The app is free of charge. We aim for reliable operation but cannot guarantee uninterrupted availability. Your cards remain usable on the device even without a network connection.</string>
+
+    <!-- Privacy policy -->
+    <string name="legal_privacy_title">Privacy Policy</string>
+    <string name="legal_privacy_controller">The operator of N-Cards is the controller for the processing of your data. You will find the full contact details in the legal notice.</string>
+    <string name="legal_privacy_data">We process your email address in order to sign you in, together with the cards you create. Your card numbers are stored encrypted. We do not integrate any analytics or advertising services.</string>
+    <string name="legal_privacy_username">Your username is a publicly searchable pseudonym: other people can use it to add you as a friend. For that reason, do not use your real name or your email address.</string>
+    <string name="legal_privacy_rights">You can request access to your data, export it, or delete your account at any time. Once deleted, your data is removed in full.</string>
+
+</resources>

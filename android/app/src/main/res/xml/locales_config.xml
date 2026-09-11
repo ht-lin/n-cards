@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  App 支持的语言（§11.1：德语默认 + 英语）。T-151。
+
+  两个作用：
+  ① Android 13+ 的系统「App 语言」设置页靠它列出可选项；
+  ② appcompat 的 per-app locales 在 API < 33 上用它校验 setApplicationLocales 的入参。
+
+  ⚠️ 这份清单必须与两处保持一致，改一处要改三处：
+     - `values-en/`（英语资源目录，德语在 values/）
+     - `ncards.android.application` 里的 `androidResources.localeFilters`
+       （它决定哪些语言的资源真的进 APK —— 少了的话这里列出来也是空的）
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="de" />
+    <locale android:name="en" />
+</locale-config>
