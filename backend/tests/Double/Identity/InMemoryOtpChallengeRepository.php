@@ -35,9 +35,25 @@ final class InMemoryOtpChallengeRepository implements OtpChallengeRepositoryInte
         $this->challenges = array_values($challenges);
     }
 
+    /**
+     * ⚠️ **按 id upsert**，不是无条件追加（与 {@see InMemoryUserRepository::upsert()}
+     * 同一个理由）。生产实现是 `persist()` + `flush()`，对一个已经被管理的实体
+     * 那是一次 UPDATE —— 追加的话，任何「读出来改一下再存回去」的调用方
+     * （T-113 的 ForgetOtpRequestIpsTask 就是）都会在替身上凭空多出一行，
+     * 而那种失败看起来像被测代码写错了。
+     */
     public function save(OtpChallenge $challenge): void
     {
         $this->operations[] = 'save';
+
+        foreach ($this->challenges as $index => $existing) {
+            if ($existing->id()->equals($challenge->id())) {
+                $this->challenges[$index] = $challenge;
+
+                return;
+            }
+        }
+
         $this->challenges[] = $challenge;
     }
 
@@ -89,6 +105,65 @@ final class InMemoryOtpChallengeRepository implements OtpChallengeRepositoryInte
         }
 
         return $affected;
+    }
+
+    /**
+     * T-113。与生产实现一样按 `expires_at` / `consumed_at` 两条时间线判「已死」，
+     * 但这里是逐条遍历 —— DQL 的 `OR` 是否真的按预期展开，仍然只有真 Postgres
+     * 能证明（断言在 DoctrineOtpChallengeRepositoryTest）。
+     */
+    public function deleteDeadBefore(\DateTimeImmutable $cutoff): int
+    {
+        $this->operations[] = 'deleteDead';
+
+        $kept = [];
+        $deleted = 0;
+
+        foreach ($this->challenges as $challenge) {
+            $dead = $challenge->expiresAt() < $cutoff
+                || (null !== $challenge->consumedAt() && $challenge->consumedAt() < $cutoff);
+
+            if ($dead) {
+                ++$deleted;
+
+                continue;
+            }
+
+            $kept[] = $challenge;
+        }
+
+        $this->challenges = $kept;
+
+        return $deleted;
+    }
+
+    /**
+     * T-113。`$limit` 用 `array_slice` 实现，与生产的 `setMaxResults()` 同语义。
+     *
+     * ⚠️ 排序也照抄（`created_at` 升序）：单测若依赖「先拿到最老的那条」，
+     * 而替身按插入顺序返回，那条断言在真库上会随机失败。
+     *
+     * @return list<OtpChallenge>
+     */
+    public function findWithRequestIpOlderThan(\DateTimeImmutable $cutoff, int $limit): array
+    {
+        $matching = [];
+
+        foreach ($this->challenges as $challenge) {
+            if (null === $challenge->requestIpHash()) {
+                continue;
+            }
+
+            if ($challenge->createdAt() >= $cutoff) {
+                continue;
+            }
+
+            $matching[] = $challenge;
+        }
+
+        usort($matching, static fn (OtpChallenge $a, OtpChallenge $b) => $a->createdAt() <=> $b->createdAt());
+
+        return \array_slice($matching, 0, $limit);
     }
 
     /**

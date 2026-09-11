@@ -91,7 +91,13 @@
         <!--
             哑挑战。ADR-0014（T-104）之后**已无生产写入方** —— 两条路径合并成恒发码，
             防枚举改由「otp/request 根本不查 users」保证。
-            列与工厂都留着：库里还有上个版本建的旧行要继续 401，删列归 T-113。
+
+            ⚠️ T-113 摘掉了 VerifyOtpService 里那次读取（部署窗口早已过去），
+            但这个 <field> **不能**跟着删：schema:validate 比的是映射与真库，
+            而 is_decoy 列还在 —— 映射先于列消失，diff 里就多一条 DROP COLUMN，
+            本文件抬头那三条对齐规则的第 1 条当场失效，CI 红。
+            映射、实体属性与列必须同一次发布一起删，归后续卡
+            （交接清单见 docs/tasks/M1.md 的 T-113）。
         -->
         <field name="isDecoy" type="boolean" column="is_decoy" nullable="false">
             <options>

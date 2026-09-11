@@ -94,4 +94,40 @@ interface UserRepositoryInterface
      * 用在 T-107（`409 username_taken` 的判定）与 Social 的好友检索。
      */
     public function findByUsername(string $normalized): ?User;
+
+    /**
+     * 物删「僵尸注册行」：`username IS NULL` 且 `created_at < $cutoff`（T-113）。
+     *
+     * §5.2 把这条列为 MUST：用户中途放弃注册，留下的只是一条邮箱哈希 + 一个密文，
+     * 没有任何关联业务数据，所以物删而不是走 {@see \App\Module\Identity\Domain\ValueObject\UserStatus}
+     * 的 `pending_deletion` 状态机（那是给**真有账号**的人准备的 30 天宽限期）。
+     *
+     * ============================================================================
+     * ⚠️ 这个方法会让别人手里的 token 失效，这是设计的一部分
+     * ============================================================================
+     * ADR-0018 决定四：`AuthContext` 持有一个 user id **不**意味着那个 user 还存在
+     * （access token 有最长 15 分钟寿命，而这里会在那期间把行删掉）。所以
+     * `OnboardingState` 有 `UserUnknown` 那一格，而 onboarding 状态**不得缓存**。
+     * 改这个方法的语义前先读那份 ADR。
+     *
+     * ============================================================================
+     * ⚠️ 级联靠 DDL，不靠 ORM
+     * ============================================================================
+     * 实现是批量 DQL DELETE，**绕过 UnitOfWork** —— Doctrine 的 cascade 配置在这里
+     * 一行都不生效。带走 `devices` / `sessions` 的是 `Version20260905101500.php` 里
+     * 那两条 `ON DELETE CASCADE` 外键。集成测试专门钉了这一点，因为「换成逐条
+     * `remove()` 会更安全」这个念头看起来很有道理，实际会变成一次 N+1 且语义不变。
+     *
+     * `cards.owner_id` 是 `ON DELETE RESTRICT`（`Version20260908182500.php:127`）。
+     * 僵尸用户被 ADR-0018 的拦截器挡在所有建卡端点之外，不可能持有卡，所以这里
+     * **不做**跨模块排除（§4.2 规则 5 禁止跨模块 JOIN）。万一那条不变量被破坏，
+     * 整条语句会失败 —— 由 `Shared\Application\Cleanup\CleanupRunner` 接住，
+     * 只损失这一个任务。
+     *
+     * @param \DateTimeImmutable $cutoff 严格小于它才删（`created_at < :cutoff`），
+     *                                   于是「第 7 天」留下、「第 7 天零 1 秒」删掉
+     *
+     * @return int<0, max> 受影响行数
+     */
+    public function deleteZombieRegistrationsBefore(\DateTimeImmutable $cutoff): int;
 }

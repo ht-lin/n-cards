@@ -14,6 +14,7 @@
         "doctrine/doctrine-bundle": "^2.19",
         "doctrine/doctrine-migrations-bundle": "^3.4",
         "doctrine/orm": "^3.6",
+        "dragonmantank/cron-expression": "^3.4",
         "predis/predis": "^3.6",
         "symfony/console": "7.4.*",
         "symfony/doctrine-messenger": "7.4.*",
@@ -25,6 +26,7 @@
         "symfony/messenger": "7.4.*",
         "symfony/monolog-bundle": "^4.0",
         "symfony/runtime": "7.4.*",
+        "symfony/scheduler": "7.4.*",
         "symfony/twig-bundle": "7.4.*",
         "symfony/yaml": "7.4.*"
     },

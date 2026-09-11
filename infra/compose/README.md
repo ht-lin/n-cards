@@ -194,8 +194,37 @@ docker compose --profile dev up -d mailpit     # UI: http://localhost:8025
 ⚠️ 它只映射 UI 端口（8025），**不映射 SMTP（1025）**：发信方是同一个 docker 网络里的
 worker，宿主机不需要能连上它。
 
+## `scheduler`（T-113）
+
+第三个用同一镜像的服务，入口是 `messenger:consume scheduler_default` ——
+每天 04:30 Europe/Berlin 跑一趟 §8.2 的保留期清理。运维手册见
+[`docs/runbooks/scheduled-cleanup.md`](../../docs/runbooks/scheduled-cleanup.md)，
+设计取舍见 [ADR-0022](../../docs/adr/0022-daily-cleanup-via-symfony-scheduler-single-replica-no-lock.md)。
+
+三件与 `worker` 不同、且容易照抄错的事：
+
+- **只连 `backing`，不连 `egress`。** worker 那条 `egress` 是为了拨 dogado 的 SMTP；
+  清理任务不发信、不出站。
+- **不传任何 `VAULT_*`。** 三个清理任务不做加解密（删的是哈希列与密文列，不解密它们）。
+  配上去会给「谁需要 Vault 凭据」这个问题多一个假答案。
+- **`replicas: 1`，而 worker 是 2。** 这是正确性约束不是配额：两个 scheduler 会把
+  同一条 cron 触发两次。要改成 2 必须先装 `symfony/lock` 并给 `Schedule` 加
+  `->lock()`，不能只改那个数字。
+
+与 `worker` **相同**且同样不能省的一条：`healthcheck: disable: true`。
+FrankenPHP 基础镜像自带一条 Caddy admin 端点的健康检查，而这个容器不起 HTTP
+服务器 —— 不关掉就是一个永远显示 unhealthy 的常驻红色。
+
+验证「两者可独立重启」（T-113 的验收标准之一）：
+
+```bash
+docker inspect -f '{{.State.StartedAt}}' ncards-worker-1 ncards-scheduler-1
+docker compose restart scheduler
+docker inspect -f '{{.State.StartedAt}}' ncards-worker-1 ncards-scheduler-1   # worker 的不变
+```
+
 ## 尚未交付
 
-§14.2 的服务清单里还有 `scheduler`、`prometheus`/`grafana`/`loki`、`backup`。
+§14.2 的服务清单里还有 `prometheus`/`grafana`/`loki`、`backup`。
 它们的依赖还没装，写出来也起不来，所以在 `docker-compose.prod.yml` 末尾以注释槽位
-留位并标注了归属任务（T-113 / T-405 / T-406）。
+留位并标注了归属任务（T-405 / T-406）。

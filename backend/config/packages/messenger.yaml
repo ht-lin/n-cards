@@ -26,6 +26,25 @@
 #    T-306（FCM 集成）接手时照 `email` 的形状再加一条即可。
 # 3. ✅ 放开了 infra/compose/docker-compose.{base,prod}.yml 的 `worker` 服务。
 #
+# ============================================================================
+# T-113：第二个 consumer 容器，但**这个文件一行都没改**
+# ============================================================================
+# `scheduler` 容器跑的是 `messenger:consume scheduler_default`，而那条 transport
+# **不在下面的 transports 里** —— Symfony 的 AddScheduleMessengerPass 对每个
+# `#[AsSchedule('<name>')]` 自动注册一条叫 `scheduler_<name>` 的 receiver。
+# 我们那张时刻表在 Shared\Infrastructure\Scheduler\DailyMaintenanceSchedule，
+# 用的是默认名，所以它叫 `scheduler_default`。
+#
+# ⚠️ **不要**为了「看起来完整」在下面手写一条同名 transport：那个 pass 见到
+# 同名 receiver 就跳过自动注册，手写的那条会把真正的时刻表顶掉，
+# 症状是 scheduler 容器起得好好的、却永远不触发任何任务。
+#
+# ⚠️ 那条消息（RunDailyCleanup）也**不进**下面的 routing 表：它由 scheduler
+# transport 在 worker 进程内产生并当场执行，配路由等于把它再发去一条 transport。
+# 它的 Handler 走 `command.bus`（messenger:consume 对没有 BusNameStamp 的信封
+# 用 RoutableMessageBus 的 fallback，也就是 default_bus），注册在
+# config/services.yaml 里 —— 与 SendMailHandler 同一个做法，理由也相同。
+#
 # ⚠️ 各模块**不得**直接注入 MessageBusInterface。deptrac 的 Framework.Messaging
 # 图层只对 *.Infrastructure 开放。合法入口有三个，都在 Infrastructure 里：
 # 那两个 Shared 总线实现，以及 T-102 的 Notification\...\QueueingMailSender

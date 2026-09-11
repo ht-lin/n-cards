@@ -422,6 +422,161 @@ final class DoctrineOtpChallengeRepositoryTest extends KernelTestCase
         $this->repository->save($this->issue('bea', $now, nth: 2, magicTokenHash: $hash));
     }
 
+    // ========================================================================
+    // T-113：§8.2 ROPA 保留期的两个清理入口
+    // ========================================================================
+
+    /**
+     * `deleteDeadBefore()` 的边界：严格小于 `$cutoff`（宽限期 24 小时）。
+     *
+     * ⚠️ 必须打真库。这条 DQL 的 WHERE 是一个 `OR`，而 `OR` 在 DQL → SQL 的翻译里
+     * **不会**自动加括号包住前面的 `AND` —— 括号写漏了的话，条件会变成
+     * `expires_at < :c OR (consumed_at IS NOT NULL)` AND 之类的形状，
+     * 于是**每一条已消费的挑战都被立刻删掉**，包括刚刚验证成功的那些。
+     * 进程内替身按 PHP 逻辑遍历，验的是「我以为的语义」，看不见这一层。
+     */
+    public function testDeletesOnlyChallengesThatDiedStrictlyBeforeTheCutoff(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-24 hours');
+
+        // ① 过期于边界前 1 秒 —— 删。
+        $this->repository->save($this->issue('expired-past', $cutoff->modify('-10 minutes -1 second'), nth: 1));
+        // ② 正好过期在边界上 —— 留（严格小于）。
+        $this->repository->save($this->issue('expired-at', $cutoff->modify('-10 minutes'), nth: 2));
+        // ③ 还没过期 —— 留。⚠️ 红了就是所有人都登不进去。
+        $this->repository->save($this->issue('alive', $now, nth: 3));
+        $this->entityManager->clear();
+
+        self::assertSame(1, $this->repository->deleteDeadBefore($cutoff));
+
+        $this->entityManager->clear();
+        self::assertNull($this->repository->findById(IdentityEntities::id(1)));
+        self::assertNotNull($this->repository->findById(IdentityEntities::id(2)));
+        self::assertNotNull($this->repository->findById(IdentityEntities::id(3)));
+    }
+
+    /**
+     * `OR` 的第二半：`consumed_at`。
+     *
+     * ⚠️ 这条挑战的 `expires_at` 在**将来**，所以它只可能因为 `consumed_at`
+     * 而被删 —— 不加这个约束的话，用例会搭第一半的便车，而 `consumed_at`
+     * 那一半写错了也照样绿。
+     */
+    public function testDeletesAConsumedChallengeEvenWhenItHasNotExpiredYet(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-24 hours');
+
+        // expires_at = now + 10 天，远在将来；consumed_at 在边界前 1 秒。
+        $consumed = OtpChallenge::issue(
+            IdentityEntities::id(1),
+            IdentityEntities::digest('consumed'),
+            IdentityEntities::ciphertext(),
+            Locale::German,
+            IdentityEntities::digest('consumed-code'),
+            OtpPurpose::Login,
+            $now->modify('+10 days'),
+            null,
+            IdentityEntities::digest('ip'),
+            $cutoff->modify('-1 hour'),
+        );
+        $consumed->consume($cutoff->modify('-1 second'));
+        $this->repository->save($consumed);
+        $this->entityManager->clear();
+
+        self::assertSame(1, $this->repository->deleteDeadBefore($cutoff));
+    }
+
+    /**
+     * `findWithRequestIpOlderThan()`：§8.2 的「ip_hash 30 天」上限。
+     *
+     * ⚠️ 生产里这个查询恒返回空数组（挑战活不到 30 天，24 小时后整行就没了）。
+     * 这条用例是那条上限**唯一**的证据 —— 它证明「假如有一行真的活过了 30 天，
+     * 它会被找出来」。那个「假如」不是臆想：把宽限期调到 45 天是一个完全合理的
+     * 排障诉求，而调完之后没有任何别的测试会红。
+     */
+    public function testFindsOnlyRowsWithAnIpStrictlyOlderThanTheCutoff(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-30 days');
+
+        $this->repository->save($this->issue('one-second-past', $cutoff->modify('-1 second'), nth: 1));
+        $this->repository->save($this->issue('exactly-at-the-boundary', $cutoff, nth: 2));
+        $this->entityManager->clear();
+
+        $stale = $this->repository->findWithRequestIpOlderThan($cutoff, 100);
+
+        self::assertCount(1, $stale);
+        self::assertTrue($stale[0]->id()->equals(IdentityEntities::id(1)));
+    }
+
+    /**
+     * 已经忘过 IP 的行不该被再找出来 —— 否则「处理行数」会天天报同一个非零值，
+     * 而那个数字是运维判断「这道闸有没有在动」的唯一依据。
+     *
+     * ⚠️ 这条同时验的是 `request_ip_hash IS NOT NULL` 在 SQL 里的 NULL 语义：
+     * 写成 `!= :null` 之类的话，PG 对 NULL 的比较恒为 UNKNOWN，一行都匹配不上。
+     */
+    public function testSkipsRowsWhoseIpHasAlreadyBeenForgotten(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-30 days');
+
+        $challenge = $this->issue('stale', $cutoff->modify('-1 day'), nth: 1);
+        $challenge->forgetRequestIp();
+        $this->repository->save($challenge);
+        $this->entityManager->clear();
+
+        self::assertSame([], $this->repository->findWithRequestIpOlderThan($cutoff, 100));
+    }
+
+    /**
+     * 整行必须活下来 —— 这是与 {@see deleteDeadBefore()} 的分界线：
+     * 那个删行，这个只忘掉一列。
+     */
+    public function testForgettingTheIpKeepsTheRowItself(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-30 days');
+
+        $this->repository->save($this->issue('stale', $cutoff->modify('-1 day'), nth: 1));
+        $this->entityManager->clear();
+
+        $stale = $this->repository->findWithRequestIpOlderThan($cutoff, 100);
+        self::assertCount(1, $stale);
+
+        $stale[0]->forgetRequestIp();
+        $this->repository->save($stale[0]);
+        $this->entityManager->clear();
+
+        $reloaded = $this->repository->findById(IdentityEntities::id(1));
+
+        self::assertNotNull($reloaded, 'This path nulls a column; deleting the row is another task.');
+        self::assertNull($reloaded->requestIpHash());
+        // 别的列一个都不许动 —— 尤其是 email_hash（它是这条挑战的身份）。
+        self::assertTrue($reloaded->emailHash()->equals(IdentityEntities::digest('stale')));
+    }
+
+    /**
+     * `$limit` 兜住「有人把宽限期调过 30 天」之后的第一趟。
+     */
+    public function testRespectsTheBatchLimitAndReturnsTheOldestFirst(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-30 days');
+
+        // 刻意按「最新的先 save」，好让「最老的先返回」是排序的功劳而不是插入顺序的。
+        $this->repository->save($this->issue('newest', $cutoff->modify('-1 day'), nth: 1));
+        $this->repository->save($this->issue('oldest', $cutoff->modify('-90 days'), nth: 2));
+        $this->entityManager->clear();
+
+        $batch = $this->repository->findWithRequestIpOlderThan($cutoff, 1);
+
+        self::assertCount(1, $batch);
+        self::assertTrue($batch[0]->id()->equals(IdentityEntities::id(2)), 'ORDER BY created_at ASC');
+    }
+
     private function reload(OtpChallenge $challenge): OtpChallenge
     {
         $loaded = $this->repository->findById($challenge->id());

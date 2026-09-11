@@ -160,6 +160,37 @@ final class InMemoryUserRepository implements UserRepositoryInterface
         return null;
     }
 
+    /**
+     * T-113。
+     *
+     * ⚠️ 这个替身**没有外键**，所以它证明不了两件真库上才有的事：
+     * `devices` / `sessions` 跟着级联消失（`ON DELETE CASCADE`），以及
+     * 持卡人会撞上 `cards.owner_id` 的 `ON DELETE RESTRICT`。两者都在
+     * tests/Integration/Module/Identity/Doctrine/DoctrineUserRepositoryTest。
+     * 这里只验编排：任务算出来的 `$cutoff` 对不对、`username IS NULL` 有没有漏。
+     */
+    public function deleteZombieRegistrationsBefore(\DateTimeImmutable $cutoff): int
+    {
+        $this->calls[] = 'deleteZombieRegistrationsBefore';
+
+        $kept = [];
+        $deleted = 0;
+
+        foreach ($this->users as $user) {
+            if (null === $user->username() && $user->createdAt() < $cutoff) {
+                ++$deleted;
+
+                continue;
+            }
+
+            $kept[] = $user;
+        }
+
+        $this->users = $kept;
+
+        return $deleted;
+    }
+
     public function findByEmailHashCalls(): int
     {
         return $this->findByEmailHashCalls;

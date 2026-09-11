@@ -745,7 +745,7 @@ Anna App          Backend                              Bob App
 | `attempts` | SMALLINT NOT NULL DEFAULT 0 | ≥5 即作废 |
 | `expires_at` | TIMESTAMPTZ NOT NULL | now() + 10 min |
 | `consumed_at` | TIMESTAMPTZ NULL | |
-| ~~`is_decoy`~~ | BOOLEAN NOT NULL DEFAULT false | **已废弃**（[ADR-0014](adr/0014-otp-always-sends-a-code.md)）：不再有任何写入方，恒为 false。列保留至 T-113 按 expand–contract 删除 |
+| ~~`is_decoy`~~ | BOOLEAN NOT NULL DEFAULT false | **已废弃**（[ADR-0014](adr/0014-otp-always-sends-a-code.md)）：不再有任何写入方，恒为 false。**T-113 已切读**（`VerifyOtpService` 不再看这一位）；列、ORM 映射与实体属性必须**同一次发布**一起删（`schema:validate` 比的是映射与真库），归后续卡 —— 前置条件与步骤见 `docs/tasks/M1.md` 的 T-113 与 [ADR-0022](adr/0022-daily-cleanup-via-symfony-scheduler-single-replica-no-lock.md) 决定 8 |
 | **`email_encrypted`** | **TEXT NULL** | **T-104 新增**。Vault Transit 密文，与 `users.email_encrypted` 同一把密钥。**首次验证成功时用它建 `users` 行** —— 那时明文邮箱早已不在系统里 |
 | **`locale`** | **TEXT NULL** | **T-104 新增**。请求验证码时选的语言，注册时进 `users.locale`。收到英文码信却拿到 `locale=de` 的账号是用户能看见的 bug |
 | `request_ip_hash` | BYTEA NULL | 限流与滥用分析用，30 天后清理 |
@@ -1630,7 +1630,7 @@ Bob:  【选择接受或拒绝】
 | 关系 | friendships, card_members | 共享功能 | 关系存续期 | Hetzner DE |
 | 设备 | device id, model, os/app 版本, push_token | 多设备与推送 | 设备撤销后即删 | Hetzner DE |
 | 安全 | ip_hash, audit_log, 限流计数 | 滥用防护 | ip_hash 30 天；audit 12 个月；限流 24 小时 | Hetzner DE / Redis |
-| 认证 | `otp_challenges`：email_hash、**email_encrypted**（Vault Transit）、locale、code_hash、request_ip_hash | 登录与注册（§6.3.1） | 挑战 10 分钟过期，T-113 的每日任务删除；request_ip_hash 30 天 | Hetzner DE |
+| 认证 | `otp_challenges`：email_hash、**email_encrypted**（Vault Transit）、locale、code_hash、request_ip_hash | 登录与注册（§6.3.1） | 挑战 10 分钟过期；**死后满 24 小时由每日任务删整行**（T-113，宽限期供排障，参数 `ncards.cleanup.otp_challenge_grace_hours`）。request_ip_hash 另有 30 天上限，由一条独立的兜底任务强制（当前配置下恒 0 行，见 [ADR-0022](adr/0022-daily-cleanup-via-symfony-scheduler-single-replica-no-lock.md) 决定 4 的「负面」段） | Hetzner DE |
 | 外发邮件队列 | `messenger_messages.body`：收件邮箱 + OTP 码 / 提醒内容，**整条消息体经 Vault Transit 加密**（`ncards-pii`） | 异步投递登录码与安全提醒 | **消费即删行**；投递失败重投 3 次（约 13 秒）后转入 `failed` 队列，由人工处置后删除 | Hetzner DE |
 | 诊断 | 崩溃栈、`X-Request-Id`、脱敏日志 | 稳定性 | 30 天 | Hetzner DE（自托管 Sentry / Loki） |
 
@@ -2245,7 +2245,7 @@ ADR 模板：`Context / Decision / Consequences / Alternatives considered / Stat
 | `caddy` | caddy:2 | TLS、反代、安全头、静态法律页 |
 | `app` | 自建（FrankenPHP + Symfony） | 非 root，只读 rootfs |
 | `worker` | 同上，入口 `messenger:consume` | 2 副本；`async` + `email` 两个 transport |
-| `scheduler` | 同上，Symfony Scheduler | 每日清理、删号执行、导出过期清理、key rewrap |
+| `scheduler` | 同上，入口 `messenger:consume scheduler_default` | 每日清理（T-113 已交付）、删号执行（T-403）、导出过期清理（T-402）、key rewrap（T-404）。⚠️ **单副本**，且改成多副本前必须先加 `Schedule::lock()` —— 见 [ADR-0022](adr/0022-daily-cleanup-via-symfony-scheduler-single-replica-no-lock.md) 决定 4 |
 | `postgres` | postgres:16-alpine | 独立卷；仅内网 |
 | `redis` | redis:7-alpine | 限流、幂等键、缓存；`appendonly yes` |
 | `vault` | hashicorp/vault:1.x | 独立卷；**人工 unseal**；仅内网 |
@@ -2303,6 +2303,9 @@ staging 可用」实测 **29m35s**，其中 25 分钟是一组跑在模拟器上
 | `email_send_total` | counter | `provider`, `template`, `result`。⚠️ `template` 的取值域是 `MailTemplate` 的 case 名，[ADR-0016](adr/0016-magic-link-delivery-and-landing-page.md) 之后**没有** `magic_link`（码与链接同一封信）——「OTP 邮件量骤降」那条告警看的是总量趋势，不受影响 |
 | `fcm_send_total` | counter | `result` |
 | `outbox_messages_pending` | gauge | `transport` |
+| `cleanup_runs_total` | counter | `task`。T-113 的每日清理，**每趟恒 +1（含 0 行的那些）**。⚠️ 它与下面那条必须分开看：合成一个的话「跑了但没东西可删」与「scheduler 挂了根本没跑」在指标上完全一样，而后者是这条链路唯一需要告警的故障 —— T-405 应据此配一条「24 小时内无增量」的告警 |
+| `cleanup_rows_total` | counter | `task`。真删/改了行时才加，增量是行数。取值域闭合（就是已注册的任务名） |
+| `cleanup_errors_total` | counter | `task`。单个任务抛异常即 +1，其余任务照跑（[ADR-0022](adr/0022-daily-cleanup-via-symfony-scheduler-single-replica-no-lock.md) 决定 6） |
 | `card_count_total` / `user_count_total` | gauge | 业务健康度 |
 
 **日志（Loki）**：JSON 结构化，字段固定 `ts, level, msg, request_id, user_id, route, duration_ms`。
@@ -2492,8 +2495,8 @@ CREATE TABLE otp_challenges (
   attempts         SMALLINT    NOT NULL DEFAULT 0,  -- 到 §7.1 的上限（5）为止饱和，不无限累加
   expires_at       TIMESTAMPTZ NOT NULL,
   consumed_at      TIMESTAMPTZ,
-  is_decoy         BOOLEAN     NOT NULL DEFAULT false,  -- ⚠️ ADR-0014 起无写入方，恒 false；T-113 删列
-  request_ip_hash  BYTEA,                         -- 30 天后清理（§8.2）
+  is_decoy         BOOLEAN     NOT NULL DEFAULT false,  -- ⚠️ ADR-0014 起无写入方，恒 false；T-113 已切读，删列归后续卡（ADR-0022 决定 8）
+  request_ip_hash  BYTEA,                         -- 30 天上限，由 T-113 的兜底任务置空（§8.2）
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_otp_challenges_email_hash ON otp_challenges (email_hash);

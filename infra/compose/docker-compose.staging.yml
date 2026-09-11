@@ -51,6 +51,25 @@ services:
           cpus: "0.5"
           memory: 256M
 
+  # T-113。与 app / worker 一样：只调 image / 日志级别 / 配额，形态不变。
+  #
+  # ⚠️ 副本数这里**确实**跟着 prod 保持 1，与上面 worker 的「不降到 1」正好相反。
+  # worker 保持 2 是为了让 staging 替生产踩并发消费的雷；scheduler 的 1 不是
+  # 配额选择而是**正确性约束**（两个副本会把同一条 cron 触发两次，见 prod 覆盖层），
+  # staging 上同样必须成立 —— 何况 staging 的价值正在于形态与生产一致。
+  scheduler:
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:main}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+      LOG_LEVEL: debug
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
   postgres:
     deploy:
       resources:

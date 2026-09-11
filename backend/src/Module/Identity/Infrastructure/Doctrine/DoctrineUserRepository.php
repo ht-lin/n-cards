@@ -11,6 +11,7 @@ use App\Shared\Domain\Error\DomainException;
 use App\Shared\Domain\Error\ErrorCode;
 use App\Shared\Domain\Identity\Uuid;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
+use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -102,5 +103,39 @@ final readonly class DoctrineUserRepository implements UserRepositoryInterface
         return $this->entityManager
             ->getRepository(User::class)
             ->findOneBy(['username' => $normalized]);
+    }
+
+    /**
+     * 一条批量 DQL DELETE（T-113）。
+     *
+     * ⚠️ **绕过 UnitOfWork**，所以：
+     *   - Doctrine 的 cascade 配置一行都不生效 —— 带走 `devices` / `sessions` 的是
+     *     `Version20260905101500.php` 里那两条 `ON DELETE CASCADE` 外键，
+     *     由 Postgres 执行。`DoctrineUserRepositoryTest` 专门钉了这一点。
+     *   - 已经加载进内存的 `User` 实体不会知道自己被删了。本方法的调用方
+     *     （清理任务）手上没有任何实体，所以无碍；与
+     *     {@see DoctrineOtpChallengeRepository::invalidateActiveFor()} 同一条注意事项。
+     *
+     * ⚠️ `cards.owner_id` 是 `ON DELETE RESTRICT`。撞上它时整条语句失败并抛
+     * `ForeignKeyConstraintViolationException` —— **刻意不接**，让
+     * `Shared\Application\Cleanup\CleanupRunner` 记一条 error 并继续跑别的任务。
+     * 在这里吞掉的话，「僵尸行清理从此静默失效」会没有任何信号。
+     * 为什么不在 SQL 里排除持卡人：那是跨模块 JOIN，§4.2 规则 5 只对 Sync 开例外。
+     */
+    public function deleteZombieRegistrationsBefore(\DateTimeImmutable $cutoff): int
+    {
+        $query = $this->entityManager->createQuery(
+            \sprintf(
+                'DELETE FROM %s u WHERE u.username IS NULL AND u.createdAt < :cutoff',
+                User::class,
+            ),
+        );
+
+        $query->setParameter('cutoff', $cutoff, Types::DATETIMETZ_IMMUTABLE);
+
+        // `execute()` 在 ORM 的类型声明里是 mixed，而受影响行数按定义非负 ——
+        // max() 是把这条事实告诉 PHPStan（接口声明的是 int<0, max>），
+        // 不是防御性代码。
+        return max(0, (int) $query->execute());
     }
 }

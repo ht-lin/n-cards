@@ -38,10 +38,15 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * ⚠️ 本文件里最重要的两条是
- * {@see testEveryRejectionShapeDoesTheSameAmountOfWork()} 与
- * {@see testADecoyIsRejectedEvenWhenTheCodeHashMatches()} ——
- * §3.8 的防枚举在 verify 这一侧的承重墙。那两条红了就是安全回归。
+ * ⚠️ 本文件里最重要的一条是
+ * {@see testEveryRejectionShapeDoesTheSameAmountOfWork()} ——
+ * §3.8 的防枚举在 verify 这一侧的承重墙。它红了就是安全回归。
+ *
+ * 它原本还有一个搭档 `testADecoyIsRejectedEvenWhenTheCodeHashMatches()`，
+ * 钉的是「`isDecoy()` 必须排在 `hash_equals` 之后」。T-113 摘掉了那次判断
+ * （ADR-0014 之后哑挑战不再存在，理由见 VerifyOtpService 布尔链上的注释），
+ * 于是那条用例连同它要保护的次序一起退休了 —— 现在布尔链里**没有任何一项**
+ * 与「这个邮箱注册过吗」相关，这比配平次序更强。
  *
  * 其余的用例分成三组：拒绝路径的判据（过期 / 已用 / 次数）、
  * 成功路径的三张表写入（注册 / 设备 / 会话），以及副作用（令牌 claim、提醒信）。
@@ -174,29 +179,6 @@ final class VerifyOtpServiceTest extends TestCase
         yield 'expired' => ['expired'];
         yield 'already consumed' => ['consumed'];
         yield 'attempts exhausted' => ['exhausted'];
-        yield 'legacy decoy' => ['decoy'];
-    }
-
-    /**
-     * ⚠️ **红了就是安全回归。**.
-     *
-     * `isDecoy()` 排在那条布尔链的**最后**，在 `hash_equals` 之后。
-     * 反过来写（先判 decoy 就短路返回）会让哑挑战少一次 Vault HMAC 往返，
-     * 而「是哑挑战」恰好等价于「这个邮箱在上个版本里没注册过」。
-     *
-     * 这条用例给哑挑战配一个**能对上**的码摘要：只有在 hash_equals 之后
-     * 才判 decoy 的实现，才会既返回 401 又付掉那一次 hmac。
-     */
-    public function testADecoyIsRejectedEvenWhenTheCodeHashMatches(): void
-    {
-        $decoy = $this->decoyWithMatchingCode();
-        $this->challenges->save($decoy);
-        $this->hasher->reset();
-
-        $this->expectRejection(fn () => $this->service()->verify($this->payload($decoy->id(), self::CODE), self::CLIENT_IP));
-
-        self::assertSame(1, $this->hasher->callCount(), 'The code must be hashed before the decoy check, not after.');
-        self::assertSame(0, $this->sessions->count());
     }
 
     /**
@@ -344,6 +326,11 @@ final class VerifyOtpServiceTest extends TestCase
      * （没有收件人密文的账号是坏的）。那些行寿命只有 10 分钟，部署窗口一过自然消失。
      *
      * ⚠️ 走的是与其它拒绝**完全相同**的 401：这条路径同样能被外部触发。
+     *
+     * ⚠️ 用 {@see OtpChallenge::decoy()} 造夹具，是因为它是**唯一**一个能造出
+     * `email_encrypted IS NULL` 的工厂（{@see OtpChallenge::issue()} 要求收件人密文）。
+     * T-113 摘掉 `isDecoy()` 判断之后这条用例才真正验到它名字说的那件事 ——
+     * 在那之前它被 decoy 这一位先拦下了，null 收件人那条分支其实没走到。
      */
     public function testALegacyChallengeWithoutARecipientCannotRegister(): void
     {
@@ -726,7 +713,6 @@ final class VerifyOtpServiceTest extends TestCase
         $challenge = match ($shape) {
             'missing' => null,
             'expired' => $this->activeChallenge(expiresAt: $now->modify('-1 second')),
-            'decoy' => $this->decoyWithMatchingCode(),
             default => $this->activeChallenge(),
         };
 
@@ -754,25 +740,6 @@ final class VerifyOtpServiceTest extends TestCase
         $id = $challenge?->id() ?? IdentityEntities::id(999);
 
         $this->service()->verify($this->payload($id, $code), self::CLIENT_IP);
-    }
-
-    /**
-     * 一条哑挑战，但它的 `code_hash` 与正确的码**对得上**。
-     *
-     * 生产里不可能出现（哑挑战的码从来没发出去过），刻意造出来是为了让
-     * 「先判 decoy 再比对」与「先比对再判 decoy」两种实现产生可观测的差异。
-     */
-    private function decoyWithMatchingCode(): OtpChallenge
-    {
-        return OtpChallenge::decoy(
-            IdentityEntities::id(3),
-            IdentityEntities::digest('unknown-email'),
-            HashDigest::fromRaw($this->hasher->hash(self::CODE)),
-            OtpPurpose::Login,
-            $this->clock->now()->modify('+10 minutes'),
-            null,
-            $this->clock->now(),
-        );
     }
 
     private function activeChallenge(

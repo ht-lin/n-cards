@@ -13,6 +13,7 @@
 | [`deploy-and-rollback.md`](deploy-and-rollback.md) | 部署红了怎么处置。先读判定（`ok` / `vault_sealed` / `broken`）再动手 —— **`vault_sealed` 不该回滚**。含手工回滚、从快照恢复、磁盘满了的清理 | T-012 | ✅ |
 | [`drill-rollback-and-seal.md`](drill-rollback-and-seal.md) | **主动演练**（不是故障处置）：快照路径、封印判定、自动回滚三段，在 staging 上各跑一次。§13.8 要求「需要运维介入的事必须演练过才算交付」 | T-012 | ✅ 已执行（2026-09-05，[结果见 M0](../tasks/M0.md)）|
 | [`email-dns.md`](email-dns.md) | 发信域的 SPF / DKIM / DMARC（`p=none`→`quarantine`→`reject` 分三阶段推进）、**通道切换**（R1 的处置）与**发信配额天花板的判读**。Q3 已决：域名邮箱（dogado，[ADR-0013](../adr/0013-mail-via-domain-mailbox.md)）。✅ SPF / DKIM 已由 dogado 自动写入（selector `cloudpit`），⚠️ 仍欠 `-all` 收紧、DMARC 阶段 ① 与实发验证 `d=` | T-102 | ✅ 含 2026-09-06 实测的 zone 现状 |
+| [`scheduled-cleanup.md`](scheduled-cleanup.md) | 每日保留期清理（§8.2 的执行点）：手动补跑 `app:cleanup`、单独重启 scheduler、某条任务一直失败时怎么判。⚠️ 「清理停了」**没有任何用户可见症状**，唯一信号是 `cleanup_runs_total` 不再增长；且其中一条任务**恒 0 行**是正确的（见文末） | T-113 | ✅ |
 | `key-rotation.md` | Transit key 轮换与 rewrap。注意 `ncards-hmac` **不轮换**（轮换会让所有 HMAC 查找失效） | T-406 | ⏳ |
 | `restore-from-backup.md` | 从备份恢复 Postgres + Vault。**上线前必须完成一次真实恢复演练**（不可裁剪项） | T-406 | ⏳ |
 | `esp-failover.md` | 邮件服务商故障时的处置。§3.2 已接受"email 是单点故障"，**不做双活**，本文写的是降级与对外沟通口径。⚠️ 处置步骤已由 T-102 写进 `email-dns.md` §3，本文接手时**吸收**它而不是另写一份 | T-407 | ⏳ |

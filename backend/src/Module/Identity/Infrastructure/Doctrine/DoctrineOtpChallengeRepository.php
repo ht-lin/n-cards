@@ -111,4 +111,61 @@ final readonly class DoctrineOtpChallengeRepository implements OtpChallengeRepos
 
         return (int) $query->execute();
     }
+
+    /**
+     * 两个条件是 `OR` 而不是「先判死、再判时间」：一条挑战可能因为**被消费**而死
+     * （`consumed_at`），也可能因为**过期**而死（`expires_at`），两条时间线各自
+     * 与 `$cutoff` 比。
+     *
+     * 今天 `expires_at = created_at + 10min`，所以第一个条件几乎总是那个生效的；
+     * 第二个条件在「宽限期短于 10 分钟」时才单独有意义。写全是因为 OR 的两半
+     * 各自对应 {@see OtpChallenge} 上一个独立的状态位，靠「今天 TTL 是 10 分钟」
+     * 化简掉的话，改 TTL 会静默改掉清理语义。
+     */
+    public function deleteDeadBefore(\DateTimeImmutable $cutoff): int
+    {
+        $query = $this->entityManager->createQuery(
+            \sprintf(
+                'DELETE FROM %s c'
+                .' WHERE c.expiresAt < :cutoff'
+                .' OR (c.consumedAt IS NOT NULL AND c.consumedAt < :cutoff)',
+                OtpChallenge::class,
+            ),
+        );
+
+        $query->setParameter('cutoff', $cutoff, Types::DATETIMETZ_IMMUTABLE);
+
+        // `execute()` 在 ORM 的类型声明里是 mixed，而受影响行数按定义非负 ——
+        // max() 是把这条事实告诉 PHPStan（接口声明的是 int<0, max>），
+        // 不是防御性代码。上面 invalidateActiveFor() 的返回类型是宽的 int，
+        // 所以那里不需要这一步。
+        return max(0, (int) $query->execute());
+    }
+
+    /**
+     * ⚠️ `request_ip_hash IS NOT NULL` 这一半不能省：少了它，这个方法会把每一条
+     * 够老的挑战都取出来，调用方逐条 `forgetRequestIp()` + `save()` 写一遍 ——
+     * 把一个恒空的查询变成一趟对全表的无意义 UPDATE，而返回的「处理行数」
+     * 也会开始撒谎（那些行本来就没有 IP 可忘）。
+     *
+     * 排序按 `created_at` 升序：`$limit` 截断时先处理最老的那批，
+     * 于是「今天没处理完，明天接着」不会让某些行永远排在后面。
+     */
+    public function findWithRequestIpOlderThan(\DateTimeImmutable $cutoff, int $limit): array
+    {
+        $query = $this->entityManager->createQuery(
+            \sprintf(
+                'SELECT c FROM %s c'
+                .' WHERE c.requestIpHash IS NOT NULL AND c.createdAt < :cutoff'
+                .' ORDER BY c.createdAt ASC',
+                OtpChallenge::class,
+            ),
+        );
+
+        $query->setParameter('cutoff', $cutoff, Types::DATETIMETZ_IMMUTABLE);
+        $query->setMaxResults($limit);
+
+        /* @var list<OtpChallenge> */
+        return $query->getResult();
+    }
 }
