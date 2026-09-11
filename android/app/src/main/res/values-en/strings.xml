@@ -8,8 +8,14 @@
 
     <string name="app_name">N-Cards</string>
 
-    <string name="skeleton_title">N-Cards</string>
-    <string name="skeleton_body">The app skeleton is in place. Card management follows shortly.</string>
-    <string name="skeleton_refresh_content_description">Refresh view</string>
+    <string name="signed_out_title">You have been signed out</string>
+    <string name="signed_out_session_revoked">Your session has expired or was ended. Please sign in again.</string>
+    <string name="signed_out_key_material_lost">The data on this device can no longer be decrypted — this happens after a system restore, for example. Sign in again and your cards will be loaded afresh.</string>
+    <string name="signed_out_acknowledge">Got it</string>
+
+    <!-- Placeholder wallet (T-151); T-153 replaces it with feature:wallet. -->
+    <string name="wallet_empty_title">Your cards</string>
+    <string name="wallet_empty_body">Nothing here yet. Add your first card so you have it ready at the checkout in seconds.</string>
+    <string name="wallet_add_first_card">Add your first card</string>
 
 </resources>

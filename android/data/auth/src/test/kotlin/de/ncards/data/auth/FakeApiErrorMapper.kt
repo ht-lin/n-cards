@@ -40,12 +40,29 @@ internal class FakeApiErrorMapper : ApiErrorMapper {
 
         return when (code) {
             "token_expired" -> ApiError.TokenExpired(requestId)
+
             "token_invalid" -> ApiError.TokenInvalid(requestId)
+
             "username_required" -> ApiError.UsernameRequired(requestId)
+
+            // T-151：`POST /me/username` 的四种失败。它们必须分开到达 UI ——
+            // 合并成一句「出错了」会让 `limit_exceeded`（终局）看起来像可以重试。
+            "username_taken" -> ApiError.UsernameTaken(requestId)
+
+            "username_invalid" -> ApiError.UsernameInvalid(fieldErrors = emptyList(), requestId = requestId)
+
+            "username_immutable" -> ApiError.UsernameImmutable(requestId)
+
+            "limit_exceeded" -> ApiError.LimitExceeded(requestId)
+
             "rate_limited" -> ApiError.RateLimited(retryAfter = null, remaining = null, requestId = requestId)
+
             "service_unavailable" -> ApiError.ServiceUnavailable(retryAfter = null, requestId = requestId)
+
             "client_too_old" -> ApiError.ClientTooOld(requestId)
+
             "internal_error" -> ApiError.InternalError(requestId)
+
             else -> ApiError.Unexpected(status, code, requestId)
         }
     }

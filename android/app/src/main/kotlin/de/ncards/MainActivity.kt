@@ -1,82 +1,97 @@
 package de.ncards
 
+import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import dagger.hilt.android.AndroidEntryPoint
 import de.ncards.core.designsystem.theme.NcardsTheme
+import de.ncards.navigation.MagicLinkUri
+import de.ncards.navigation.NcardsNavHost
 
 /**
  * 唯一的 Activity（§4.3：全 Compose，无 XML 布局）。
  *
- * NavHost 由 T-151 起接线 —— 跨 feature 的导航在这里汇合，feature 之间因此
- * 不需要互相引用（§12.3 的第二条规则）。
+ * ============================================================================
+ * ⚠️ 它是 `AppCompatActivity`，不是 `ComponentActivity`
+ * ============================================================================
+ * 唯一的理由是 per-app locales：`AppCompatDelegate.setApplicationLocales(...)`
+ * 在 API < 33 上只对 AppCompat 的组件生效（minSdk 是 26，所以那是绝大多数设备）。
+ * J1 的第一屏要真的切界面语言，这是代价最小的路。
+ *
+ * 连带约束有两条，缺一边启动即崩或功能静默失效：
+ * - `res/values/themes.xml` 的 `Theme.NCards` 必须继承 `Theme.AppCompat.*`；
+ * - `AndroidManifest.xml` 必须声明 appcompat 的 `AppLocalesMetadataHolderService`
+ *   并带 `autoStoreLocales=true`，否则语言选择活不过一次冷启动。
+ *
+ * `AppCompatActivity` 仍然是 `ComponentActivity` 的子类，所以 `enableEdgeToEdge()`、
+ * `setContent`、`viewModels()` 一个都没变。**不要**因此往界面里引入任何
+ * appcompat 的 View —— §4.3 的「全 Compose、无 XML 布局」没有变。
  */
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
+    private val viewModel: AppViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // ⚠️ 只在**首次**创建时看 intent。`savedInstanceState != null` 说明这是
+        // 一次重建（旋转屏幕、切语言），而 `getIntent()` 还是当初那一个 ——
+        // 不判的话同一个 Magic Link 会被消费第二次，而令牌是一次性的：
+        // 第二次必定 401，用户看到「链接已失效」而他什么都没做错。
+        if (savedInstanceState == null) {
+            handleMagicLink(intent)
+        }
+
+        // ⚠️⚠️ 这一行是 AppCompatActivity 与 navigation-compose 的交界处，删了就崩。
+        //
+        // `AppCompatActivity` 覆盖了 `setContentView`，走自己的 `initViewTreeOwners()`。
+        // 那个方法是 appcompat 1.6 时代写的，只挂 Lifecycle / ViewModelStore /
+        // SavedStateRegistry / OnBackPressedDispatcher 四个 owner ——
+        // 它**不知道** `androidx.navigationevent.NavigationEventDispatcherOwner`
+        // 的存在（那是 activity 1.12 才加的，而 `ComponentActivity` 实现了它）。
+        //
+        // 于是 navigation-compose 2.10 的 `NavHost` 一组合就抛
+        // `IllegalStateException: No NavigationEventDispatcher was provided via
+        // LocalNavigationEventDispatcherOwner` —— 启动即崩，而编译期、lint、
+        // 单测、`feature:onboarding` 的 Compose UI Test（它不建 NavHost）全都看不出来。
+        //
+        // `ComponentActivity.initializeViewTreeOwners()` 是 public 的，把全套 owner
+        // 挂到 decorView 上；ComposeView 的查找会沿父链走上来，所以它必须在
+        // `setContent` **之前**调。守着这一条的是 `MainActivityLaunchTest`。
+        initializeViewTreeOwners()
+
         setContent {
             NcardsTheme {
-                SkeletonScreen()
+                NcardsNavHost(viewModel = viewModel)
             }
         }
     }
-}
 
-/**
- * 骨架页。由 T-151（Onboarding）与 T-153（钱包列表）替换。
- *
- * 它存在的理由不是「让 App 有东西看」，而是**让三条 lint 规则有东西可咬**：
- * 空 App 里 HardcodedText / MissingTranslation / ContentDescription 永远是绿的，
- * 那样配了等于没配（§13.3）。这里的每一条文案都走 stringResource，
- * 图标按钮带 contentDescription —— 把任何一条改成字面量，`:app:lintDebug` 就会红。
- */
-@Composable
-private fun SkeletonScreen() {
-    Scaffold { innerPadding ->
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = stringResource(R.string.skeleton_title),
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Text(
-                text = stringResource(R.string.skeleton_body),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            IconButton(onClick = {}) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_refresh),
-                    // §11.2：全部图标按钮必须有 contentDescription。
-                    contentDescription = stringResource(R.string.skeleton_refresh_content_description),
-                )
-            }
-        }
+    /**
+     * App 已经在前台时点邮件里的链接会走这里（manifest 里 `launchMode="singleTop"`）。
+     *
+     * `setIntent` 是必须的：不设的话后续任何读 `intent` 的代码拿到的还是启动时那一个。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleMagicLink(intent)
+    }
+
+    /**
+     * ⚠️ 消费 Magic Link 的是 **App**，不是邮件里那个落地页（ADR-0016）。
+     *
+     * 落地页是一份静态 HTML，`GET` 它不消费任何东西 —— 企业邮件安全网关会自动
+     * `GET` 邮件里的每一个链接，若 `GET` 即消费，用户还没点开就已失效（§7.1）。
+     * 真正的消费是这里发出的 `POST /v1/auth/magic/consume`，而且它要带 `device`
+     * —— 浏览器构造不出那个请求体。
+     */
+    private fun handleMagicLink(intent: Intent?) {
+        val token = MagicLinkUri.tokenFrom(intent?.data) ?: return
+        viewModel.consumeMagicLink(token)
     }
 }

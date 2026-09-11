@@ -8,6 +8,12 @@
 // §4.3：客户端生成 UUIDv7 作为主键，所以离线创建的实体从一开始就有稳定 ID。
 // 那个生成器将来也住在这里。
 
+// T-151 追加 kotlinx.serialization：navigation-compose 的类型安全路由要求路由类型
+// 是 @Serializable（`composable<WalletRoute>` 内部走 `serializer<T>()`）。
+// 路由定义住在本模块是 §12.3 的规定 ——「跨 feature 导航经 app 的 NavHost +
+// core:model 的路由定义」，ModuleGraph 的违规文案里逐字写着这一条。
+
 plugins {
     id("ncards.jvm.library")
+    id("ncards.kotlin.serialization")
 }

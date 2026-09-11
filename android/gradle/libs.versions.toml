@@ -42,6 +42,17 @@ kover = "0.9.9"
 
 # ---- AndroidX / Compose --------------------------------------------------
 androidxCore = "1.19.0"
+# T-151：**只给 :app**，而且只为一件事 —— per-app locales
+# （`AppCompatDelegate.setApplicationLocales`，1.6.0 起才有）。
+#
+# ⚠️ 代价是 MainActivity 必须是 AppCompatActivity，而那要求一个 AppCompat 主题：
+# `app/src/main/res/values/themes.xml` 的 Theme.NCards 父类因此从
+# `android:Theme.Material.Light.NoActionBar` 换成了 `Theme.AppCompat.Light.NoActionBar`。
+# 两者缺一边启动即崩（"You need to use a Theme.AppCompat theme"）。
+#
+# ⚠️ **不要**因为「反正引进来了」就在 feature 里用 appcompat 的任何东西：
+# §4.3 的选型是全 Compose 无 XML 布局，那条没变。
+androidxAppcompat = "1.7.0"
 androidxLifecycle = "2.11.0"
 androidxActivity = "1.13.0"
 androidxNavigation = "2.10.0"
@@ -114,6 +125,8 @@ jackson-dataformat-yaml = { module = "com.fasterxml.jackson.dataformat:jackson-d
 
 # ---- AndroidX 基础 -------------------------------------------------------
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+# 只给 :app —— 见上面 androidxAppcompat 的注释。
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "androidxAppcompat" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidxLifecycle" }
 # collectAsStateWithLifecycle —— §4.3 的分层图里 UI 消费 ViewModel 的唯一方式

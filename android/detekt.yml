@@ -26,6 +26,16 @@ complexity:
     thresholdInFiles: 30
     thresholdInClasses: 20
     ignorePrivate: true
+  LongMethod:
+    # T-151 追加。理由与上面 LongParameterList / 下面 MagicNumber 的豁免同构：
+    # 一个 @Composable 的函数体是一棵**声明式的界面树**，不是一串语句。
+    # 60 行的上限会逼人把一屏切成 `UsernameScreenPart1/Part2` 这种没有语义的碎片
+    # —— 那比一个长函数更难读，而且每切一刀就多一组必须手工传递的参数。
+    #
+    # 真正该切的时候（一段 UI 有自己的名字、能被复用、能单独预览）自然会切，
+    # 本卡的 ImmutableNameDialog 就是这么出来的。
+    ignoreAnnotated:
+      - 'Composable'
 
 naming:
   FunctionNaming:
@@ -52,6 +62,15 @@ style:
   MaxLineLength:
     maxLineLength: 120
     excludeCommentStatements: false
+  UnusedPrivateMember:
+    # T-151 追加。`@Preview` 的 Composable **按定义**没有调用方 —— 调用它的是
+    # Android Studio 的预览渲染器与 Compose 的预览工具链，detekt 看不见那条边。
+    #
+    # 这不是可有可无的豁免：§4.3 的分层图第一行就写着「UI (Compose)
+    # 无状态 Composable **+ 预览**」，而 §11.1 要求「所有按钮/标签必须允许换行
+    # 并做**长文本预览测试**」。删掉预览函数来让 detekt 变绿，等于删掉规格要求的东西。
+    ignoreAnnotated:
+      - 'Preview'
   # §13.3 的「TODO 必须带 issue 编号」由 T-011 的通用扫描负责（后端 / Android 同一条规则），
   # 这里不重复实现 —— 两处实现必然会漂。
   ForbiddenComment:

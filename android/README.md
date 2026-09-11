@@ -41,8 +41,15 @@ build-logic/convention/  ← ncards.android.{application,library,feature,hilt,ro
 gradle/libs.versions.toml ← 唯一依赖声明处
 ```
 
-30 个模块里目前只有 `app`、`core:designsystem`、`core:crypto`、`core:database`
-有实质内容，其余是空壳，由各自的任务填充（每个 `build.gradle.kts` 顶部写了归属任务）。
+30 个模块里目前有实质内容的是：`app`、`core:{model,designsystem,crypto,database,network:api,network:impl}`、
+`data:auth`、`feature:{onboarding,legal}`。其余是空壳，由各自的任务填充
+（每个 `build.gradle.kts` 顶部写了归属任务）。
+
+⚠️ `core:{common,ui,testing}` 仍然是空的，而三者都已经有人等着：
+`core:common` 的 `DispatcherProvider` / `UiText`（T-151 各自绕开了一次），
+`core:ui` 的 `EmptyState` / `ErrorPane`（T-153 会需要），
+`core:testing` 的测试替身（`FakeSecretStore` 与 `FakeAuthRepository` 现在各有两份拷贝）。
+**第三个消费者出现时就该把它们建起来**，而不是抄第三份。
 
 ## Convention plugins
 
@@ -288,6 +295,65 @@ data:auth          SessionStore ─────► core:crypto 的 SecretStore�
 
 ```bash
 ./gradlew :data:auth:testDebugUnitTest :core:network:impl:testDebugUnitTest
+```
+
+## 导航与 onboarding（T-151）
+
+```
+core:model  navigation/NcardsRoute.kt   ← 跨 feature 的目的地，**唯一**定义处
+                │
+:app        NcardsNavHost ──┬── onboardingGraph()      feature:onboarding
+                            ├── usernameDestination()  feature:onboarding
+                            ├── WalletRoute            :app 的占位，T-153 替换
+                            └── Terms / Privacy        feature:legal
+            AppViewModel ── restoreSession() → 三态定起始目的地；接 Magic Link
+```
+
+**跨 feature 的路由定义在 `core:model`，由 `:app` 的 NavHost 接线**（§12.3）。
+这不是风格问题：注册页要链到 AGB，而那两页在 `feature:legal`，
+而 `feature:onboarding → feature:legal` 会让 `./gradlew help` 当场红。
+feature 侧只收一个 `onOpenTerms: () -> Unit`。
+
+**一个 feature 自己内部的路由不要提上去** —— onboarding 的
+welcome → email → otp 三步是 `internal` 且住在它自己的模块里。
+提上去的唯一后果是 `:app` 有机会直接跳进流程中间。
+
+**三条别顺手改的**
+
+| 位置 | 别改成 | 为什么 |
+|---|---|---|
+| `AppViewModel`：`fetchMe()` 失败时进 `Wallet` | 卡在 splash 等网络 | §4.3 不允许把一次网络故障变成「App 打不开」。真卡在注册中间态的用户会在下一个请求上拿到 `403 username_required` 被捞回来 |
+| `ObserveEvents` 的 `repeatOnLifecycle(RESUMED)` | `STARTED` | 事件走 `Channel`，一个事件只送一个收集者。切换期间前后两屏可以同时 `STARTED`，于是「登录成功」偶尔落到正在退场的那一屏上 |
+| `sharedOnboardingViewModel()` 的 `hiltViewModel(graphEntry)` | 无参 `hiltViewModel()` | 三屏各拿一个实例，重发倒计时会在回退时重来，而服务端那边挑战还活着 |
+
+**语言切换是四件套**（`AppCompatDelegate.setApplicationLocales`），缺任何一件都坏：
+
+| 件 | 缺了会怎样 |
+|---|---|
+| `MainActivity` 是 `AppCompatActivity` | API < 33 上设了语言但不生效，**没有报错** |
+| `Theme.NCards` 继承 `Theme.AppCompat.*` | 启动即崩「You need to use a Theme.AppCompat theme」 |
+| manifest 里 `AppLocalesMetadataHolderService` + `autoStoreLocales=true` | 语言活不过一次冷启动，**没有报错** |
+| `setContent` 之前那句 `initializeViewTreeOwners()` | `NavHost` 一组合就崩「No NavigationEventDispatcher…」 |
+
+最后一件是两个库的年龄差：`ComponentActivity`（activity 1.13）实现了
+`NavigationEventDispatcherOwner`，而 `AppCompatActivity` 覆盖了 `setContentView`
+并走自己那套 appcompat 1.6 时代的 owner 初始化，不知道第五个 owner 的存在。
+`MainActivityLaunchTest` 守着这一整套。
+
+`androidx.appcompat` 因此进了目录，**只给 `:app`** ——
+§4.3 的「全 Compose、无 XML 布局」没有变。
+
+**App Links 只做了 Android 一侧。** `intent-filter` + `autoVerify` 已就位，
+但 `assetlinks.json` 还是 `[]`（没有 release keystore），所以验证不通过 ——
+链接落到 Web 落地页，用户点按钮走 `intent://…package=de.ncards`，照样拉起 App。
+填指纹归 M4。⚠️ debug 变体的 applicationId 带 `.debug` 后缀，接不住那条
+`intent://`；手工验用
+`adb shell am start -a android.intent.action.VIEW -d "https://app.n-cards.de/l/magic/<token>"`。
+
+```bash
+./gradlew :feature:onboarding:testDebugUnitTest
+# J1 的 Compose UI Test + :app 的冷启动烟测（后者守上面那张四件套表）
+./gradlew :feature:onboarding:api26DebugAndroidTest :app:api26DebugAndroidTest
 ```
 
 ## 两个自建门禁（lint 覆盖不到的地方）

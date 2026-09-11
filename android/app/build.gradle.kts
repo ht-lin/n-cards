@@ -7,6 +7,10 @@ plugins {
     id("ncards.android.application")
     id("ncards.android.compose")
     id("ncards.android.hilt")
+
+    // NavHost 的类型安全路由（`composable<WalletRoute>`）要在编译期解析
+    // `serializer<T>()`。路由类型本身定义在 core:model（§12.3）。
+    id("ncards.kotlin.serialization")
 }
 
 android {
@@ -74,8 +78,18 @@ dependencies {
     implementation(project(":feature:legal"))
 
     implementation(libs.androidx.core.ktx)
+
+    // per-app locales（T-151）。**只有这一个模块**用 appcompat —— 理由与它带来的
+    // 主题约束写在 libs.versions.toml 的 androidxAppcompat 那一条上。
+    implementation(libs.androidx.appcompat)
+
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+
+    // collectAsStateWithLifecycle —— §4.3 的分层图里 UI 消费 ViewModel 的唯一方式。
+    // feature:* 由 ncards.android.feature 自动接上；:app 自己有一个 NavHost 要用它。
+    implementation(libs.androidx.lifecycle.runtime.compose)
+
     implementation(libs.androidx.navigation.compose)
     implementation(libs.timber)
 }

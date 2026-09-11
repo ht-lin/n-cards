@@ -15,6 +15,11 @@ android {
 }
 
 dependencies {
+    // UsernameRules.normalize()（T-151）。§3.8 要求「客户端与服务端均对输入
+    // trim + toLowerCase(Locale.ROOT)」—— 归一化在这里再做一次，
+    // 于是无论哪个调用方进来，发出去的和用来导出 Idempotency-Key 的都是同一个值。
+    implementation(project(":core:model"))
+
     // §7.3：令牌只存加密存储。SecretStore 是那条要求唯一的落地点（ADR-0007）。
     implementation(project(":core:crypto"))
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/（§11.1）。
+  不存在 values-de/ —— checkGermanIsDefaultLocale 会拦下建它的改动。
+
+  ⚠️ 这里的法律文本全部是**占位**，归 T-450 换成律师复核过的定稿
+  （§8.6 / §16 R8）。换文本时不得出现 "Ende-zu-Ende-verschlüsselt" /
+  "Zero Knowledge" / "Wir können deine Daten nicht sehen"（T-450：可诉的虚假宣传）。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <string name="legal_back">Zurück</string>
+
+    <string name="legal_placeholder_notice">Hinweis: Dies ist ein Platzhaltertext aus der Entwicklungsphase. Die verbindliche Fassung wird vor der Veröffentlichung ergänzt.</string>
+
+    <!-- AGB / Nutzungsbedingungen -->
+    <string name="legal_terms_title">Nutzungsbedingungen</string>
+    <string name="legal_terms_scope">Diese Bedingungen gelten für die Nutzung der App N-Cards. Die App speichert deine Kunden- und Bonuskarten auf deinem Gerät und synchronisiert sie mit deinem Konto.</string>
+    <string name="legal_terms_account">Für ein Konto brauchst du nur eine E-Mail-Adresse. Es gibt kein Passwort: Du meldest dich jedes Mal mit einem sechsstelligen Code an, den wir dir per E-Mail schicken.</string>
+    <string name="legal_terms_username">Dein Nutzername ist eindeutig und lässt sich nach dem Festlegen nicht mehr ändern. Wenn du einen anderen Namen möchtest, musst du dein Konto löschen und dich neu registrieren.</string>
+    <string name="legal_terms_availability">Die App ist kostenlos. Wir bemühen uns um einen zuverlässigen Betrieb, können aber keine ununterbrochene Verfügbarkeit zusichern. Deine Karten bleiben auch ohne Netzverbindung auf dem Gerät nutzbar.</string>
+
+    <!-- Datenschutzerklärung -->
+    <string name="legal_privacy_title">Datenschutzerklärung</string>
+    <string name="legal_privacy_controller">Verantwortlich für die Verarbeitung deiner Daten ist der Betreiber von N-Cards. Die vollständigen Kontaktdaten findest du im Impressum.</string>
+    <string name="legal_privacy_data">Wir verarbeiten deine E-Mail-Adresse, um dich anzumelden, sowie die Karten, die du anlegst. Deine Kartennummern werden verschlüsselt gespeichert. Wir binden keine Analyse- oder Werbedienste ein.</string>
+    <string name="legal_privacy_username">Dein Nutzername ist ein öffentlich durchsuchbares Pseudonym: Andere können dich damit als Freund hinzufügen. Verwende deshalb weder deinen echten Namen noch deine E-Mail-Adresse.</string>
+    <string name="legal_privacy_rights">Du kannst jederzeit Auskunft über deine Daten verlangen, sie exportieren oder dein Konto löschen. Nach der Löschung werden deine Daten vollständig entfernt.</string>
+
+</resources>
