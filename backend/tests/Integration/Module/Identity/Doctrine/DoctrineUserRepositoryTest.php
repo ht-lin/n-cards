@@ -316,4 +316,96 @@ final class DoctrineUserRepositoryTest extends KernelTestCase
     {
         self::assertNull($this->repository->findById(IdentityEntities::id(999)));
     }
+
+    // ========================================================================
+    // deleteZombieRegistrationsBefore()：僵尸注册行的物删（T-113）
+    // ========================================================================
+
+    /**
+     * 边界：`created_at < :cutoff`，严格小于（§5.2 的 `now() - 7 days`）。
+     *
+     * ⚠️ 这条必须打真库：判据里有 `username IS NULL`，而 NULL 在 SQL 里的比较
+     * 语义与 PHP 的 `null ===` 不是一回事 —— 写成 `u.username = :null` 之类的话
+     * 一行都匹配不上，症状是「僵尸行永远不被清理」，而替身上完全看不出来。
+     */
+    public function testDeletesOnlyZombiesStrictlyOlderThanTheCutoff(): void
+    {
+        $now = IdentityEntities::now('2026-09-11T04:30:00+00:00');
+        $cutoff = $now->modify('-7 days');
+
+        $this->repository->save(IdentityEntities::user(
+            id: IdentityEntities::id(1),
+            emailHash: IdentityEntities::digest('one-second-past'),
+            now: $cutoff->modify('-1 second'),
+        ));
+        $this->repository->save(IdentityEntities::user(
+            id: IdentityEntities::id(2),
+            emailHash: IdentityEntities::digest('exactly-at-the-boundary'),
+            now: $cutoff,
+        ));
+        $this->entityManager->clear();
+
+        self::assertSame(1, $this->repository->deleteZombieRegistrationsBefore($cutoff));
+
+        $this->entityManager->clear();
+        self::assertNull($this->repository->findById(IdentityEntities::id(1)));
+        self::assertInstanceOf(User::class, $this->repository->findById(IdentityEntities::id(2)));
+    }
+
+    /**
+     * ⚠️ **红了就是删号事故。** 设过 username 的用户不是僵尸行，无论多老 ——
+     * §8.2 给「身份」的保留期是「账号存续期 + 30 天宽限」，而删掉一个活跃账号
+     * 没有任何流程能挽回。
+     */
+    public function testNeverDeletesAUserWithAUsername(): void
+    {
+        $old = IdentityEntities::now('2020-01-01T00:00:00+00:00');
+
+        $veteran = IdentityEntities::user(id: IdentityEntities::id(1), now: $old);
+        $veteran->assignUsername('anna_b', $old);
+        $this->repository->save($veteran);
+        $this->entityManager->clear();
+
+        self::assertSame(0, $this->repository->deleteZombieRegistrationsBefore(
+            IdentityEntities::now('2026-09-11T04:30:00+00:00'),
+        ));
+
+        $this->entityManager->clear();
+        self::assertInstanceOf(User::class, $this->repository->findById(IdentityEntities::id(1)));
+    }
+
+    /**
+     * ⚠️ **这条是「为什么批量 DQL 是安全的」的全部依据。**.
+     *
+     * 批量 DQL DELETE 绕过 UnitOfWork，Doctrine 的 cascade 配置一行都不生效。
+     * `devices` / `sessions` 跟着消失，靠的是 `Version20260905101500.php` 里那两条
+     * `ON DELETE CASCADE` 外键 —— 也就是**库**在做级联。
+     *
+     * 少了这条断言，「改成逐条 remove() 更安全」会是一个看起来很有道理、
+     * 实际只是把一条语句换成 N+1 的改动；而如果哪天有人把外键的 on-delete 改了，
+     * 僵尸行清理会开始报外键错误，也只有这条用例说得出原因。
+     */
+    public function testCascadesToDevicesAndSessionsThroughTheDatabase(): void
+    {
+        $now = IdentityEntities::now('2026-09-01T00:00:00+00:00');
+
+        $zombie = IdentityEntities::user(id: IdentityEntities::id(1), now: $now);
+        $device = IdentityEntities::device(user: $zombie, id: IdentityEntities::id(2), now: $now);
+        $session = IdentityEntities::session(user: $zombie, device: $device, id: IdentityEntities::id(3), now: $now);
+
+        $this->entityManager->persist($zombie);
+        $this->entityManager->persist($device);
+        $this->entityManager->persist($session);
+        $this->entityManager->flush();
+        $this->entityManager->clear();
+
+        self::assertSame(1, $this->repository->deleteZombieRegistrationsBefore(
+            IdentityEntities::now('2026-09-11T04:30:00+00:00'),
+        ));
+
+        // 直接查库而不是经 ORM：UnitOfWork 对批量 DELETE 一无所知，
+        // 经 ORM 查可能读到身份映射里的缓存实体。
+        self::assertSame(0, (int) $this->connection->fetchOne('SELECT count(*) FROM devices'));
+        self::assertSame(0, (int) $this->connection->fetchOne('SELECT count(*) FROM sessions'));
+    }
 }

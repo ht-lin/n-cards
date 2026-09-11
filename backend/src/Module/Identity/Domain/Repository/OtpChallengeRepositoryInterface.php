@@ -15,9 +15,12 @@ use App\Shared\Domain\Identity\Uuid;
  * {@see UserRepositoryInterface} 的类注释。
  *
  * ⚠️ 方法集刻意窄。T-103 补上了「作废该邮箱的旧挑战」，
- * T-106 补上了「按 magic_token_hash 查」；T-113 还需要「删过期的」——
- * 那个方法的语义（按哪个时间点判过期、批量还是逐条）只有写那个任务时才知道，
- * 现在猜是猜不对的。
+ * T-106 补上了「按 magic_token_hash 查」，T-113 补上了清理要用的两个。
+ *
+ * T-113 当初留的问题（「按哪个时间点判过期、批量还是逐条」）现在有答案了，
+ * 而且两个方法给出的答案**不一样** —— {@see deleteDeadBefore()} 是批量 DQL，
+ * {@see findWithRequestIpOlderThan()} 是逐条走实体。理由分别写在它们的注释里，
+ * 别顺手统一。
  */
 interface OtpChallengeRepositoryInterface
 {
@@ -63,4 +66,53 @@ interface OtpChallengeRepositoryInterface
      *             「WHERE 条件确实按预期收窄」的返回值
      */
     public function invalidateActiveFor(HashDigest $emailHash, \DateTimeImmutable $now): int;
+
+    /**
+     * 删掉**已死且死透了**的挑战（T-113）。
+     *
+     * 「死」有两种：`consumed_at` 非空（验证成功 / Magic Link 被消费 / 被新挑战作废），
+     * 或 `expires_at` 已过。两者在读取侧没有行为差别（T-104 对二者都返回 401），
+     * 所以清理也不区分。
+     *
+     * 「死透了」= 那个时刻早于 `$cutoff`。宽限期是
+     * `ncards.cleanup.otp_challenge_grace_hours`（24 小时），留着是为了排障时还能
+     * 回答「昨晚那批登录失败是码错了还是过期了」。
+     *
+     * ⚠️ 这张表自 ADR-0014 起每行都带 `email_encrypted`（Vault Transit 加密的收件
+     * 邮箱），所以这个方法就是 §8.2 ROPA 里「认证」那一行的保留期本身。调大宽限期
+     * 等于延长 PII 留存，要连着 ROPA 一起改。
+     *
+     * 批量 DQL，理由与 {@see invalidateActiveFor()} 第 1 条相同（逐条是 N+1），
+     * 但第 2 条不适用 —— 这里根本不经过实体的不变量。
+     *
+     * @param \DateTimeImmutable $cutoff 严格小于它才删
+     *
+     * @return int<0, max> 受影响行数
+     */
+    public function deleteDeadBefore(\DateTimeImmutable $cutoff): int;
+
+    /**
+     * 取出 `created_at < $cutoff` 且 `request_ip_hash` 仍非空的挑战（T-113）。
+     *
+     * 调用方（{@see \App\Module\Identity\Application\Cleanup\ForgetOtpRequestIpsTask}）
+     * 逐条调 {@see OtpChallenge::forgetRequestIp()}
+     * 再 {@see save()}。
+     *
+     * ============================================================================
+     * ⚠️ 为什么这一条**不是**批量 DQL，与上面两个方法相反
+     * ============================================================================
+     * 因为在当前配置下它**恒返回空数组**：挑战 10 分钟过期、24 小时后整行就被
+     * {@see deleteDeadBefore()} 删了，活不到 30 天。它是 §8.2「ip_hash 30 天」这条
+     * **上限的强制点**，不是主力清理 —— 完整论证见那个任务的类注释。
+     *
+     * 既然 N 恒为 0，N+1 就没有代价；换来的是「忘记 IP」这件事在代码里只有一个
+     * 表达（实体上那个方法，已有单测钉住），而不是散落在一条 DQL 的 SET 子句里。
+     * `invalidateActiveFor()` 的注释论证过热路径为什么必须批量，这条恰好是它的反面。
+     *
+     * @param int<1, max> $limit 单次上限，兜住「有人把宽限期调过 30 天」那种病态情况
+     *
+     * @return list<OtpChallenge> 最多 `$limit` 条；
+     *                            取不满即没有更多
+     */
+    public function findWithRequestIpOlderThan(\DateTimeImmutable $cutoff, int $limit): array;
 }

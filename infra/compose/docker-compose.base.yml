@@ -375,6 +375,83 @@ services:
     healthcheck:
       disable: true
 
+  # ---------------------------------------------------------------- scheduler
+  # T-113：每日数据保留期清理的排定端（§5.2 / §8.2 / §14.2、ADR-0022）。
+  #
+  # 与 app / worker **同一个镜像**，第三个入口。`scheduler_default` 这个 transport
+  # 名不是我们起的：Symfony 对每个 `#[AsSchedule('<name>')]` 自动注册一条叫
+  # `scheduler_<name>` 的 receiver（AddScheduleMessengerPass），而我们那张时刻表
+  # 在 backend/src/Shared/Infrastructure/Scheduler/DailyMaintenanceSchedule.php，
+  # 用的是默认名。它**不在** messenger.yaml 的 transports 里，那是对的 ——
+  # 手写一条同名的反而会把自动注册的那条顶掉。
+  #
+  # ⚠️ 这个容器不只是「打点」。scheduler transport 产生的消息由**同一个进程**
+  # 交给 command.bus 同步执行 —— 清理的 DELETE 就是在这里跑的。所以它要连库。
+  #
+  # ⚠️ 与 worker 分成两个服务，是 T-113 验收标准的字面要求（「worker 与 scheduler
+  # 在 compose 中分别可独立重启」），也是因为它们的失败是两件独立的事：
+  # worker 挂了信发不出去，scheduler 挂了旧数据留着，互不影响。
+  # **不要**把 scheduler_default 加进 worker 的 command —— 一个
+  # messenger:consume 进程消费两条 transport 的话，「重启 scheduler」
+  # 就变成了「把在途的信一起丢掉」。
+  scheduler:
+    build:
+      context: ../../backend
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    # --time-limit=3600 的理由与 worker 那条逐字相同（长驻 PHP 的常态）。
+    #
+    # ⚠️ 代价要知情：这张时刻表是**无状态**的（没有 ->stateful()，理由见
+    # DailyMaintenanceSchedule 的类注释 —— /app/var 是 tmpfs，状态活不过一次重启）。
+    # 每次重启后「下一次运行」从当下重算，停机期间错过的那次**不会补跑**。
+    # 04:30 恰好撞上小时重启那两秒的概率约四年一次，而三个任务都按截止时刻删、
+    # 且有 24 小时宽限 —— 少跑一天没有任何后果。
+    command:
+      - bin/console
+      - messenger:consume
+      - scheduler_default
+      - --time-limit=3600
+      - -v
+
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      APP_SECRET: ${APP_SECRET:-dev-only-not-a-secret}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ncards}:${POSTGRES_PASSWORD:-ncards}@postgres:5432/${POSTGRES_DB:-ncards}
+      REDIS_URL: redis://redis:6379
+      # ⚠️ 没有 MAILER_* —— 这个容器不发信。
+      # ⚠️ 也没有 VAULT_* —— 三个清理任务不做任何加解密（删的是哈希列与密文列，
+      #    不解密它们）。配上去才是错的：那会给「谁需要 Vault 凭据」这个问题
+      #    多一个假答案，而 §17.4 的最小权限清单正是照这个问题写的。
+      #    T-403 的 PurgeDeletedAccounts 接进来时若真需要，再连着 runbook 一起加。
+
+    # 与 app / worker 同一套加固（§7.4）。
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777
+      - /app/var:uid=1000,gid=1000
+    volumes:
+      - ../../backend:/app:ro
+
+    # ⚠️ 只连 backing，**不连 egress**（也不连 edge）。postgres / redis 都在
+    # backing 上，清理任务没有任何出站需求 —— worker 那条 egress 是为了拨
+    # dogado 的 SMTP，见它的注释。照抄过来等于白开一条出网路径。
+    networks:
+      - backing
+
+    # ⚠️⚠️ 必须显式关掉，理由与 worker 那三行逐字相同：FrankenPHP 基础镜像自带
+    # 一条 Caddy admin 端点的 HEALTHCHECK，而这个容器不起 HTTP 服务器，
+    # 那条检查必然失败 —— 后果是一个永远显示 unhealthy 的常驻红色。
+    healthcheck:
+      disable: true
+
   # ---------------------------------------------------------------- mailpit
   # 本地看信用的 SMTP 收集器。**仅 dev profile**，`docker compose up` 默认不起：
   #
@@ -411,8 +488,6 @@ services:
   # ==========================================================================
   # 尚未交付的服务（§14.2 的清单里有，但依赖还没装，写出来也起不来）
   # ==========================================================================
-  # scheduler   入口 Symfony Scheduler：每日清理、删号执行、导出过期清理、key rewrap。
-  #             T-113。
   # prometheus / grafana / loki / promtail / alertmanager
   #             §14.4 可观测性。T-405。
   # backup      wal-g / pgBackRest + age，cron 容器，推 Hetzner Storage Box。

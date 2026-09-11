@@ -116,8 +116,10 @@ final class IdentityEntities
     /**
      * 哑挑战 —— **ADR-0014 之后已无生产写入方**（见 {@see OtpChallenge::decoy()}）。
      *
-     * 保留它是因为库里还有上个版本建的行：部署窗口内 `VerifyOtpService` 必须
-     * 继续对它们返回 401，而这个工厂是那条用例唯一的输入来源。
+     * ⚠️ T-113 起 `VerifyOtpService` 也不再读那一位，所以这个工厂剩下的用途只有
+     * 一个：造出 `email_encrypted IS NULL` 的挑战（{@see OtpChallenge::issue()}
+     * 要求收件人密文，造不出来）。删列那次发布会把它与 `OtpChallenge::decoy()`
+     * 一起带走 —— 到时候这里需要的是另一个「无收件人」工厂，而不是这个。
      */
     public static function decoyChallenge(?\DateTimeImmutable $now = null): OtpChallenge
     {

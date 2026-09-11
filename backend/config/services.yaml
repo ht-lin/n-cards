@@ -56,6 +56,16 @@ services:
             tags: ['app.health_check']
         App\Shared\Application\Seed\SeederInterface:
             tags: ['app.seeder']
+        # ------------------------------------------------------------- T-113
+        # 第三个「实现即注册」扩展点：每日清理任务（§8.2 保留期的执行点）。
+        # 收集端是 App\Shared\Application\Cleanup\CleanupRunner 的 #[AutowireIterator]，
+        # 两个调用方（scheduler 的消息与 `app:cleanup`）都经过它。
+        #
+        # 新增一条清理 = 加一个实现类。T-204（change_log 90 天）、T-402（导出过期）、
+        # T-403（PurgeDeletedAccounts）、T-404（key rewrap）都照这条接进来 ——
+        # 它们在 infra/compose 的 scheduler 槽位注释里已经点过名。
+        App\Shared\Application\Cleanup\CleanupTaskInterface:
+            tags: ['app.cleanup_task']
 
     # makes classes in src/ available to be used as services
     # this creates a service per class whose id is the fully-qualified class name
@@ -331,6 +341,48 @@ services:
     App\Module\Identity\Domain\ValueObject\UsernameRules:
         arguments:
             $reservedWords: '%ncards.username.reserved_words%'
+
+    # ------------------------------------------------------------------ T-113
+    # `scheduler_default` 上唯一一条消息的消费端（§8.2 保留期的执行点）。
+    #
+    # ⚠️ 显式标签而不是 `#[AsMessageHandler]`：那个属性落在 deptrac 的
+    # Framework.Messaging 图层，只对 *.Infrastructure 开放，写在 Application 层
+    # 是 violation。与上面 Notification\Application\SendMailHandler 同一个做法，
+    # 把 Handler 留在 Application 的理由也相同（要计入 85% 覆盖率门槛）。
+    #
+    # ⚠️ `bus: command.bus` **必须写出来**。`messenger:consume` 把没有 BusNameStamp
+    # 的信封交给 RoutableMessageBus 的 fallback，而 fallback 就是 default_bus
+    # （= command.bus，见 messenger.yaml）—— scheduler transport 产生的信封正是
+    # 没有那个 stamp 的。不写 bus 的话 Handler 会注册到每一条总线上，
+    # 而 event.bus / mail.bus 永远不会收到这条消息，纯属噪声。
+    #
+    # ⚠️ 这条**不进** messenger.yaml 的 routing 表：消息由 scheduler transport 在
+    # worker 进程内产生并当场执行，配路由等于把它再发去另一条 transport。
+    # 同理也**不要**在 messenger.yaml 里手写一条 `scheduler_default` transport ——
+    # Symfony 的 AddScheduleMessengerPass 见到同名 receiver 就不再自动注册，
+    # 手写的那条会把它顶掉。
+    App\Shared\Application\Cleanup\RunDailyCleanupHandler:
+        tags:
+            - {name: messenger.message_handler, bus: command.bus}
+
+    # §8.2 的保留期（config/packages/ncards_cleanup.yaml）。
+    #
+    # ⚠️ 显式列参数而不是在类里写 #[Autowire]：与 LimitEnforcer / MailCircuitBreaker /
+    # RequestOtpService 同一个做法 —— 这三个数字的真相源是 §8.2 的 ROPA 表，
+    # 把它们耦合进 Application 层的类会让「改一个保留期」变成改代码，
+    # 而合规审查要改的恰恰是这几个数。
+    App\Module\Identity\Application\Cleanup\PurgeZombieRegistrationsTask:
+        arguments:
+            $retentionDays: '%ncards.cleanup.zombie_registration_days%'
+
+    App\Module\Identity\Application\Cleanup\PurgeDeadOtpChallengesTask:
+        arguments:
+            $graceHours: '%ncards.cleanup.otp_challenge_grace_hours%'
+
+    App\Module\Identity\Application\Cleanup\ForgetOtpRequestIpsTask:
+        arguments:
+            $retentionDays: '%ncards.cleanup.request_ip_hash_days%'
+            $batchSize: '%ncards.cleanup.request_ip_batch_size%'
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones

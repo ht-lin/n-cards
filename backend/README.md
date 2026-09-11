@@ -58,7 +58,13 @@ docker compose exec app bin/console --env=test doctrine:database:create --if-not
 docker compose exec app vendor/bin/phpunit          # 0 skip
 docker compose exec app composer test:coverage      # dev 镜像里有 pcov
 docker compose exec app bin/console app:seed
+docker compose exec app bin/console app:cleanup      # §8.2 保留期清理，手动跑一趟
 ```
+
+> `app:cleanup` 日常由 `scheduler` 容器每天 04:30（Europe/Berlin）自动触发；
+> 上面那条是运维手动入口，两者走的是同一个 runner。
+> `bin/console debug:scheduler` 看下一次什么时候跑。
+> 运维手册：[`docs/runbooks/scheduled-cleanup.md`](../docs/runbooks/scheduled-cleanup.md)。
 
 镜像定义在 [`Dockerfile`](Dockerfile)（`dev` / `prod` 两个 target），
 栈定义在 [`../infra/compose/`](../infra/compose/README.md)。

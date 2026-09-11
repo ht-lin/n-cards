@@ -326,6 +326,26 @@ deptrac:
         - type: classLike
           value: '^Symfony\\Component\\Messenger\\'
 
+    # T-113：Scheduler 单独成层，与上面 Framework.Messaging 逐字同构。
+    #
+    # 若让它落进 Framework.Core，任何模块的 Application 都能 `#[AsSchedule]` 一个
+    # 自己的时刻表并直接排定后台任务 —— 而「每日维护只有一个入口」
+    # （Shared\Application\Cleanup\CleanupTaskInterface + 一张时刻表）正是
+    # T-204 / T-402 / T-403 / T-404 能「只加一个类」的前提。只对 *.Infrastructure
+    # 开放，所以全仓库唯一能碰它的是 Shared\Infrastructure\Scheduler\DailyMaintenanceSchedule。
+    #
+    # ⚠️ `^Cron\\` 收在同一层：dragonmantank/cron-expression 是
+    # `RecurringMessage::cron()` 的引擎。不收的话它属于「deptrac 分不了类」的
+    # 命名空间 —— 按本文件开头那条警告，那等于一个任何层都能 import 的后门。
+    # （它不需要在 Framework.Core 里加 must_not：那一层的 must 是
+    # `^(Symfony|Psr|Twig)\\`，从来就没匹配到过 `Cron\`。）
+    - name: Framework.Scheduling
+      collectors:
+        - type: classLike
+          value: '^Symfony\\Component\\Scheduler\\'
+        - type: classLike
+          value: '^Cron\\'
+
     # T-004：Monolog 单独成层，同理。
     #
     # Application 与 Domain 只该认识 `Psr\Log\LoggerInterface`（在 Framework.Core）。
@@ -402,6 +422,11 @@ deptrac:
             # 两个图层，Framework.Core 的宽松允许列表会把窄图层的限制架空。
             - type: classLike
               value: '^Symfony\\Component\\Messenger\\'
+            # T-113：与 Framework.Scheduling 对应。漏掉这一条，Scheduler 的类会
+            # 同时落进两层，而 Framework.Core 对每个模块的 Application 开放 ——
+            # 新图层等于没加。
+            - type: classLike
+              value: '^Symfony\\Component\\Scheduler\\'
             - type: classLike
               value: '^Symfony\\Component\\Cache\\'
             # T-005：与 Framework.HttpClient 对应。
@@ -463,6 +488,10 @@ deptrac:
       - Framework.Messaging
       - Framework.Logging
       - Framework.HttpClient
+      # ⚠️ 全仓库**唯一**拿到 Framework.Scheduling 的图层（T-113）。
+      # 别照着别的 *.Infrastructure「补全」这一行 —— 它不在别处是刻意的，
+      # 见上面那一层的定义注释与 ADR-0022。
+      - Framework.Scheduling
     Shared.Http:
       - Shared.Domain
       - Shared.Application

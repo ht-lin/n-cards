@@ -6,8 +6,8 @@
 # 谁把 deptrac.yaml 的规则改松了，这个脚本会立刻变红，而 `deptrac analyse`
 # 依然是绿的 —— 它只能证明「当前代码没违规」，证明不了「规则还有效」。
 #
-# 四个场景。前两个对应 deptrac.yaml 同时强制的两个维度（模块间 / 层间），
-# 后两个各自守着一条「某个设计决定的唯一强制点」：
+# 五个场景。前两个对应 deptrac.yaml 同时强制的两个维度（模块间 / 层间），
+# 后三个各自守着一条「某个设计决定的唯一强制点」：
 #
 #   ① 模块间（T-002 验收标准）
 #      Wallet.Domain 直接引用 Identity.Domain → 必须 violation。
@@ -39,6 +39,16 @@
 #      must_not 里排除 Mailer，于是它落回那个对所有 Application 开放的图层），
 #      §3.2 的前提就没了，而 `deptrac analyse` 依然全绿。
 #
+#   ⑤ 定时任务只有一个入口（T-113）
+#      Identity.Application import Symfony\Component\Scheduler\RecurringMessage
+#      → 必须 violation。
+#      §8.2 的保留期执行点是「一张时刻表 + 一个 CleanupTaskInterface 标签」，
+#      而 T-204 / T-402 / T-403 / T-404 能「只加一个类」正建立在这上面。
+#      强制点是 `Framework.Scheduling` 图层只加进了 Shared.Infrastructure。
+#      谁哪天把它补进别的 *.Infrastructure，或者忘了在 Framework.Core 的 must_not
+#      里排除 Scheduler（于是它落回那个对所有 Application 开放的图层），
+#      就会出现第二张没人知道的时刻表，而 `deptrac analyse` 依然全绿。
+#
 # 用法：composer deptrac:selftest
 #
 set -euo pipefail
@@ -50,9 +60,11 @@ MODULE_TARGET='src/Module/Identity/Domain/__DeptracSelfTestTarget.php'
 LAYER_VIOLATOR='src/Shared/Domain/__DeptracSelfTestFrameworkImport.php'
 CRYPTO_VIOLATOR='src/Module/Wallet/Application/__DeptracSelfTestCryptoImport.php'
 MAILER_VIOLATOR='src/Module/Identity/Application/__DeptracSelfTestMailerImport.php'
+SCHEDULER_VIOLATOR='src/Module/Identity/Application/__DeptracSelfTestSchedulerImport.php'
 
 cleanup() {
-    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR" "$CRYPTO_VIOLATOR" "$MAILER_VIOLATOR"
+    rm -f "$MODULE_VIOLATOR" "$MODULE_TARGET" "$LAYER_VIOLATOR" "$CRYPTO_VIOLATOR" "$MAILER_VIOLATOR" \
+          "$SCHEDULER_VIOLATOR"
 }
 trap cleanup EXIT
 
@@ -214,5 +226,34 @@ assert_violation \
 
 rm -f "$MAILER_VIOLATOR"
 
+# ---------------------------------------------------------------- 场景 ⑤
+# 同样用 Identity.Application：它拥有 users 与 otp_challenges 两张表，也就是
+# 最有动机「自己排一条清理」的那一层。这条自检要拦的正是那个最自然的错误写法。
+cat > "$SCHEDULER_VIOLATOR" <<'PHP'
+<?php
+
+declare(strict_types=1);
+
+namespace App\Module\Identity\Application;
+
+use Symfony\Component\Scheduler\RecurringMessage;
+
+/** deptrac 自检临时文件：模块绕过 CleanupTaskInterface 自己排定时任务，必须被拦下（T-113）。 */
+final class __DeptracSelfTestSchedulerImport
+{
+    public function __construct(public readonly RecurringMessage $message)
+    {
+    }
+}
+PHP
+
+assert_violation \
+    '模块绕过 CleanupTaskInterface 直接 import Scheduler' \
+    'Identity\.Application' \
+    'Framework\.Scheduling' \
+    'deptrac.yaml 的 Framework.Scheduling 图层被放宽了（加进了别的允许列表），或者 Framework.Core 的 must_not 里少了对应的排除条目 —— 后者会让 Scheduler 落回那个对所有 Application 开放的图层。§8.2 的保留期执行点「只有一张时刻表」就此失效，见 Shared\Infrastructure\Scheduler\DailyMaintenanceSchedule 的类注释与 ADR-0022。'
+
+rm -f "$SCHEDULER_VIOLATOR"
+
 echo
-echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单 + 加密门面只经接口 + 发信只经 MailSenderInterface）。"
+echo "✓ deptrac 自检全部通过（模块边界 + Shared.Domain 空白名单 + 加密门面只经接口 + 发信只经 MailSenderInterface + 定时任务只有一个入口）。"

@@ -104,6 +104,42 @@ services:
           cpus: "1.0"
           memory: 512M
 
+  # T-113：与 app / worker 同镜像、同凭据口径，入口是 messenger:consume scheduler_default。
+  #
+  # ⚠️ 这里**没有** VAULT_TOKEN: "" 那一行，不是漏了：base 的 scheduler 块压根
+  # 不传任何 VAULT_*（清理任务不做加解密），所以没有 dev 值需要中和。
+  # 上面 app / worker 那两行存在，是因为 base 给它们配了 dev root token。
+  scheduler:
+    build:
+      context: ../../backend
+      target: prod
+    image: ${APP_IMAGE:-ghcr.io/ht-lin/n-cards-backend:latest}
+    environment:
+      APP_ENV: prod
+      APP_DEBUG: 0
+    volumes: !reset null
+    deploy:
+      # ⚠️⚠️ **1，且必须是 1。** 紧邻的 worker 是 2 副本（一个挂了还有一个），
+      # 这里正好相反：两个 scheduler = 同一条 cron 在同一分钟被触发两次。
+      #
+      # 后果不是数据损坏（三个任务都按截止时刻删，重跑删 0 行），而是
+      # 两条并发 DELETE 互相等锁，加上 §14.4 的 cleanup_runs_total /
+      # cleanup_rows_total 凭空翻倍 —— 而那两个计数器正是判断「清理有没有在跑」
+      # 的依据，翻倍之后它们就不再说明任何事情。
+      #
+      # 多副本的正经解法是 Schedule::lock()（要装 symfony/lock 并配一个
+      # framework.lock 资源）。没装，是因为「保证只有一个」在单主机 compose 上
+      # 就是这一行，而 scheduler 挂掉的后果只是「今天的旧数据晚一天删」——
+      # §8.2 的保留期是「不超过 N 天」，晚一天仍然满足，不需要冗余。
+      #
+      # 哪天真要 2 副本：**先装 symfony/lock 并给 Schedule 加 ->lock()**，
+      # 别只改这个数字。
+      replicas: 1
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
   postgres:
     image: postgres:16.10-alpine
     deploy:
@@ -166,10 +202,6 @@ services:
 # ============================================================================
 # 尚未交付的服务（§14.2 清单里有，依赖还没装）
 # ============================================================================
-#  scheduler:
-#    command: ["php", "bin/console", "messenger:consume", "scheduler_default"]
-#    → 每日清理、删号执行、导出过期清理、key rewrap。T-113
-#
 #  prometheus / grafana / loki / promtail / alertmanager:
 #    → §14.4 可观测性，Grafana 经 caddy basic auth 暴露。T-405
 #
