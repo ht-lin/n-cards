@@ -1511,11 +1511,17 @@ Bob:  【选择接受或拒绝】
 | T19 | Repudiation / Abuse | 恶意 owner 反复"分享→撤销"骚扰好友 | 通知轰炸 | 共享邀请 100/日限额；被邀请者可拒绝；可拉黑（立即级联切断）；`audit_log` 留痕 | ✅ 一期 |
 | T20 | Tampering | 解除好友的级联撤销未在同事务内完成 | **权限残留**：非好友仍能读取卡 | 强制同事务（§4.2 协作点表）；接受共享邀请时**重校验**好友关系；集成测试断言级联后 `card_members.left_at` 非空 | ✅ 一期 |
 | T21 | Info Disclosure | **共同成员泄露**：viewer 通过 API 响应或同步下发得知同一张卡的其他 viewer 是谁 / 有几个 | 凭空暴露两个陌生人之间的社交连接（Anna 的伴侣与同事互相看见） | `card_member` 的 `audience` **只含 [owner, 当事人]**；`GET /members` 按角色在查询层裁剪；`member_count` 仅对 owner 返回；数据导出同样裁剪（§5.2、§8.4） | ✅ 一期 |
-| T15 | Tampering | 中间人 / 证书伪造 | 令牌与码值泄露 | TLS 1.3 + HSTS preload + **证书固定**（OkHttp `CertificatePinner`，固定到 CA 中间证书 + 备份 pin，配轮换 runbook） | ✅ 一期 |
+| T15 | Tampering | 中间人 / 证书伪造 | 令牌与码值泄露 | TLS 1.3 + HSTS preload + `networkSecurityConfig` 禁明文。**证书固定一期不做** —— 见下方注与 T-150 落地记录 | ⚠️ 部分缓解，已接受风险 |
 | T16 | Info Disclosure | 依赖供应链漏洞 | 任意 | Dependabot + `composer audit` + OWASP dependency-check 纳入 CI 门禁 | ✅ 一期 |
 | T17 | Info Disclosure | 日志泄露敏感数据 | 码值 / 邮箱进日志 | 结构化日志 + 敏感字段脱敏处理器；CI grep 检查（禁止 `dump(`、`error_log(`、`Log.d` 打印实体） | ✅ 一期 |
 
 > **证书固定的风险**：pin 配错会导致全量客户端无法连接且**无法远程修复**。因此：必须固定到**两个** pin（当前 + 备份密钥），必须在 staging 演练轮换，且 pin 过期时间必须早于证书过期至少 60 天并有日历提醒。若团队对此没有把握，**允许一期不做证书固定**（HSTS + 系统 CA 已提供合理保护），但需在此表记录为"已接受风险"。
+>
+> **T-150 的决定：一期不做，记为已接受风险。** 理由是上面那三条前置条件（双 pin、staging 轮换演练、日历提醒）都不是「在 `NetworkModule` 里加一行 `CertificatePinner`」能满足的 —— 它们是一条持续的运维承诺，而 T-150 是一张 1.5 人日的客户端卡。把 pin 配上而不配套那三条，换来的不是更安全，是一颗到期就让全量客户端离线且无法远程修复的定时炸弹。
+>
+> 现有缓解：TLS 1.3 + HSTS preload + `networkSecurityConfig` 的 `cleartextTrafficPermitted="false"`（§7.3）+ 系统 CA 信任链。**未缓解的部分**：用户自行安装了 CA 的设备（企业 MDM、调试代理）上的中间人 —— 攻击者仍需要那台设备的物理或管理访问。
+>
+> **要做时需要一张独立的卡**，交付物是：两个 pin（当前 + 备份公钥）、`CertificatePinner` 接线、staging 上真跑一次轮换、过期日历提醒、以及一份 runbook（「pin 配错了怎么办」的答案必须是发版之外的东西）。
 
 ### 7.3 客户端安全清单（Android）
 

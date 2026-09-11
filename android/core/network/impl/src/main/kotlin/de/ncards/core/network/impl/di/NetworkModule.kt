@@ -7,6 +7,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import de.ncards.core.network.api.AuthApi
 import de.ncards.core.network.api.CardsApi
+import de.ncards.core.network.api.MeApi
 import de.ncards.core.network.api.infrastructure.Serializer
 import de.ncards.core.network.impl.NetworkConfig
 import de.ncards.core.network.impl.error.ApiErrorMapper
@@ -15,11 +16,15 @@ import de.ncards.core.network.impl.interceptor.ClientHeaderInterceptor
 import de.ncards.core.network.impl.interceptor.RequestIdInterceptor
 import de.ncards.core.network.impl.interceptor.RetryInterceptor
 import kotlinx.serialization.json.Json
+import okhttp3.Authenticator
+import okhttp3.Dispatcher
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import java.util.Optional
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 import kotlin.time.Duration
@@ -95,11 +100,16 @@ internal object NetworkModule {
      *
      * T-150 的认证在这之外还有两个插槽：`Authorization` 由一个拦截器加，
      * 401 静默刷新由 OkHttp 的 `Authenticator` 做（它不是拦截器，
-     * 在连接层重发，所以和这里的顺序无关）。
+     * 在连接层重发，所以和这里的顺序无关）。两者都装在
+     * [provideOkHttpClient] 那一层，本方法产出的是**基底**。
+     *
+     * ⚠️ 本方法产出的客户端**没有** `Authorization`、**没有** `Authenticator`。
+     * 除了当基底，它还是刷新令牌唯一能走的那条路 —— 见 [Unauthenticated]。
      */
     @Provides
     @Singleton
-    fun provideOkHttpClient(
+    @Unauthenticated
+    fun provideUnauthenticatedOkHttpClient(
         config: NetworkConfig,
         clientHeader: ClientHeaderInterceptor,
         requestId: RequestIdInterceptor,
@@ -132,9 +142,78 @@ internal object NetworkModule {
         return builder.build()
     }
 
+    /**
+     * 产品代码真正使用的客户端：基底 + T-150 的两个插槽。
+     *
+     * 拦截器顺序变成
+     * `ClientHeader → RequestId → Retry → [日志] → Bearer → 网络` ——
+     * Bearer 落在**最内层**是对的：每一次真实的网络往返都重新读一次令牌存储，
+     * 而不是把一次逻辑调用开始时读到的那一个钉死到它的全部重试上。
+     *
+     * ============================================================================
+     * ⚠️⚠️ 为什么要换一个 `Dispatcher`
+     * ============================================================================
+     * `OkHttpClient.newBuilder()` **默认共享 `Dispatcher` 与连接池**。连接池要共享，
+     * `Dispatcher` 绝不能 —— 否则刷新会死锁，而症状是「卡住 30 秒然后一起超时」，
+     * 不是一个看得出原因的错误。
+     *
+     * 链条是这样的：`Dispatcher` 的默认值是 `maxRequests = 64`、
+     * **`maxRequestsPerHost = 5`**。而 `Authenticator.authenticate()` 是在
+     * `RetryAndFollowUpInterceptor` 里被调用的 —— 此刻这条 call 仍然占着
+     * `runningAsyncCalls` 的槽位。于是同一个 host 上并发 5 个请求一起 401 时：
+     *
+     *   5 条 call 全部停在 `authenticate()` 里 → 5 个槽位全满 →
+     *   刷新请求是第 6 条 → 进 `readyAsyncCalls` 永远不被提升 → 互相等到读超时。
+     *
+     * 「并发 5 个 401 只触发一次刷新」是 T-150 的验收标准原话，也就是说
+     * **这个死锁恰好在验收标准上**。给刷新一条独立的 `Dispatcher`（基底那一个）
+     * 是结构上的解法；把 `maxRequestsPerHost` 调大只是把并发阈值往上挪，
+     * 超过新阈值时同一个死锁原样回来。
+     */
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(
+        @Unauthenticated base: OkHttpClient,
+        // ⚠️ 不叫 `authenticator`：那会和 `OkHttpClient.Builder.authenticator()`
+        // 在下面的方法引用里撞名。
+        sessionAuthenticator: Optional<Authenticator>,
+        @AuthInterceptors authInterceptors: Set<@JvmSuppressWildcards Interceptor>,
+    ): OkHttpClient {
+        val builder = base
+            .newBuilder()
+            .dispatcher(Dispatcher())
+
+        authInterceptors.forEach(builder::addInterceptor)
+        sessionAuthenticator.ifPresent(builder::authenticator)
+
+        return builder.build()
+    }
+
     @Provides
     @Singleton
     fun provideRetrofit(
+        config: NetworkConfig,
+        client: OkHttpClient,
+        json: Json,
+    ): Retrofit = retrofit(config, client, json)
+
+    /**
+     * 刷新令牌专用的 `Retrofit`。与上面那个的**唯一**差别是底下的客户端。
+     *
+     * 它不是「第二套网络层」：转换器、baseUrl、`Json` 全部共用，
+     * 差的只有「不挂 Bearer、不装 `Authenticator`、不共用 `Dispatcher`」这三件事，
+     * 而那三件事恰好都是刷新路径的正确性要求。见 [Unauthenticated]。
+     */
+    @Provides
+    @Singleton
+    @Unauthenticated
+    fun provideUnauthenticatedRetrofit(
+        config: NetworkConfig,
+        @Unauthenticated client: OkHttpClient,
+        json: Json,
+    ): Retrofit = retrofit(config, client, json)
+
+    private fun retrofit(
         config: NetworkConfig,
         client: OkHttpClient,
         json: Json,
@@ -155,6 +234,25 @@ internal object NetworkModule {
     @Provides
     @Singleton
     fun provideAuthApi(retrofit: Retrofit): AuthApi = retrofit.create(AuthApi::class.java)
+
+    /**
+     * `data:auth` 的 `SessionAuthenticator` **只能**用这一个去刷新。
+     *
+     * 用带认证的那个 [AuthApi] 去刷新会同时踩三个坑：给一个 `security: []` 的端点
+     * 挂上一枚已经过期的 Bearer、让刷新自己的 401 递归触发刷新、
+     * 以及 [provideOkHttpClient] KDoc 里那个 `maxRequestsPerHost` 死锁。
+     */
+    @Provides
+    @Singleton
+    @Unauthenticated
+    fun provideUnauthenticatedAuthApi(
+        @Unauthenticated retrofit: Retrofit,
+    ): AuthApi = retrofit.create(AuthApi::class.java)
+
+    /** T-150 的 `fetchMe()` 与 T-151 的 username 设定页都要它。 */
+    @Provides
+    @Singleton
+    fun provideMeApi(retrofit: Retrofit): MeApi = retrofit.create(MeApi::class.java)
 
     @Provides
     @Singleton
