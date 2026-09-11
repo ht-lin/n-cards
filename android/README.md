@@ -251,6 +251,45 @@ cd android
 上游修了模板缺陷就把 `templates/` 整个删掉）写在
 [`core/network/api/templates/README.md`](core/network/api/templates/README.md)。
 
+## 令牌与网络认证（T-150）
+
+```
+core:network:impl  di/AuthSlots.kt ──► @BindsOptionalOf Authenticator
+                                       @Multibinds @AuthInterceptors Set<Interceptor>
+                   NetworkModule ────► @Unauthenticated OkHttpClient ─► … ─► @Unauthenticated AuthApi
+                                       OkHttpClient = 前者 .newBuilder().dispatcher(Dispatcher())
+data:auth          SessionStore ─────► core:crypto 的 SecretStore（两个键）
+                   BearerAuthInterceptor / SessionAuthenticator ─► 填进上面两个插槽
+                   RefreshGate ───────► Mutex + 快速通道，刷新的唯一入口
+                   AuthRepository ────► OTP / magic / me / logout + sessionState
+```
+
+插槽在 `core:network:impl`、实现在 `data:auth`，是因为 §12.3 不允许
+`core:*` 依赖 `data:*`。形状与后端 ADR-0018 的第一个反转端口相同。
+
+**四条不要顺手改的**
+
+| 位置 | 别改成 | 为什么 |
+|---|---|---|
+| `SessionStore.clear()` 里的两次 `secrets.remove(...)` | `secrets.clear()` | 那会连 Keystore 包裹密钥一起丢弃，而 SQLCipher 的 `db_passphrase` 在同一个门面下 —— 一次登出就让用户整个本地库不可解。**功能测试完全看不出来**（重新登录时库已被当成「首次安装」重建） |
+| `NetworkModule.provideOkHttpClient` 里的 `.dispatcher(Dispatcher())` | 删掉（`newBuilder()` 反正会继承） | 继承正是问题：`maxRequestsPerHost` 默认 5，而 `Authenticator` 运行时这条 call 还占着槽位。5 个并发 401 会让刷新请求永远排不进去，**集体卡到读超时** |
+| `PublicEndpoints` 那张逐条列出的路径表 | `startsWith("auth/")` | `auth/logout` 在那个前缀下但**需要** Bearer。用前缀的后果是 logout 永远发不出去而没有任何迹象 |
+| `RefreshGate.idempotencyKeyFor()`（由 refresh token 导出） | `UUID.randomUUID()` | 随机 key 只盖得住单次调用内的重试。跨调用重试时旧令牌配新 key = 命中服务端重放检测 = 用户收到「令牌可能被窃」并被登出 |
+
+**刷新失败只有 `token_invalid` 会登出。** 429 / 503 / 409 / 426 / 网络 / 500 一律
+保留会话 —— 把 503 压成登出，一次维护窗口就会把全体用户踢回登录页。
+
+**接入方要知道的两件事**
+
+- `:app` 启动时调一次 `AuthRepository.restoreSession()`（协程里）。令牌是懒加载的，
+  不调它 `sessionState` 会一直停在 `Unknown`。
+- `403 username_required` **不**由认证层处理（它不是 401）。处置是跳 username
+  设定页，归 T-151。
+
+```bash
+./gradlew :data:auth:testDebugUnitTest :core:network:impl:testDebugUnitTest
+```
+
 ## 两个自建门禁（lint 覆盖不到的地方）
 
 | 任务 | 守什么 | 为什么 lint 不行 |
