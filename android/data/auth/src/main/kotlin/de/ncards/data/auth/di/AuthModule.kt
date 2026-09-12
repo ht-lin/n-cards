@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoSet
+import de.ncards.core.common.user.CurrentUserIdStore
 import de.ncards.core.network.impl.di.AuthInterceptors
 import de.ncards.data.auth.AndroidDeviceDescriptorProvider
 import de.ncards.data.auth.AuthRepository
@@ -12,6 +13,7 @@ import de.ncards.data.auth.BearerAuthInterceptor
 import de.ncards.data.auth.DefaultAuthRepository
 import de.ncards.data.auth.DeviceDescriptorProvider
 import de.ncards.data.auth.SessionAuthenticator
+import de.ncards.data.auth.SessionStore
 import okhttp3.Authenticator
 import okhttp3.Interceptor
 import javax.inject.Singleton
@@ -57,4 +59,20 @@ internal abstract class AuthModule {
     @IntoSet
     @AuthInterceptors
     abstract fun bindBearerAuthInterceptor(impl: BearerAuthInterceptor): Interceptor
+
+    /**
+     * T-153 追加。把「我是谁」填进 `core:common` 声明的那个插槽里。
+     *
+     * ⚠️ 这是**反向依赖**的又一处：`:data:card` 要 user id 去 JOIN
+     * `card_members`，但 `ModuleGraph` 的 `DATA_SIBLING_EXEMPTIONS` 是空集 ——
+     * `:data:card → :data:auth` 会让 `./gradlew help` 当场变红。
+     * 那条规则自己的注释给的出路就是这一条：「经 `core:*` 的共享类型解决」。
+     *
+     * 绑的是 [de.ncards.data.auth.SessionStore] 本身而不是新开一个类：
+     * 令牌与 user id 必须同生共死（见 `SessionStore.clear`），
+     * 而让它们分属两个对象，就是在为「清了一个忘了清另一个」留门。
+     */
+    @Binds
+    @Singleton
+    abstract fun bindCurrentUserIdStore(impl: SessionStore): CurrentUserIdStore
 }

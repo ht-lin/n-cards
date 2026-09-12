@@ -2761,7 +2761,7 @@ path "auth/token/renew-self"         { capabilities = ["update"] }
 | Q4 | 一期是否启用证书固定 | **不启用**，记为已接受风险，上线后 30 天内加 | 技术负责人 | M3 |
 | Q5 | Sentry 自托管 vs EU SaaS | EU SaaS（省运维，需 DPA） | 技术负责人 | M1 |
 | ~~Q6~~ | ~~Vault unseal 方案（人工 vs 外部 KMS auto-unseal）~~ | **已决（2026-08-28）：人工 Shamir 3-of-5 + runbook，auto-unseal 关闭。见 [ADR-0004](adr/0004-manual-vault-unseal.md) 与 [`docs/runbooks/vault-unseal.md`](runbooks/vault-unseal.md)** | 技术负责人 | ✅ M0 |
-| Q7 | 卡片调色板的具体色值（需满足 4.5:1 对比度） | 设计交付 | 设计 | M1 |
+| ~~Q7~~ | ~~卡片调色板的具体色值（需满足 4.5:1 对比度）~~ | 🟡 工程侧已闭环（T-153，2026-09-12），待设计复核。色值在 `core:designsystem`，键在 `core:model` 的 `CardColor`；「逐个校验」由 `CardColorContrastTest` 自动断言。改色值不改枚举 | 设计 | ~~M1~~ |
 | Q8 | 是否上架 F-Droid（会与 ML Kit/FCM 冲突） | 一期不上 | 创始人 | M4 |
 | Q9 | username 保留词黑名单的最终清单（德语场景需补 `impressum`、`hilfe`、`konto` 等） | **草案已交付（2026-09-07，T-107），待产品确认**：12 个词，见 `backend/config/packages/ncards_username.yaml` —— §3.8 的九个通用词 + 德语场景的 `impressum` / `hilfe` / `konto`。**精确匹配**，不做前缀/子串/变体（论证见 [ADR-0017](adr/0017-username-assignment-and-lifetime-attempt-counter.md) 决定五）。确认后改配置里的一行即可，代码不用动。⚠️ 加词要写**机器读形态**：`n-cards` 这种带连字符的写法过不了字符集，会成为一条永远匹配不到任何输入的死规则（`UsernameRulesTest` 会拦下来） | 产品 | M1 结束 |
 | Q10 | 用户强烈要求改 username 时的人工处理口径（拒绝 / DBA 手工改 / 引导注销重注册） | **一期一律拒绝并引导注销重注册**，不开人工通道（开了就会有第二个）。注意 C10 后已无 `display_name` 作为退路，此口径需在 FAQ 写清 | 产品 | M3 |

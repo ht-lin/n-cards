@@ -35,6 +35,7 @@ import de.ncards.feature.legal.PrivacyScreen
 import de.ncards.feature.legal.TermsScreen
 import de.ncards.feature.onboarding.onboardingGraph
 import de.ncards.feature.onboarding.usernameDestination
+import de.ncards.feature.wallet.walletDestination
 
 /**
  * 全应用唯一的 NavHost（§12.3）。
@@ -141,7 +142,15 @@ private fun ReadyNavHost(
 
         usernameDestination(onCompleted = ::openWallet)
 
-        composable<WalletRoute> { WalletPlaceholderScreen() }
+        walletDestination(
+            // T-154 的卡详情页还不存在。留一个空实现而不是把点击整个关掉：
+            // 列表项的点击语义（涟漪、TalkBack 的「双击以激活」）现在就该是对的，
+            // 接上详情页时只改这一行。
+            onOpenCard = { },
+            // T-155 / T-156 / T-157 都还不存在，所以空状态那个按钮本身是禁用的
+            // （见 feature:wallet 的 WalletScreen）。
+            onAddCard = { },
+        )
 
         composable<TermsRoute> { TermsScreen(onBack = { navController.popBackStack() }) }
 

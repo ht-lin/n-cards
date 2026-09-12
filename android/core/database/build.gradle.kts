@@ -33,4 +33,18 @@ dependencies {
     implementation(project(":core:crypto"))
     implementation(libs.sqlcipher)
     implementation(libs.timber)
+
+    // T-153：把 Room 的运行时 api 出去，消费方要的是 `NcardsDatabase.withTransaction { }`。
+    //
+    // ⚠️ 这不是「顺手放开」。跨 DAO 的原子写只有两个落点，而另一个更差：
+    // 把编排塞进 core:database（一个 @Transaction 的方法同时改 card_members
+    // 和 sync_outbox）。那等于把「置顶要不要入 outbox」这类**策略**写进
+    // 持久化层，而 T-009 刻意让本模块「不放任何策略」（SyncOutboxDao 的类注释）。
+    //
+    // 编排归 data:*（§4.3 分层图：Repository 是唯一决定「数据从哪来」的地方），
+    // 所以事务的入口必须对 data:* 可见。
+    //
+    // room-runtime 由 ncards.android.room 以 implementation 加入；这里只放开
+    // room-ktx —— data:* 需要的是 withTransaction 这个扩展，不是 @Dao 的注解处理。
+    api(libs.room.ktx)
 }

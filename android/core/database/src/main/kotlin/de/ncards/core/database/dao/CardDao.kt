@@ -56,6 +56,48 @@ interface CardDao {
         maxAttempts: Int,
     ): Flow<List<WalletCard>>
 
+    /**
+     * [observeWallet] 的一次性快照（T-153 的拖拽重排用）。
+     *
+     * ⚠️ **查询字符串与 [observeWallet] 逐字相同，这是刻意的重复。**
+     *
+     * Room 不允许一个 `@Query` 同时产出 `Flow` 与 `suspend` 两种形态，而重排
+     * 必须在**事务里**读到当前顺序 —— 从 `Flow` 上 `first()` 拿到的是事务外的
+     * 一个快照，两次读之间完全可能有一次下行同步插进来，于是算出的
+     * `sort_order` 是对着一份已经过期的顺序算的。
+     *
+     * 三种出路里选了复制：抽成 `@RawQuery`（丢掉编译期的列名校验，而那正是
+     * Room 在这里最大的价值）、把两个方法都改成读全表再在 Kotlin 里排序
+     * （那就把 §5.2 的排序语义从一处变成两处），或者复制这一段 SQL。
+     *
+     * ⚠️ 改上面那段 SQL 的人**必须同时改这一段**。两者漂了的症状是：
+     * 列表显示的顺序与拖拽算出来的顺序不一致 —— 用户把卡拖到第二位，
+     * 松手之后它跳到第五位。
+     */
+    @Query(
+        """
+        SELECT c.*, m.sort_order AS sort_order, m.is_pinned AS is_pinned, m.role AS role,
+               CASE
+                   WHEN o.attempt_count IS NULL THEN 'SYNCED'
+                   WHEN o.attempt_count >= :maxAttempts THEN 'FAILED'
+                   ELSE 'PENDING'
+               END AS sync_state
+        FROM cards c
+        INNER JOIN card_members m ON m.card_id = c.id AND m.user_id = :userId
+        LEFT JOIN (
+            SELECT entity_id, MAX(attempt_count) AS attempt_count
+            FROM sync_outbox
+            WHERE entity_type = 'card'
+            GROUP BY entity_id
+        ) o ON o.entity_id = c.id
+        ORDER BY m.is_pinned DESC, m.sort_order ASC, c.created_at DESC
+        """,
+    )
+    suspend fun walletSnapshot(
+        userId: String,
+        maxAttempts: Int,
+    ): List<WalletCard>
+
     @Query("SELECT * FROM cards WHERE id = :cardId")
     fun observeCard(cardId: String): Flow<CardEntity?>
 

@@ -41,19 +41,43 @@ build-logic/convention/  ← ncards.android.{application,library,feature,hilt,ro
 gradle/libs.versions.toml ← 唯一依赖声明处
 ```
 
-30 个模块里目前有实质内容的是：`app`、`core:{model,designsystem,crypto,database,network:api,network:impl,barcode}`、
-`data:auth`、`feature:{onboarding,legal}`。其余是空壳，由各自的任务填充
+30 个模块里目前有实质内容的是：`app`、
+`core:{model,common,ui,designsystem,crypto,database,network:api,network:impl,barcode,testing}`、
+`data:{auth,card}`、`feature:{onboarding,wallet,legal}`。其余是空壳，由各自的任务填充
 （每个 `build.gradle.kts` 顶部写了归属任务）。
 
 ⚠️ `core:barcode` 只交付了**渲染**那一半（T-152）。相机流扫描与静态图片解码
 （ML Kit）由 T-156 / T-157 填进同一个模块 —— §10.1 明令两条识别路径必须经过
 同一个入口，「禁止为图片路径写第二套 `when` 分支」。
 
-⚠️ `core:{common,ui,testing}` 仍然是空的，而三者都已经有人等着：
-`core:common` 的 `DispatcherProvider` / `UiText`（T-151 各自绕开了一次），
-`core:ui` 的 `EmptyState` / `ErrorPane`（T-153 会需要），
-`core:testing` 的测试替身（`FakeSecretStore` 与 `FakeAuthRepository` 现在各有两份拷贝）。
-**第三个消费者出现时就该把它们建起来**，而不是抄第三份。
+✅ **`core:{common,ui,testing}` 已由 T-153 建起来**（此前三者都是空壳）。
+本卡同时是三者的第三个消费者，照这一节原先那条规则办的 ——
+「第三个消费者出现时就该把它们建起来，而不是抄第三份」：
+
+| 模块 | T-153 放进去的 | 替掉了什么 |
+|---|---|---|
+| `core:common` | `DispatcherProvider`、`UiText`、`CurrentUserIdStore` | T-151 的两处绕开 |
+| `core:ui` | `EmptyState` / `ErrorPane` / `CardTile` / `ObserveEvents` | `:app` 占位屏与 `feature:onboarding` 里的私有实现 |
+| `core:testing` | `MainDispatcherExtension`、`TestDispatcherProvider`、`CardFixtures` | `feature:onboarding` 里那份 `MainDispatcherExtension`（已删） |
+
+⚠️ `FakeSecretStore` **仍然是两份**（`core:crypto` 与 `data:auth` 各一份）——
+本卡没有碰它，它还没有第三个消费者。`feature:onboarding` 的两份
+`FakeAuthRepository` 也还在：那是 `test` 与 `androidTest` 源集互相看不见造成的，
+而 T-153 给这个问题用的是另一条路（`src/sharedTest`，见下）。
+
+⚠️ **`core:ui` 与 `core:testing` 拿了 Kover 豁免**（T-153 加进 `COVERAGE_EXEMPT`），
+理由写在 `Coverage.kt` 里：前者整个是 Compose 声明、后者整个是测试代码。
+同一处还给出了 T-011 留的那句「M1 应当重新评估」的结论。
+
+### `src/sharedTest`：`test` 与 `androidTest` 共用一份替身
+
+两个源集互相看不见，而有些替身必须是**一份**。
+`core:barcode` 先趟出了写法（`extensions.configure<LibraryExtension>` + `kotlin.srcDir`，
+绕开 AGP 9 上 `android { sourceSets… }` 访问器的配置期崩溃），
+T-153 的 `feature:wallet` 照抄了它。
+
+`feature:onboarding` 留着两份 `FakeAuthRepository`，是因为它落地时这条路还没有 ——
+下次动那个模块时可以顺手收掉。
 
 ## Convention plugins
 
@@ -194,23 +218,42 @@ core:database  SqlCipher.openHelperFactory(passphrase) ──► Room
 ⚠️ **后两条只做到「重建全部对象」这一步。** 测试自己也活在被杀的进程里，
 真·重启与真·卸载重装是仪器测试原理上做不到的。补齐它们要靠下面的手工步骤 ——
 
-⚠️ **但手工步骤现在还跑不了**：`:app` 里**没有任何人注入 `NcardsDatabase`**，
-所以运行时根本不建库（实测：安装并启动后 `databases/` 与 `shared_prefs/` 都不存在）。
-`:app` 依赖这两个模块只是为了让 Hilt 在 DI 根上看见它们的 `@Module`。
-第一个真实消费者是 **T-153 的钱包列表**，从那时起下面这段才有意义：
+✅ **T-153 把这段手工步骤跑通了，三条全绿**（2026-09-12，moto g(30) / Android 12）。
+
+此前它跑不了：`:app` 里没有任何人注入 `NcardsDatabase`，运行时根本不建库。
+T-153 的钱包列表是第一个真实消费者 —— `DefaultCardRepository` 注入 `CardDao`，
+Hilt 这才把 `NcardsDatabase` 真的造出来。
+
+造数据用 `app/src/debug/` 的 `DebugSeedReceiver`（**只在 debug 构建里存在**，
+release 里根本不被编译）。它自己注入 `CardDao`，所以**一次广播就会走完
+Keystore → passphrase → 开库 → 写入 的全程，不需要登录**：
 
 ```bash
 ./gradlew :app:installDebug
-# 在应用里做一次会写库的操作（T-153 起：新建一张卡）之后：
-adb shell run-as de.ncards.debug ls -l databases/
+R=de.ncards.debug/de.ncards.debug.DebugSeedReceiver
+U=0192f3a1-b2c3-7d4e-8f01-00000000a11a      # 任意 uuid 即可；见该类的注释
+
+adb shell am broadcast -a de.ncards.debug.SEED -n $R --es user $U --ei count 200
+adb shell run-as de.ncards.debug ls -l databases/        # ✅ ncards.db / -wal / -shm
+
+# ① 外部工具读不出明文
 adb exec-out run-as de.ncards.debug cat databases/ncards.db > /tmp/ncards.db
-sqlite3 /tmp/ncards.db .tables          # 期望：Error: file is not a database
+sqlite3 /tmp/ncards.db .tables                           # ✅ Error: file is not a database
+head -c 16 /tmp/ncards.db | xxd                          # ✅ 随机字节，不是 "SQLite format 3"
+grep -c Benachrichtigungseinstellungen /tmp/ncards.db    # ✅ 0（-wal / -shm 同样是 0）
 
-adb shell am force-stop de.ncards.debug # 重启后仍能开库（Keystore 解出同一份 passphrase）
-adb shell monkey -p de.ncards.debug -c android.intent.category.LAUNCHER 1
+# ② 真·进程重启后仍能开库（Keystore 解出同一份 passphrase）
+adb shell am force-stop de.ncards.debug
+adb shell am broadcast -a de.ncards.debug.SEED -n $R --es user $U --ei count 7
+                                                         # ✅ 无异常；它先读回了那 200 行
 
-adb uninstall de.ncards.debug && ./gradlew :app:installDebug   # 重装后是全新空库
+# ③ 卸载重装后是全新空库
+adb uninstall de.ncards.debug && ./gradlew :app:installDebug
+adb shell run-as de.ncards.debug ls -l databases/        # ✅ No such file or directory
 ```
+
+⚠️ 想在**钱包界面上**看到这些卡则另说：那要真的登录（未登录时 NavHost 不会组合
+钱包），而且 `--es user` 要省掉、用会话里的那个 id。上面三条验证不需要它。
 
 ## 契约代码生成（T-010）
 
