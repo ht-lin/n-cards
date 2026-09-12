@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  英语。默认（德语）在 values/ —— 见那里的文件头（§11.1）。
+
+  十四条里十一条与德语相同，**照样逐条写出**：MissingTranslation 在本项目里是
+  error，而「反正一样就省掉」正是它要拦的东西。真正不同的三条标在下面。
+-->
+<resources>
+
+    <!-- 一维 -->
+    <string name="barcode_format_ean_13">EAN-13</string>
+    <string name="barcode_format_ean_8">EAN-8</string>
+    <string name="barcode_format_upc_a">UPC-A</string>
+    <string name="barcode_format_upc_e">UPC-E</string>
+    <string name="barcode_format_code_128">Code 128</string>
+    <string name="barcode_format_code_39">Code 39</string>
+    <string name="barcode_format_code_93">Code 93</string>
+    <!-- ≠ de：「2 aus 5」→「2 of 5」 -->
+    <string name="barcode_format_itf">ITF (Interleaved 2 of 5)</string>
+    <string name="barcode_format_codabar">Codabar</string>
+
+    <!-- 二维 -->
+    <!-- ≠ de：德语写作 QR-Code（带连字符） -->
+    <string name="barcode_format_qr_code">QR code</string>
+    <string name="barcode_format_aztec">Aztec</string>
+    <string name="barcode_format_pdf_417">PDF417</string>
+    <string name="barcode_format_data_matrix">Data Matrix</string>
+
+    <!-- ≠ de -->
+    <string name="barcode_format_unknown">Unknown barcode type</string>
+
+</resources>

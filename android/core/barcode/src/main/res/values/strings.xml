@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/（§11.1）。
+  不存在 values-de/ —— checkGermanIsDefaultLocale 会拦下建它的改动。
+
+  码制的展示名（§10.1 三列映射里的第三列，T-152）。唯一的引用处是
+  BarcodeFormatTable —— 不要在别处按名字取这些资源。
+
+  ⚠️ 十四条里有十一条德英完全相同（EAN-13 / Code 128 / Aztec … 都是品牌名，
+  不翻译）。**相同的也必须在 values-en/ 里原样再写一遍** —— 想「省掉一样的那几条」
+  正是 MissingTranslation（本项目里是 error）存在的理由。真正不同的只有
+  ITF、QR-Code 与「未知码制」三条。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <!-- 一维 -->
+    <string name="barcode_format_ean_13">EAN-13</string>
+    <string name="barcode_format_ean_8">EAN-8</string>
+    <string name="barcode_format_upc_a">UPC-A</string>
+    <string name="barcode_format_upc_e">UPC-E</string>
+    <string name="barcode_format_code_128">Code 128</string>
+    <string name="barcode_format_code_39">Code 39</string>
+    <string name="barcode_format_code_93">Code 93</string>
+    <string name="barcode_format_itf">ITF (Interleaved 2 aus 5)</string>
+    <string name="barcode_format_codabar">Codabar</string>
+
+    <!-- 二维 -->
+    <string name="barcode_format_qr_code">QR-Code</string>
+    <string name="barcode_format_aztec">Aztec</string>
+    <string name="barcode_format_pdf_417">PDF417</string>
+    <string name="barcode_format_data_matrix">Data Matrix</string>
+
+    <!--
+      服务端加了一个本版本不认识的码制（§13.6）。这条文案会真的出现在用户眼前 ——
+      老客户端 + 新码制是预期内的状态，不是错误状态。
+    -->
+    <string name="barcode_format_unknown">Unbekannter Codetyp</string>
+
+</resources>
