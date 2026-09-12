@@ -55,6 +55,11 @@ dependencies {
     // 本模块的 AppNetworkModule 里 —— 少了它，Hilt 在编译期就报 missing binding。
     implementation(project(":core:network:impl"))
 
+    // 同理（T-152）：DI 根要看得见 BarcodeModule。第一个真实消费者是 T-154 的
+    // 全屏条码页（经 feature:carddetail），在那之前这条边只是让 Hilt 在编译期
+    // 就校验得到这张图。
+    implementation(project(":core:barcode"))
+
     // DI 根要看得见各 data 模块的 Hilt Module 才能装配它们。
     implementation(project(":data:auth"))
     implementation(project(":data:card"))

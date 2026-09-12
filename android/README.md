@@ -41,9 +41,13 @@ build-logic/convention/  ← ncards.android.{application,library,feature,hilt,ro
 gradle/libs.versions.toml ← 唯一依赖声明处
 ```
 
-30 个模块里目前有实质内容的是：`app`、`core:{model,designsystem,crypto,database,network:api,network:impl}`、
+30 个模块里目前有实质内容的是：`app`、`core:{model,designsystem,crypto,database,network:api,network:impl,barcode}`、
 `data:auth`、`feature:{onboarding,legal}`。其余是空壳，由各自的任务填充
 （每个 `build.gradle.kts` 顶部写了归属任务）。
+
+⚠️ `core:barcode` 只交付了**渲染**那一半（T-152）。相机流扫描与静态图片解码
+（ML Kit）由 T-156 / T-157 填进同一个模块 —— §10.1 明令两条识别路径必须经过
+同一个入口，「禁止为图片路径写第二套 `when` 分支」。
 
 ⚠️ `core:{common,ui,testing}` 仍然是空的，而三者都已经有人等着：
 `core:common` 的 `DispatcherProvider` / `UiText`（T-151 各自绕开了一次），
@@ -356,6 +360,51 @@ welcome → email → otp 三步是 `internal` 且住在它自己的模块里。
 ./gradlew :feature:onboarding:api26DebugAndroidTest :app:api26DebugAndroidTest
 ```
 
+## 条码渲染（T-152）
+
+```
+core:model    BarcodeFormat          13 个码制 + UNKNOWN，wireName / 一维二维 / fromWire()
+                    │                （纯 Kotlin，零新依赖）
+core:barcode  BarcodeFormatTable     ← 全仓**唯一**的 when(format)，一次产出三列：
+                                        ZXing 常量 │ ML Kit int │ @StringRes 展示名
+              BarcodeRasterizer      ← 纯 Kotlin：1× 矩阵 → 静区 → 整数缩放 → ARGB
+              BarcodeRenderer        ← 唯一入口，suspend，返回 Bitmap，带 LruCache
+```
+
+词汇表在 `core:model`、三列适配在 `core:barcode`，理由见
+[ADR-0023](../docs/adr/0023-barcode-format-vocabulary-in-core-model-adapters-in-core-barcode.md)
+——§10.1 字面要求「三列都进 `core:model`」做不到（那是纯 JVM 模块，看不见 ML Kit 常量，
+也没有 `res/`）。**加第 14 个码制时只需要改一处 `when`，改不全会直接编译失败。**
+
+**五条不要顺手改的**
+
+| 位置 | 别改成 | 为什么 |
+|---|---|---|
+| `BarcodeRasterizer` 向 ZXing 要 `encode(…, 0, 0, MARGIN = 0)` 后自己加静区 | 直接传目标尺寸 + `MARGIN = 10` | `EncodeHintType.MARGIN` 实测有**五套**语义：一维是两侧总和（每侧只剩 5，EAN/UPC 更只有 4.5）、QR 是每侧、PDF417 是**像素**、**Aztec 与 DataMatrix 完全忽略它**（静区 0，实测连 ZXing 自己的 reader 都解不出来）。另外装不下时 ZXing 会**静默返回更大的矩阵**，按请求尺寸开数组会越界 |
+| `hintsFor()` 里 DataMatrix 的 `FORCE_SQUARE` | 删掉（用 ZXing 默认，允许矩形） | 矩形 DataMatrix 在模块宽 33 px 时连 ZXing 自己的 reader 都读不出（4 px / 12 px 能读）——**尺寸越大越读不出**，而全屏条码页正是最大的那一档 |
+| `SizedLruCache` 淘汰时**不** `recycle()` | 顺手回收掉省内存 | Compose 的 `Image` 或 Glance 的 `ImageProvider` 可能还持有它，`Canvas: trying to use a recycled bitmap` |
+| `barcodeCacheBudgetBytes` 的地板 5 MiB | 调小 | 装不下**一张**全屏图的话，`put` 会因「单个值比预算还大」直接不收 —— 缓存变成死重，**而且没有任何症状**，只是每次都重算 |
+| 失败时只记 `e::class.simpleName` | `Timber.w(e)` / 记 `e.message` | ZXing 的异常消息里**嵌着码值片段**（`Cannot encode : '…'`），而 `check-sensitive-logs.sh` 只认 `barcodeValue` / `rawValue` 这几个标识符名，**拦不住 `Timber.w(e)`** |
+
+**验收标准的真机那一半**
+
+单测已经用 ZXing 自己的 reader 把 13 种码制逐个 render → decode 解回来了
+（纯 JVM，不需要设备）。屏幕上的实扫按下面走：
+
+```bash
+./gradlew :core:barcode:connectedDebugAndroidTest
+adb pull /sdcard/Android/data/de.ncards.core.barcode.test/files/barcode-golden ./
+# 推回相册 → 系统图库打开 → **最高亮度** → (a) 扫码枪 (b) 另一台手机
+```
+
+⚠️ 这是**代理验证**，不是等价物。对着真正的全屏条码页实扫归 **T-154**。
+
+⚠️ **ZXing 现在一个字节都还没进 APK。** 实测 release 增量只有 **+224 字节**，
+因为还没有任何人调用渲染器，Dagger 剪掉了未被请求的绑定、R8 随即把
+`com.google.zxing.**`、ML Kit 与 `BarcodeRasterizer` 整个删掉（dex 里搜不到）。
+**T-154 才是第一个真正付这笔账的卡**：zxing core 的 jar 是 600 KB / 289 个 class，
+其中 writer + encoder 约 75 个 —— 那一卡要预留 APK 基线的涨幅。
+
 ## 两个自建门禁（lint 覆盖不到的地方）
 
 | 任务 | 守什么 | 为什么 lint 不行 |
@@ -504,6 +553,17 @@ welcome → email → otp 三步是 `internal` 且住在它自己的模块里。
   指向旧类型，`getByName` 与 `named { }` 都一样。细节写在
   `core/database/build.gradle.kts` 的注释里。现在 `version = 1` 没有可迁移的东西，
   所以没有预先埋一段没人跑过的构建配置。
+  - ✅ **T-152 找到了绕法**：崩的是 `android { }` 这个**生成的访问器**，不是 AGP 的
+    模型本身。显式按新 DSL 的类型取扩展就没事：
+
+    ```kotlin
+    extensions.configure<com.android.build.api.dsl.LibraryExtension>("android") {
+        sourceSets.getByName("androidTest").kotlin.srcDir("src/sharedTest/kotlin")
+    }
+    ```
+
+    `core/barcode/build.gradle.kts` 用它让 `test` 与 `androidTest` 共享一份
+    `BarcodeFixtures`（两个源集本来互相看不见）。`assets.srcDir(...)` 同理可解。
 - `:app:lintDebug` 会打印一行 `Lint will treat :core:model as an external dependency
   and not analyze it` —— `core:model` 是纯 Kotlin 模块，Android Lint 本来就不分析它。
   它的约束由 Kotlin 编译器保证（那里根本没有 `android.*` 可 import）。

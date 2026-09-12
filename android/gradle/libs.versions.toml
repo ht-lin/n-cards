@@ -97,6 +97,21 @@ openapiGenerator = "7.25.0"
 # ---- 日志（§7.3：release 构建不得输出任何日志） --------------------------
 timber = "5.0.1"
 
+# ---- 条码（T-152） -------------------------------------------------------
+# §4.3 选型表逐字写着「渲染 | ZXing core（com.google.zxing:core，仅编码）|
+# 不引 zxing-android-embedded」。core 是纯 JVM jar（零运行时依赖），所以
+# core:barcode 的渲染逻辑连同 render→decode 往返测试都跑在裸 JVM 上，
+# 不需要 Robolectric —— 而 Kover 只统计单元测试，这一点决定了整个模块的分层。
+zxing = "3.5.4"
+# 只为 @StringRes 一个注解（core:barcode 的展示名映射）。它早已由 core-ktx /
+# compose / lifecycle 传递进来，显式声明不改变依赖图。
+androidxAnnotation = "1.9.1"
+# ⚠️ 只为 Barcode.FORMAT_* 这十几个 static final int，用 compileOnly 引入。
+# 它们是编译期常量，kotlinc 直接内联，运行期不需要这个 artifact ——
+# 而它的 POM 会拖 play-services-basement + vision-common 进来，那不是 T-152 的账。
+# 真正的扫描依赖（com.google.mlkit:barcode-scanning，bundled 模型，~2.5 MB）由 T-156 加。
+mlkitBarcodeCommon = "17.0.0"
+
 # ---- 测试（§13.4） -------------------------------------------------------
 junit = "6.1.3"            # JUnit 5 / Jupiter
 mockk = "1.14.11"
@@ -178,6 +193,14 @@ retrofit-kotlinx-serialization = { module = "com.squareup.retrofit2:converter-ko
 openapi-generator-cli = { module = "org.openapitools:openapi-generator-cli", version.ref = "openapiGenerator" }
 
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+
+# ---- 条码（T-152） -------------------------------------------------------
+# writer 与 reader 在同一个 artifact 里。主源集**只**用 writer 那一半；
+# reader 只出现在 src/test 的 render→decode 往返测试里，因此 R8 会把它整个剥掉。
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidxAnnotation" }
+# compileOnly —— 理由见 [versions] 里 mlkitBarcodeCommon 那段。
+mlkit-barcode-scanning-common = { module = "com.google.mlkit:barcode-scanning-common", version.ref = "mlkitBarcodeCommon" }
 
 # ---- 测试 ----------------------------------------------------------------
 # JUnit 5 用于**单元测试**（testOptions.unitTests.all { useJUnitPlatform() }）。
