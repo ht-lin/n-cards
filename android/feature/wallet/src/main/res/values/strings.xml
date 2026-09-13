@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/。
+  §11.1 原文：「默认资源目录放德语，因为主要市场是德国，且避免『英语兜底』
+  在德语环境下漏翻」。checkGermanIsDefaultLocale 会拦下把这份挪进 values-de/ 的改动。
+
+  这三条空状态文案是从 :app 的 WalletPlaceholderScreen 搬过来的（T-151 写的），
+  一字未改 —— 它们本来就是为这一屏写的，只是当时这个模块还是空壳。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <string name="wallet_title">Deine Karten</string>
+
+    <!-- 空状态：一张卡都没有。J1 的终点。 -->
+    <string name="wallet_empty_title">Deine Karten</string>
+    <string name="wallet_empty_body">Hier ist noch nichts. Füge deine erste Karte hinzu, um sie an der Kasse in Sekunden griffbereit zu haben.</string>
+    <string name="wallet_add_first_card">Erste Karte hinzufügen</string>
+
+    <!--
+      搜索。⚠️ 与「一张卡都没有」是两句完全不同的话 —— 一个有 40 张卡的用户
+      搜错一个字母，不该被告知他没有卡。
+    -->
+    <string name="wallet_search_hint">Karten durchsuchen</string>
+    <string name="wallet_search_clear">Suche löschen</string>
+    <string name="wallet_no_results_title">Keine Treffer</string>
+    <string name="wallet_no_results_body">Für „%1$s“ wurde keine Karte gefunden. Prüfe die Schreibweise oder lösche die Suche.</string>
+
+    <!-- 错误态：令牌在，但本机读不出「我是谁」。他的卡还在，只是查询发不出去。 -->
+    <string name="wallet_error_user_unknown_title">Karten konnten nicht geladen werden</string>
+    <string name="wallet_error_user_unknown_body">Die Daten auf diesem Gerät lassen sich gerade nicht öffnen. Sobald du wieder online bist, werden deine Karten geladen.</string>
+    <string name="wallet_error_retry">Erneut versuchen</string>
+
+    <!--
+      ⚠️ §11.2：不以颜色作为唯一信息载体 —— 徽章必须带文字或图标。
+      这几条既是徽章上的可见文字，也是 contentDescription。
+    -->
+    <string name="wallet_badge_pending">Wird synchronisiert</string>
+    <string name="wallet_badge_failed">Synchronisierung fehlgeschlagen</string>
+    <string name="wallet_badge_shared_readonly">Nur ansehen</string>
+
+    <!-- 每一个图标按钮都要有 contentDescription（§11.2）。 -->
+    <string name="wallet_pin">Nach oben anheften</string>
+    <string name="wallet_unpin">Anheften aufheben</string>
+    <string name="wallet_reorder_handle">Zum Umsortieren gedrückt halten</string>
+    <string name="wallet_move_up">Nach oben verschieben</string>
+    <string name="wallet_move_down">Nach unten verschieben</string>
+
+    <!--
+      列表项读给 TalkBack 的整句。整行是**一个**语义节点 —— 颜色磁贴被
+      clearAndSetSemantics 摘掉了，因为「蓝色，R」对视障用户没有用处。
+      %1$s 标题，%2$s 商家名（可能为空）。
+    -->
+    <string name="wallet_card_description">%1$s, %2$s</string>
+
+    <!-- 拖拽时朗读的位置提示。德语的序数是 1.、2.…… -->
+    <string name="wallet_position">Position %1$d von %2$d</string>
+
+</resources>

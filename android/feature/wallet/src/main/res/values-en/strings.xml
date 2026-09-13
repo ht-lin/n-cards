@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  English. ⚠️ German lives in values/ (the default) — see that file's header
+  and §11.1. Do not move German here.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="en">
+
+    <string name="wallet_title">Your cards</string>
+
+    <string name="wallet_empty_title">Your cards</string>
+    <string name="wallet_empty_body">Nothing here yet. Add your first card so it is ready in seconds at the checkout.</string>
+    <string name="wallet_add_first_card">Add your first card</string>
+
+    <string name="wallet_search_hint">Search cards</string>
+    <string name="wallet_search_clear">Clear search</string>
+    <string name="wallet_no_results_title">No matches</string>
+    <string name="wallet_no_results_body">No card found for “%1$s”. Check the spelling or clear the search.</string>
+
+    <string name="wallet_error_user_unknown_title">Couldn\'t load your cards</string>
+    <string name="wallet_error_user_unknown_body">The data on this device can\'t be opened right now. Your cards will load once you are back online.</string>
+    <string name="wallet_error_retry">Try again</string>
+
+    <string name="wallet_badge_pending">Syncing</string>
+    <string name="wallet_badge_failed">Sync failed</string>
+    <string name="wallet_badge_shared_readonly">View only</string>
+
+    <string name="wallet_pin">Pin to top</string>
+    <string name="wallet_unpin">Unpin</string>
+    <string name="wallet_reorder_handle">Press and hold to reorder</string>
+    <string name="wallet_move_up">Move up</string>
+    <string name="wallet_move_down">Move down</string>
+
+    <string name="wallet_card_description">%1$s, %2$s</string>
+
+    <string name="wallet_position">Position %1$d of %2$d</string>
+
+</resources>

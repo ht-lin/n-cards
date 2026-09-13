@@ -3,6 +3,7 @@ package de.ncards.data.auth
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -101,5 +102,92 @@ class SessionStoreTest {
         assertNull(fresh.accessToken())
         assertEquals("refresh-1", fresh.refreshToken())
         assertEquals(SessionState.SignedIn, fresh.state.value)
+    }
+
+    // ---------------------------------------------------------------- T-153
+
+    @Test
+    @DisplayName("userId 初值是 null —— 还没读过存储")
+    fun userIdStartsNull() {
+        assertNull(store.userId.value)
+    }
+
+    @Test
+    @DisplayName("rememberUser 之后 userId 可读，且跨对象重建仍在")
+    fun remembersUserAcrossRestart() {
+        store.save(AuthFixtures.session())
+        store.rememberUser(AuthFixtures.USER_ID.toString())
+
+        assertEquals(AuthFixtures.USER_ID.toString(), store.userId.value)
+
+        // 重建对象 = 模拟进程重启：它必须跟着令牌一起被读回来。
+        val fresh = SessionStore(secrets)
+        fresh.refreshToken()
+
+        assertEquals(AuthFixtures.USER_ID.toString(), fresh.userId.value)
+    }
+
+    @Test
+    @DisplayName("user id 落盘的形态不是明文")
+    fun storesUserIdAsCiphertext() {
+        store.rememberUser(AuthFixtures.USER_ID.toString())
+
+        val onDisk = secrets.stored.values.map { it.toString(Charsets.UTF_8) }
+        assertFalse(onDisk.any { it == AuthFixtures.USER_ID.toString() })
+    }
+
+    /**
+     * ⚠️⚠️ 本卡最重要的一条。
+     *
+     * 登出**不清本地库**（那是刻意的：同一个人重新登录不该重拉 200 张卡），
+     * 所以 `cards` 与 `card_members` 的行会留在那里。若 user id 比令牌活得久，
+     * 下一个在这台设备上登录的人，`observeWallet` 的
+     * `JOIN card_members ON m.user_id = :userId` 会**照样命中上一个用户的行** ——
+     * 他会看到别人的卡。
+     *
+     * 这件事在功能测试里看不出来（登出照常、登录照常），只有真的换个人登录才会现形。
+     */
+    @Test
+    @DisplayName("登出必须把 user id 一并清掉，否则下一个用户会看到上一个用户的卡")
+    fun clearingSessionAlsoClearsUserId() {
+        store.save(AuthFixtures.session())
+        store.rememberUser(AuthFixtures.USER_ID.toString())
+
+        store.clear(SignedOutReason.UserAction)
+
+        assertNull(store.userId.value)
+        assertTrue(secrets.stored.isEmpty(), "auth_user_id 也该被 remove 掉")
+        assertEquals(0, secrets.clearCount, "清 user id 同样不该走 clear()")
+    }
+
+    /**
+     * T-151 存下的会话里没有 `auth_user_id`。这些设备升上来时令牌是好的，
+     * 只是不知道自己是谁 —— 那不是错误状态，不该把他们登出。
+     * 补写由 `fetchMe()` 路径上的 `rememberUser` 完成（`AppViewModel` 冷启动会调）。
+     */
+    @Test
+    @DisplayName("令牌在而 user id 缺失时仍然是已登录 —— 老版本升级上来的设备")
+    fun missingUserIdIsNotSignedOut() {
+        store.save(AuthFixtures.session())
+
+        val fresh = SessionStore(secrets)
+        // 存储是懒加载的：不读一次令牌，state 会一直停在 Unknown
+        // （那是冷启动第一帧的语义，见 SessionState 的类注释）。
+        fresh.refreshToken()
+
+        assertEquals(SessionState.SignedIn, fresh.state.value)
+        assertNull(fresh.userId.value)
+    }
+
+    /** `fetchMe()` 每次冷启动都会调，不该每次都多过一趟 Keystore。 */
+    @Test
+    @DisplayName("rememberUser 幂等：写同一个 id 不重复落盘")
+    fun rememberUserIsIdempotent() {
+        store.rememberUser(AuthFixtures.USER_ID.toString())
+        val afterFirst = secrets.stored["auth_user_id"]
+
+        store.rememberUser(AuthFixtures.USER_ID.toString())
+
+        assertSame(afterFirst, secrets.stored["auth_user_id"])
     }
 }

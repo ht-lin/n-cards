@@ -140,6 +140,10 @@ internal class DefaultAuthRepository
             when (val result = mapper.execute(call)) {
                 is ApiResult.Success -> {
                     sessions.save(result.value)
+                    // T-153：钱包列表要拿 user id 去 JOIN card_members，
+                    // 而在那之前全仓库没有任何地方存过它。见 CurrentUserIdStore。
+                    val user = result.value.user
+                    sessions.rememberUser(user.id.toString())
                     ApiResult.Success(
                         value = result.value.user,
                         requestId = result.requestId,
@@ -159,6 +163,12 @@ internal class DefaultAuthRepository
         private suspend fun unwrappingUser(call: suspend () -> retrofit2.Response<UserEnvelope>): ApiResult<User> =
             when (val result = mapper.execute(call)) {
                 is ApiResult.Success -> {
+                    // ⚠️ 这里也写一次，不只在登录路径上（见 SessionStore.rememberUser）：
+                    // T-151 存的会话里没有 auth_user_id，而 AppViewModel 冷启动本来
+                    // 就会打一次 GET /me —— 升级上来的设备靠这一行拿到钱包，
+                    // 而不是「要等到下次重新登录」。rememberUser 自己是幂等的。
+                    val user = result.value.user
+                    sessions.rememberUser(user.id.toString())
                     ApiResult.Success(
                         value = result.value.user,
                         requestId = result.requestId,

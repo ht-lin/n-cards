@@ -13,9 +13,5 @@
     <string name="signed_out_key_material_lost">The data on this device can no longer be decrypted — this happens after a system restore, for example. Sign in again and your cards will be loaded afresh.</string>
     <string name="signed_out_acknowledge">Got it</string>
 
-    <!-- Placeholder wallet (T-151); T-153 replaces it with feature:wallet. -->
-    <string name="wallet_empty_title">Your cards</string>
-    <string name="wallet_empty_body">Nothing here yet. Add your first card so you have it ready at the checkout in seconds.</string>
-    <string name="wallet_add_first_card">Add your first card</string>
 
 </resources>

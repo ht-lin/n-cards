@@ -108,10 +108,41 @@ private const val COVERAGE_MIN_PERCENT = 70
  *   （Theme.kt / Color.kt / Type.kt，206 行，没有一个分支）。它的正确性由
  *   「看起来对不对」定义，而那是 §13.4 的 Compose UI Test 的事 —— 与下面那段
  *   「UI 层的覆盖率是另一种度量」是同一条理由，只是那段当初只想到了 feature:*。
+ *
+ *   ⚠️ T-153 往这个模块里加了 `CardColors.kt`（Q7 调色板）。它**有**单测
+ *   （`CardColorContrastTest` 逐格断言 ≥ 4.5:1），只是不计进门禁 ——
+ *   豁免的含义是「Kover 不看这里」，不是「这里不用测」。
+ *
+ * - `:core:ui`（T-153）：整个模块是跨 feature 的 Composable
+ *   （`EmptyState` / `ErrorPane` / `CardTile`）。与 `:core:designsystem`
+ *   **同一条理由**，只是 T-011 写那段时 `core:ui` 还是空壳，没被想到。
+ *   Compose 的正确性是「渲染出来对不对」，够得着它的是 Compose UI Test
+ *   （`feature:wallet` 的 androidTest），而 Kover 只统计单元测试。
+ *
+ *   备选是给它引 Robolectric —— 不选，理由有二：目录里 `robolectric` 至今
+ *   零使用（引它等于为一个模块新开一条测试栈），而且它量到的仍然是
+ *   「Composable 被调用过」而不是「渲染对不对」，那是一个**假的**绿。
+ *
+ * - `:core:testing`（T-153）：整个模块**就是测试代码**，只不过住在 `src/main`
+ *   里好让别人的 `testImplementation` 引得到。为测试替身写测试是循环 ——
+ *   它们的正确性由「用它们的那些测试能不能抓到真 bug」定义。
+ *
+ * ============================================================================
+ * ⚠️ T-011 留的那句「这个取舍在第一个真正做 UI 的里程碑（M1）应当重新评估」
+ * ============================================================================
+ * T-153 是第一个真正做 UI 的卡，所以在这里给结论：**维持原判，不把仪器测试的
+ * 覆盖率并进门禁。** 理由没有变化 —— 那要求 PR 流水线里起模拟器，而 §14.3 的
+ * 预算是 12 分钟；`main` 流水线上的 GMD（api 26 + 34）仍然在跑那些测试。
+ *
+ * 真正变化的是**豁免名单又长了三条**，而这个方向不能一直走下去。下一次有人想往
+ * 名单里加第八条时，该做的不是加，而是重新问「Kover 只统计单元测试」这件事
+ * 还要不要接受 —— 那是 T-453（Macrobenchmark）之后才有条件回答的问题。
  */
 private val COVERAGE_EXEMPT = setOf(
     ":core:network:api",
     ":core:database",
     ":core:crypto",
     ":core:designsystem",
+    ":core:ui",
+    ":core:testing",
 )

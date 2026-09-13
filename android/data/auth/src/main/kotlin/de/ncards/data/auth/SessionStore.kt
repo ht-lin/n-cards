@@ -1,5 +1,6 @@
 package de.ncards.data.auth
 
+import de.ncards.core.common.user.CurrentUserIdStore
 import de.ncards.core.crypto.KeyMaterialUnrecoverableException
 import de.ncards.core.crypto.SecretStore
 import de.ncards.core.network.api.model.Session
@@ -48,7 +49,7 @@ internal class SessionStore
     @Inject
     constructor(
         private val secrets: SecretStore,
-    ) {
+    ) : CurrentUserIdStore {
         private val lock = Any()
 
         @Volatile
@@ -62,9 +63,39 @@ internal class SessionStore
         /** 见 [SessionState]。首次被读到之前恒为 [SessionState.Unknown]。 */
         val state: StateFlow<SessionState> = _state.asStateFlow()
 
+        private val _userId = MutableStateFlow<String?>(null)
+
+        /**
+         * 见 [CurrentUserIdStore]。T-153 加的第三样东西 ——
+         * 钱包列表要拿它去 JOIN `card_members`。
+         */
+        override val userId: StateFlow<String?> = _userId.asStateFlow()
+
         fun accessToken(): String? = tokens()?.access
 
         fun refreshToken(): String? = tokens()?.refresh
+
+        /**
+         * 记下「我是谁」。由 [DefaultAuthRepository] 在每一条能拿到 `User` 的路径上调用
+         * （verify / consume / `GET me` / `POST me/username`）。
+         *
+         * ⚠️ **写在四个地方而不是一个**，是为了老版本升上来的那批设备：
+         * 他们的令牌是 T-151 存的，那时还没有这个 key。只在登录路径写的话，
+         * 他们要等到下次重新登录才有钱包 —— 而 `AppViewModel` 冷启动本来就会打
+         * 一次 `GET /me`，顺手就补上了。
+         *
+         * 幂等：同一个 id 重复写不会多过一趟 Keystore（先比再写）。
+         * 这一点在这里是必要的而不是优化 —— `fetchMe()` 每次冷启动都会调。
+         */
+        fun rememberUser(id: String) {
+            if (_userId.value == id) return
+
+            synchronized(lock) {
+                if (_userId.value == id) return@synchronized
+                secrets.put(KEY_USER_ID, id.toByteArray(Charsets.UTF_8))
+                _userId.value = id
+            }
+        }
 
         /**
          * 登录成功或刷新成功之后写入。
@@ -82,12 +113,18 @@ internal class SessionStore
             }
         }
 
-        /** 清空本机会话。见类注释：两次 `remove`，不是一次 `clear`。 */
+        /** 清空本机会话。见类注释：三次 `remove`，不是一次 `clear`。 */
         fun clear(reason: SignedOutReason) {
             synchronized(lock) {
                 secrets.remove(KEY_ACCESS_TOKEN)
                 secrets.remove(KEY_REFRESH_TOKEN)
+                // ⚠️ 用户 id 必须与令牌同生共死。留下一个比令牌活得久的 id，
+                // 下一个用户在这台设备上登录后会看到**上一个用户的卡** ——
+                // 本机库还在（登出不清库，那是刻意的：同一个人重新登录不该重拉 200 张卡），
+                // 而 observeWallet 的 JOIN 照样命中那些 card_members 行。
+                secrets.remove(KEY_USER_ID)
                 cached = null
+                _userId.value = null
                 loaded = true
                 _state.value = SessionState.SignedOut(reason)
             }
@@ -104,6 +141,8 @@ internal class SessionStore
 
                 val restored = readFromStore()
                 cached = restored.tokens
+                // 没有会话就没有「我是谁」——它们同生共死（见 clear）。
+                _userId.value = restored.userId.takeIf { restored.tokens != null }
                 loaded = true
                 _state.value =
                     if (restored.tokens == null) {
@@ -129,9 +168,16 @@ internal class SessionStore
             try {
                 val access = secrets.get(KEY_ACCESS_TOKEN)?.toString(Charsets.UTF_8)
                 val refresh = secrets.get(KEY_REFRESH_TOKEN)?.toString(Charsets.UTF_8)
+                // 跟着令牌一起读，不另开一趟 —— 读一次要过一趟 Keystore，
+                // 而本方法完全可能在主线程上被首次触发（见 restoreSession 的注释）。
+                //
+                // ⚠️ 它可能是 null 而令牌在：T-151 存的会话里没有这个 key。
+                // 那种情况由 fetchMe() 的 rememberUser 补上，不在这里当成错误。
+                val user = secrets.get(KEY_USER_ID)?.toString(Charsets.UTF_8)
                 // refresh 是会话的根：没有它，access 过期之后就什么都做不了了。
                 Restored(
                     tokens = refresh?.let { Tokens(access, it) },
+                    userId = user,
                     reason = SignedOutReason.NeverSignedIn,
                 )
             } catch (e: KeyMaterialUnrecoverableException) {
@@ -140,12 +186,14 @@ internal class SessionStore
                 Timber.w(e, "本机会话已不可解，按未登录处理")
                 secrets.remove(KEY_ACCESS_TOKEN)
                 secrets.remove(KEY_REFRESH_TOKEN)
-                Restored(tokens = null, reason = SignedOutReason.KeyMaterialLost)
+                secrets.remove(KEY_USER_ID)
+                Restored(tokens = null, userId = null, reason = SignedOutReason.KeyMaterialLost)
             }
 
         /** [reason] 只在 [tokens] 为 null 时有意义 —— 它是「为什么没读出会话」。 */
         private data class Restored(
             val tokens: Tokens?,
+            val userId: String?,
             val reason: SignedOutReason,
         )
 
@@ -162,5 +210,16 @@ internal class SessionStore
         private companion object {
             const val KEY_ACCESS_TOKEN = "auth_access_token"
             const val KEY_REFRESH_TOKEN = "auth_refresh_token"
+
+            /**
+             * T-153 追加。**不是秘密**（它是本机用户自己的 id），放进 `SecretStore`
+             * 的理由是「和令牌同生共死」比「它需要加密」重要得多 ——
+             * 同一个文件、同一把包裹密钥、同一次 `remove`，不可能出现
+             * 「令牌清了 id 还在」的半截状态。
+             *
+             * 放 DataStore 的话，那个半截状态会在下一个用户登录时表现为
+             * 「我看到了别人的卡」，而两处存储之间没有任何事务。
+             */
+            const val KEY_USER_ID = "auth_user_id"
         }
     }

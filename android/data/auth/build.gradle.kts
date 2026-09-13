@@ -20,6 +20,13 @@ dependencies {
     // 于是无论哪个调用方进来，发出去的和用来导出 Idempotency-Key 的都是同一个值。
     implementation(project(":core:model"))
 
+    // T-153：SessionStore 顺带实现 core:common 的 CurrentUserIdStore ——
+    // 钱包列表要 user id 去 JOIN card_members，而 :data:card 不许依赖本模块
+    // （ModuleGraph 的 DATA_SIBLING_EXEMPTIONS 是空集），所以端口下沉到 core:common。
+    //
+    // api 而不是 implementation：那个接口出现在本模块 Hilt 绑定的签名上。
+    api(project(":core:common"))
+
     // §7.3：令牌只存加密存储。SecretStore 是那条要求唯一的落地点（ADR-0007）。
     implementation(project(":core:crypto"))
 

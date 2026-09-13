@@ -3,8 +3,8 @@ package de.ncards.feature.onboarding.username
 import app.cash.turbine.test
 import de.ncards.core.model.user.UsernameProblem
 import de.ncards.core.network.impl.error.ApiError
+import de.ncards.core.testing.MainDispatcherExtension
 import de.ncards.feature.onboarding.FakeAuthRepository
-import de.ncards.feature.onboarding.MainDispatcherExtension
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest

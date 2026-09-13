@@ -174,6 +174,12 @@ sqlcipher = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher
 # ---- Kotlin 生态 ---------------------------------------------------------
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+# T-153 追加，只给 core:common。它暴露 DispatcherProvider 与 CurrentUserIdStore
+# 两个签名里带 CoroutineDispatcher / StateFlow 的接口，所以要 api 出去。
+# ⚠️ 是 -core 不是 -android：core:common 里没有一行 Android 代码，
+# 而 -android 拖的是 Dispatchers.Main 的 Android 实现 —— 那由 :app 与各 feature
+# 经 -android 自己带进来，本模块不该替它们决定。
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
 
 # ---- 网络（T-010） -------------------------------------------------------

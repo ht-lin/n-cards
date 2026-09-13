@@ -24,9 +24,5 @@
     <string name="signed_out_key_material_lost">Die Daten auf diesem Gerät lassen sich nicht mehr entschlüsseln – das passiert zum Beispiel nach einer Systemwiederherstellung. Melde dich erneut an; deine Karten werden dann neu geladen.</string>
     <string name="signed_out_acknowledge">Verstanden</string>
 
-    <!-- Platzhalter-Wallet (T-151); T-153 ersetzt sie durch feature:wallet. -->
-    <string name="wallet_empty_title">Deine Karten</string>
-    <string name="wallet_empty_body">Hier ist noch nichts. Füge deine erste Karte hinzu, um sie an der Kasse in Sekunden griffbereit zu haben.</string>
-    <string name="wallet_add_first_card">Erste Karte hinzufügen</string>
 
 </resources>

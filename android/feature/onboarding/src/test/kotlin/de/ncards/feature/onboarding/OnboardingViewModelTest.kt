@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import de.ncards.core.model.settings.AppLanguage
 import de.ncards.core.network.api.model.OtpRequest
 import de.ncards.core.network.impl.error.ApiError
+import de.ncards.core.testing.MainDispatcherExtension
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
