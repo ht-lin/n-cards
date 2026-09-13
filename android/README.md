@@ -43,7 +43,7 @@ gradle/libs.versions.toml ← 唯一依赖声明处
 
 30 个模块里目前有实质内容的是：`app`、
 `core:{model,common,ui,designsystem,crypto,database,network:api,network:impl,barcode,testing}`、
-`data:{auth,card}`、`feature:{onboarding,wallet,legal}`。其余是空壳，由各自的任务填充
+`data:{auth,card}`、`feature:{onboarding,wallet,carddetail,legal}`。其余是空壳，由各自的任务填充
 （每个 `build.gradle.kts` 顶部写了归属任务）。
 
 ⚠️ `core:barcode` 只交付了**渲染**那一半（T-152）。相机流扫描与静态图片解码
@@ -440,13 +440,56 @@ adb pull /sdcard/Android/data/de.ncards.core.barcode.test/files/barcode-golden .
 # 推回相册 → 系统图库打开 → **最高亮度** → (a) 扫码枪 (b) 另一台手机
 ```
 
-⚠️ 这是**代理验证**，不是等价物。对着真正的全屏条码页实扫归 **T-154**。
+⚠️ 这是**代理验证**，不是等价物。对着真正的全屏条码页实扫归 **T-154**
+（那一卡已交付界面，实扫记录见 `docs/tasks/M1.md` 的 T-154 落地记录）。
 
-⚠️ **ZXing 现在一个字节都还没进 APK。** 实测 release 增量只有 **+224 字节**，
-因为还没有任何人调用渲染器，Dagger 剪掉了未被请求的绑定、R8 随即把
-`com.google.zxing.**`、ML Kit 与 `BarcodeRasterizer` 整个删掉（dex 里搜不到）。
-**T-154 才是第一个真正付这笔账的卡**：zxing core 的 jar 是 600 KB / 289 个 class，
-其中 writer + encoder 约 75 个 —— 那一卡要预留 APK 基线的涨幅。
+⚠️ ~~**ZXing 现在一个字节都还没进 APK。**~~ **T-154 起它进包了。** T-152 交付时
+release 增量只有 **+224 字节**：还没有任何人调用渲染器，Dagger 剪掉了未被请求的
+绑定、R8 随即把 `com.google.zxing.**`、ML Kit 与 `BarcodeRasterizer` 整个删掉。
+T-154 的全屏条码页是那个消费者，实测进包的是 **49 个 ZXing 类**（jar 里共 289 个，
+T-152 事前估 writer + encoder 约 75 个 —— R8 还能再剪掉三分之一），
+APK 相对 T-153 涨 **+103,260 字节**。reader 一个都没进：它只在单测源集里
+（ADR-0023 决策二）。基线已在那一卡抬到 21,638,757。
+
+## 卡详情与全屏条码页（T-154）
+
+```
+core:model         CardDetailRoute(cardId)        跨 feature 的目的地
+core:common        ScreenshotPolicy               「允许截屏」端口（今天恒为 true）
+data:card          CardRepository.observeCard()   建在 observeWallet 之上，零新 SQL
+feature:carddetail CardDetailScreen               详情页（NavHost 目的地）
+                   FullscreenBarcodeRoute         全屏页的**界面**
+:app               FullscreenBarcodeActivity      全屏页的**窗口**
+```
+
+**⚠️ 全屏条码页被切成两半，这是刻意的。** §10.2 要它是一个独立 `Activity`
+「便于设置窗口属性」，而那个 Activity 必须是 `AppCompatActivity`：per-app locales
+（`AppCompatDelegate.setApplicationLocales`）在 **API < 33 上只对 AppCompat 组件
+生效**，而 minSdk 是 26。一个住在 feature 模块里的纯 `ComponentActivity` 会让
+这一页用**系统语言**而 App 其余部分用用户选的语言，**且没有任何报错**。
+而 appcompat 按 `libs.versions.toml` 的明令只给 `:app`。
+所以窗口那一半在 `:app`，界面那一半在 feature —— 而它拥有的全部东西
+（亮度、常亮、`FLAG_SECURE`、manifest、边到边、`reportFullyDrawn`）本来就是窗口的事。
+
+**六条不要顺手改的**
+
+| 位置 | 别改成 | 为什么 |
+|---|---|---|
+| `BarcodeSurface` 用 `drawImage(dstSize = 位图自身尺寸)` | `Image(..., ContentScale.Fit)` | `Fit` 在位图**偏小**时会放大它，而 `Success.bitmap` 本来就可能小于请求尺寸（二维码保宽高比、模块宽取整）。任何非整数缩放都毁掉「整数模块宽」，那正是扫码枪读不出的那种糊 |
+| 一维码请求高度封顶（≤ 0.4×宽、≤ 600 px） | 直接要满屏高 | 横屏满屏的一维码是 2400×800 ARGB_8888 = 7.3 MiB，越过条码缓存 5 MiB 的地板 → `SizedLruCache.put` **直接不收**，缓存变成死重且**没有任何症状** |
+| 全屏页的 `Color.White` / `Color.Black` 字面量 | `MaterialTheme.colorScheme.surface` / `onSurface` | 浅色配色里它们是 `#FDFCFF` / `#1A1C1E`，都不是纯色 —— 条码周围那圈静区不纯白就不是静区。何况 `NcardsTheme` 默认还开着 `dynamicColor`（跟壁纸走） |
+| `onPause` 里恢复成 `BRIGHTNESS_OVERRIDE_NONE` | 记下进来前的系统亮度再写回去 | 窗口级 override 的正确反面是「没有 override」，不是「写死成刚才那个数」 |
+| `setScreenBrightness` 里整体写回 `window.attributes` | 改 `window.attributes.screenBrightness` 就完事 | `window.attributes` 返回的是**副本**，不重新赋值 `WindowManager` 根本收不到通知 —— 亮度纹丝不动，而代码看起来完全正确 |
+| 码值的 `contentDescription` 走 `spokenBarcodeValue()` | 直接用码值 | TTS 会把 `4012345678901` 念成一个天文数字，而 §10.2 要这个功能的全部理由就是「念给收银员听」。只对**短的、全是数字的**载荷逐字拆，二维码的长载荷原样念 |
+
+**manifest 里刻意没写的三样**：`configChanges`（横竖屏布局真的不一样，要的就是重建）、
+`screenOrientation`（不覆盖用户的自动旋转设置）、`showWhenLocked` / `turnScreenOn`
+（会把会员号显示在锁屏之上，正是威胁模型 T09）。
+
+```bash
+./gradlew :feature:carddetail:testDebugUnitTest
+./gradlew :feature:carddetail:connectedDebugAndroidTest
+```
 
 ## 两个自建门禁（lint 覆盖不到的地方）
 

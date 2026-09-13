@@ -90,9 +90,20 @@ internal class FakeCardDao : CardDao {
         return wallet.value
     }
 
-    override fun observeCard(cardId: String): Flow<CardEntity?> = throw NotImplementedError("T-154")
+    /*
+     * ⚠️ 归属从 T-154 改到了 T-155，这是修正不是搁置。
+     *
+     * T-154 的详情页需要 `role` / `is_pinned` / `sort_order` 与派生的 `sync_state` ——
+     * 那是 `WalletCard` 投影，这两个方法给的是**裸** `CardEntity`，够不着。
+     * 它落地时走的是 `CardRepository.observeCard`（建在 `observeWallet` 之上），
+     * 所以这两个 DAO 方法一次都没被调用。
+     *
+     * 真正需要它们的是 T-155：编辑表单要按 id 取一张卡，而 `PATCH` 的
+     * `If-Match` 要 `revision` —— 那两件事都不需要成员投影。
+     */
+    override fun observeCard(cardId: String): Flow<CardEntity?> = throw NotImplementedError("T-155")
 
-    override suspend fun findCard(cardId: String): CardEntity? = throw NotImplementedError("T-154")
+    override suspend fun findCard(cardId: String): CardEntity? = throw NotImplementedError("T-155")
 
     override suspend fun upsert(cards: List<CardEntity>) = throw NotImplementedError("T-250")
 

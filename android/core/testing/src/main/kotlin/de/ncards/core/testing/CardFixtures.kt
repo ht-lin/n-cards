@@ -4,6 +4,7 @@ import de.ncards.core.model.barcode.BarcodeFormat
 import de.ncards.core.model.card.Card
 import de.ncards.core.model.card.CardRole
 import de.ncards.core.model.sync.SyncState
+import java.time.LocalDate
 
 /**
  * 卡片的假数据。形状照契约的 `Card` example（`docs/api/openapi.yaml`）。
@@ -33,6 +34,12 @@ object CardFixtures {
         isPinned: Boolean = false,
         syncState: SyncState = SyncState.SYNCED,
         ownerId: String = OWNER_ID,
+        note: String? = null,
+        expiresOn: LocalDate? = null,
+        // ⚠️ T-154 追加。默认值仍然跟着 role 走（见下），覆盖它是为了让
+        // 「共享给 3 人」这一行有办法被测到 —— 但覆盖成「viewer 却知道成员数」
+        // 依旧是在造一张真实数据里不存在的卡，别那么用。
+        memberCount: Int? = if (role == CardRole.OWNER) 1 else null,
     ): Card =
         Card(
             id = id,
@@ -42,13 +49,13 @@ object CardFixtures {
             colorWire = colorWire,
             barcodeFormat = barcodeFormat,
             barcodeValue = barcodeValue,
-            note = null,
-            expiresOn = null,
+            note = note,
+            expiresOn = expiresOn,
             revision = 1,
             // ⚠️ 只有 owner 拿得到值，viewer 恒为 null（§5.2 / 威胁模型 T21）。
             // 默认值跟着 role 走，免得用例造出一张「viewer 却知道成员数」的卡 ——
             // 那种卡在真实数据里不存在，拿它做断言会得到一个假的绿。
-            memberCount = if (role == CardRole.OWNER) 1 else null,
+            memberCount = memberCount,
             createdAt = 0,
             updatedAt = 0,
             role = role,

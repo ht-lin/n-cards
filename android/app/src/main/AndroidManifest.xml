@@ -82,6 +82,35 @@
         </activity>
 
         <!--
+          全屏条码页（§10.2 / T-154）。「独立 Activity（便于设置窗口属性）」——
+          亮度、FLAG_KEEP_SCREEN_ON、FLAG_SECURE 都是窗口级的，见
+          barcode/FullscreenBarcodeActivity.kt 的类注释（那里也写了它为什么
+          在 :app 而界面在 feature:carddetail）。
+
+          ⚠️ exported="false"（§7.3 MUST：仅必要的入口显式导出）。
+          T-254 的 Widget 与 T-255 的磁贴是**应用内**的 PendingIntent，
+          不需要导出；它们经一个绑在 :app 的端口拿到这个 Intent。
+
+          ⚠️ **刻意不写的三样**：
+          - `android:configChanges` —— 横竖屏的布局真的不一样（横屏要把一维码
+            放大，那是本卡的交付物之一），所以要的就是正常重建。自己吃
+            configChanges 等于手写一套重测量逻辑，还会顺手吞掉语言与字体缩放
+            的变更。重建的代价是重渲染一次，而条码缓存按 format+value+size
+            命中，转回来那一次是内存读。
+          - `android:screenOrientation` —— 不覆盖用户的自动旋转设置。代价是
+            锁了自动旋转的用户到不了横屏放大，那是他自己的无障碍设置，
+            App 不该悄悄绕过它。
+          - `showWhenLocked` / `turnScreenOn` —— 会把会员号显示在**锁屏之上**。
+            §3.9 的威胁模型 T09 讲的正是「锁屏预览、他人瞥屏」泄露会员号，
+            而 §3.4 还规划了可选的生物识别应用锁。§10.2 也没有要求它。
+        -->
+        <activity
+            android:name=".barcode.FullscreenBarcodeActivity"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.NCards.Fullscreen" />
+
+        <!--
           appcompat 的 per-app locales 在 API < 33 上把用户选的语言存进一份
           私有 SharedPreferences，靠的就是这个「服务」（它从不运行，
           enabled=false —— appcompat 只读它的 meta-data）。

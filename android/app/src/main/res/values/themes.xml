@@ -19,4 +19,16 @@
         <item name="android:windowBackground">@color/ncards_window_background</item>
     </style>
 
+    <!--
+      全屏条码页（T-154）。只差一个启动窗口背景 —— 那一页整页纯白。
+
+      ⚠️ 父类是 Theme.NCards，于是仍然是 AppCompat 的后代。
+      FullscreenBarcodeActivity 也是 AppCompatActivity（per-app locales，
+      与 MainActivity 同一个理由），换成 android:Theme.* 会**启动即崩**。
+      见上面那段注释：主题父类与 Activity 基类是一件事，不是两件。
+    -->
+    <style name="Theme.NCards.Fullscreen" parent="Theme.NCards">
+        <item name="android:windowBackground">@color/ncards_barcode_background</item>
+    </style>
+
 </resources>

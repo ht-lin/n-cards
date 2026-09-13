@@ -4,4 +4,13 @@
     <color name="ncards_window_background">#FDFCFF</color>
     <!-- 自适应图标背景。与 NcardsBlue40 一致。 -->
     <color name="ncards_launcher_background">#1B5E9C</color>
+    <!--
+      全屏条码页的启动窗口背景（T-154）。
+
+      ⚠️ **纯白，不是 ncards_window_background（#FDFCFF）。** 那一页整页都必须
+      是纯白 —— 条码周围那圈静区不纯白就不是静区（§10.1）。这个 color 只管
+      Compose 接管之前的那几帧，但那几帧正好落在用户把手机递向扫码枪的时候，
+      一闪的浅灰会被看成「条码还没出来」。
+    -->
+    <color name="ncards_barcode_background">#FFFFFFFF</color>
 </resources>

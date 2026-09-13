@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ⚠️ **德语是默认语言。** 本文件（values/）放德语，英语在 values-en/（§11.1）。
+  不存在 values-de/ —— checkGermanIsDefaultLocale 会拦下建它的改动。
+
+  ⚠️ 相同的条目也必须在 values-en/ 里原样再写一遍。想「省掉一样的那几条」
+  正是 MissingTranslation（本项目里是 error）存在的理由。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:locale="de">
+
+    <!-- 卡还没加载出来时的标题。加载出来之后标题就是卡本身的名字。 -->
+    <string name="carddetail_title">Karte</string>
+    <string name="carddetail_back">Zurück</string>
+
+    <!--
+      这一页的主行动（§1.3 的 North Star 场景：收银台前 5 秒内调出条码）。
+      「anzeigen」而不是「öffnen」：用户要的是看见它，不是打开一个页面。
+    -->
+    <string name="carddetail_show_barcode">Barcode anzeigen</string>
+
+    <!-- T-155 接上之前这个按钮是禁用的。 -->
+    <string name="carddetail_edit">Karte bearbeiten</string>
+
+    <string name="carddetail_value_label">Kartennummer</string>
+    <string name="carddetail_format_label">Codeart</string>
+    <string name="carddetail_note_label">Notiz</string>
+    <string name="carddetail_expires_label">Gültig bis</string>
+    <string name="carddetail_shared_label">Geteilt</string>
+
+    <!--
+      ⚠️ plurals，不是一句带 %d 的字符串（§11.1）。德语的 one/other 与
+      英语一致，但把它写成 plurals 的理由不是今天的德语，而是明天的第三种语言。
+
+      ⚠️ 这一行**只对 owner 出现**：viewer 的 member_count 恒为 null，
+      而契约明令「它是 null 时不得推断任何默认值」。所以这里没有 zero 那一格 ——
+      「共享给 0 人」这句话在本 App 里不存在。
+    -->
+    <plurals name="carddetail_shared_with">
+        <item quantity="one">Mit %1$d Person geteilt</item>
+        <item quantity="other">Mit %1$d Personen geteilt</item>
+    </plurals>
+
+    <!--
+      ⚠️ **TalkBack 念的那一句，不是给眼睛看的。** %1$s 是逐字符拆开的码值 ——
+      直接念一整串数字会被 TTS 读成一个天文数字，而「念给收银员听」正是
+      §10.2 要这个功能的全部理由。见 BarcodeValueText.kt。
+    -->
+    <string name="carddetail_value_talkback">Kartennummer: %1$s</string>
+
+    <!--
+      卡没了。⚠️ 这**不是**错误文案：owner 删卡、自己被移出成员、解除好友
+      导致共享消失，都是正常结局（§16 R12 要求用户能分清这不是 Bug）。
+      所以这里说的是「发生了什么」，不是「出错了」。
+    -->
+    <string name="carddetail_missing_title">Diese Karte ist nicht mehr da</string>
+    <string name="carddetail_missing_body">Sie wurde gelöscht oder nicht mehr mit dir geteilt. Deine anderen Karten sind nicht betroffen.</string>
+
+    <!-- 令牌在，但本机读不出「我是谁」。与钱包那一页同一个口径。 -->
+    <string name="carddetail_error_user_unknown_title">Karte konnte nicht geladen werden</string>
+    <string name="carddetail_error_user_unknown_body">Die Daten auf diesem Gerät lassen sich gerade nicht öffnen. Sobald du wieder online bist, wird die Karte geladen.</string>
+
+    <!-- ⚠️ §11.2：不以颜色作为唯一信息载体 —— 徽章必须带文字。 -->
+    <string name="carddetail_badge_pending">Wird synchronisiert</string>
+    <string name="carddetail_badge_failed">Synchronisierung fehlgeschlagen</string>
+
+    <!-- 全屏条码页。 -->
+    <string name="fullscreen_close">Schließen</string>
+    <string name="fullscreen_unsupported">Diese Codeart kann diese App-Version noch nicht anzeigen. Die Nummer unten funktioniert trotzdem.</string>
+    <string name="fullscreen_invalid">Dieser Code lässt sich nicht darstellen. Prüfe Nummer und Codeart der Karte.</string>
+    <string name="fullscreen_rotate_hint">Drehe das Gerät quer, damit der Code groß genug wird.</string>
+    <string name="fullscreen_too_small">Das Display ist zu klein für diesen Code. Nenne der Kassiererin oder dem Kassierer die Nummer unten.</string>
+
+</resources>

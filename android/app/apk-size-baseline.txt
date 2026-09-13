@@ -4,26 +4,41 @@
 # 涨了就在**同一个 PR 里**改这个数字，并在 PR 说明写清多出来的是什么 ——
 # 数字的变化出现在 diff 里，reviewer 必须看见它。
 #
-# 取值：T-151（2026-09-11），:app:assembleRelease 的 app-release-unsigned.apk，
-# R8 + resource shrinking 已开。上一个基线是 T-011 的 20,352,900（19.41 MiB）。
+# 取值：T-154（2026-09-13），:app:assembleRelease 的 app-release-unsigned.apk，
+# R8 + resource shrinking 已开。上一个基线是 T-151 的 21,385,916（20.40 MiB）。
 #
-# 这 20.4 MiB 里 18.5 MiB 仍然是四个 ABI 的 libsqlcipher.so（一个字节没变）：
+# 这 20.6 MiB 里 18.5 MiB 仍然是四个 ABI 的 libsqlcipher.so（一个字节没变）：
 #     x86_64      5,741,064
 #     arm64-v8a   5,182,792
 #     x86         4,918,720
 #     armeabi-v7a 3,555,336
 #
-# ⚠️ 这次涨的 +1,033,016 字节**全部**在 classes.dex 上（1.4 MB → 3.0 MB），
-# 而且不是「引了一个大库」：T-151 之前 :app 只有一个骨架页，于是 R8 把
-# Compose / Material3 / Navigation 几乎整个当死代码剥掉了，基线是虚低的。
-# 这一卡第一次真的用起了 Material3 的组件（TextField / AlertDialog / Scaffold /
-# TopAppBar）、navigation-compose 与 Hilt 的 ViewModel 装配，它们这才进包。
-# 新增的第三方依赖只有 androidx.appcompat（per-app locales，见 libs.versions.toml），
-# 它在 dex 里是几十 KB 量级，不是这次增长的主因。
+# ⚠️ 这一次抬基线抬的是 **+252,841 字节，而门槛是 512,000** —— 也就是说门禁
+# 本来不会红。仍然抬，是因为这个数里有**两卡**的增长：T-153 实测涨了
+# 149,581 字节却记下「基线不用抬」，于是余量被悄悄吃掉了三成。
+# 再让它漂一卡，下一个人会在一次完全正常的改动上莫名其妙地撞线，
+# 而 diff 里看不出是谁吃掉的。抬到实测值，余量重新是完整的 500 KB。
+#
+#   T-151 基线   21,385,916
+#   T-153 实测   21,535,497   (+149,581，未抬)
+#   T-154 实测   21,638,757   (+103,260 相对 T-153)
+#
+# ⚠️ **T-154 这 +103 KB 就是 ZXing 第一次真的进包。** T-152 交付渲染器时实测
+# release 只涨了 224 字节，因为还没有任何人调用它 —— Dagger 剪掉了未被请求的
+# 绑定，R8 随即把 `com.google.zxing.**` 整条链删了（那一卡的落地记录里写着
+# 「T-154 才是第一个真正付这笔账的卡」）。本卡的全屏条码页是那个消费者。
+#
+# 实测进包的是 **49 个 ZXing 类**（jar 里一共 289 个），见
+# app/build/outputs/mapping/release/mapping.txt —— writer + encoder 那一侧，
+# 外加 common/reedsolomon。reader 一个都没有：它只出现在 core:barcode 的
+# 单测源集里（ADR-0023 决策二）。T-152 事前估的是「writer + encoder 约 75 个」，
+# 实际 R8 还能再剪掉三分之一。
+#
+# 剩下的几十 KB 是 feature:carddetail 自己的代码与两份 strings.xml。
 #
 # ⚠️ 别拿这个数字去对上架体积：发布走 AAB，Play 按 ABI 分发，
 # 用户实际下载约 3.5–5.7 MB 的 native 库 + dex，不是 18.5 MB。
 # §9.1 的「APK ≤ 20 MB」预算说的是用户装到手机上的那一份，
 # 这份 universal APK 越过 20 MiB **不**意味着那条预算破了。
 
-21385916
+21638757

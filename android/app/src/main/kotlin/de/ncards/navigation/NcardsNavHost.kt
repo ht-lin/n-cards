@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -25,12 +26,15 @@ import de.ncards.AppUiState
 import de.ncards.AppViewModel
 import de.ncards.Destination
 import de.ncards.R
+import de.ncards.barcode.FullscreenBarcodeActivity
+import de.ncards.core.model.navigation.CardDetailRoute
 import de.ncards.core.model.navigation.OnboardingGraph
 import de.ncards.core.model.navigation.PrivacyRoute
 import de.ncards.core.model.navigation.TermsRoute
 import de.ncards.core.model.navigation.UsernameRoute
 import de.ncards.core.model.navigation.WalletRoute
 import de.ncards.data.auth.SignedOutReason
+import de.ncards.feature.carddetail.cardDetailDestination
 import de.ncards.feature.legal.PrivacyScreen
 import de.ncards.feature.legal.TermsScreen
 import de.ncards.feature.onboarding.onboardingGraph
@@ -87,6 +91,9 @@ private fun ReadyNavHost(
     navController: NavHostController,
     modifier: Modifier = Modifier,
 ) {
+    // 起全屏条码页那个 Activity 要一个 Context（见下面 cardDetailDestination）。
+    val context = LocalContext.current
+
     /** username 设定页**不可跳过、不可返回**（§3.8）：进去就把回退栈清空。 */
     fun openUsernameSetup() {
         navController.navigate(UsernameRoute) {
@@ -143,13 +150,23 @@ private fun ReadyNavHost(
         usernameDestination(onCompleted = ::openWallet)
 
         walletDestination(
-            // T-154 的卡详情页还不存在。留一个空实现而不是把点击整个关掉：
-            // 列表项的点击语义（涟漪、TalkBack 的「双击以激活」）现在就该是对的，
-            // 接上详情页时只改这一行。
-            onOpenCard = { },
+            // T-153 押的那个注兑现了：接上详情页只改了这一行。
+            onOpenCard = { cardId -> navController.navigate(CardDetailRoute(cardId)) },
             // T-155 / T-156 / T-157 都还不存在，所以空状态那个按钮本身是禁用的
             // （见 feature:wallet 的 WalletScreen）。
             onAddCard = { },
+        )
+
+        cardDetailDestination(
+            onBack = { navController.popBackStack() },
+            // ⚠️ 全屏条码页**不是一个路由**，它是一个独立 Activity（§10.2：
+            // 「便于设置窗口属性」）。所以这里是 startActivity 而不是 navigate ——
+            // feature:carddetail 对此一无所知，它只收一个 lambda。
+            onShowBarcode = { cardId ->
+                context.startActivity(FullscreenBarcodeActivity.intent(context, cardId))
+            },
+            // T-155（手动新增/编辑）还不存在，而详情页那个按钮本身是禁用的。
+            onEdit = { },
         )
 
         composable<TermsRoute> { TermsScreen(onBack = { navController.popBackStack() }) }

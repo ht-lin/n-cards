@@ -58,6 +58,27 @@ data object UsernameRoute
 @Serializable
 data object WalletRoute
 
+/**
+ * 卡详情（T-154）。
+ *
+ * 放进本文件的门槛是「另一个模块需要导航到它」——`feature:wallet` 的列表点击要到
+ * 这里，而两个 feature 之间禁止互相依赖，所以路由是**值**、由 `:app` 的 NavHost 接线。
+ *
+ * ⚠️ **全屏条码页不在这里，它不是一个路由。** §10.2 要求它是一个**独立 `Activity`**
+ * （「便于设置窗口属性」——亮度、常亮、`FLAG_SECURE` 都是窗口级的），
+ * 所以起它的是 `Intent` 而不是 `navController.navigate(…)`。
+ *
+ * @property cardId 卡的 UUIDv7。
+ *   ⚠️ **属性名就是参数 key**：navigation-compose 的类型安全路由把它存进
+ *   `NavBackStackEntry.arguments`，`SavedStateHandle` 再按这个名字种进 ViewModel。
+ *   全屏页的 Activity 用 `Intent.putExtra` 种同一个 key，于是**同一个 ViewModel
+ *   在两个宿主下都取得到 id**。改名会静默拆掉那一半，见 `CardDetailViewModel`。
+ */
+@Serializable
+data class CardDetailRoute(
+    val cardId: String,
+)
+
 /** AGB / Nutzungsbedingungen（§8.6：注册页链接）。 */
 @Serializable
 data object TermsRoute
