@@ -111,6 +111,109 @@ class DefaultCardRepositoryTest {
     }
 
     @Nested
+    @DisplayName("读单卡（T-154 的详情页与全屏条码页）")
+    inner class ReadingOne {
+        @Test
+        @DisplayName("钱包里有这张卡就发它")
+        fun emitsTheMatchingCard() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.emit(
+                    listOf(
+                        WalletRows.row(id = "c1", title = "REWE Payback"),
+                        WalletRows.row(id = "c2", title = "DM Payback"),
+                    ),
+                )
+
+                repository.observeCard("c2").test {
+                    assertEquals("DM Payback", awaitItem()?.title)
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        @DisplayName("不在我的钱包里就发 null——这不是错误")
+        fun emitsNullWhenTheCardIsNotMine() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.emit(listOf(WalletRows.row(id = "c1")))
+
+                repository.observeCard("fremde-karte").test {
+                    assertNull(awaitItem())
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        /**
+         * ⚠️ 详情页**正开着**的时候，一次下行同步可能把这张卡删掉
+         * （owner 删卡、我被移出成员、解除好友）。§16 R12 点名这是用户最容易
+         * 当成 Bug 的一类事件，所以它必须是一个能到达的状态，而不是一条空流。
+         */
+        @Test
+        @DisplayName("卡被墓碑删掉后发一次 null")
+        fun emitsNullWhenTheCardDisappears() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.emit(listOf(WalletRows.row(id = "c1")))
+
+                repository.observeCard("c1").test {
+                    assertEquals("c1", awaitItem()?.id)
+
+                    cards.emit(emptyList())
+
+                    assertNull(awaitItem())
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+
+        @Test
+        @DisplayName("还不知道我是谁时发 null，不去查库")
+        fun emitsNullWhenUserUnknown() =
+            runTest {
+                repository.observeCard("c1").test {
+                    assertNull(awaitItem())
+                    cancelAndIgnoreRemainingEvents()
+                }
+
+                assertNull(cards.lastUserId, "不该拿一个 null 用户去查库")
+            }
+
+        /**
+         * ⚠️ 这一条守的就是 `distinctUntilChanged()`。
+         *
+         * 上游是**钱包全表**：别的卡动一下（拖拽重排、置顶）它就发一次，
+         * 而本流的值一个字节都没变。去掉那个操作符的话，用户在列表里拖动
+         * 另一张卡时，正开着的详情页会跟着重组。
+         */
+        @Test
+        @DisplayName("别的卡变化时不重复发值")
+        fun doesNotReEmitWhenAnotherCardChanges() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.emit(
+                    listOf(
+                        WalletRows.row(id = "c1", title = "REWE Payback"),
+                        WalletRows.row(id = "c2", title = "DM Payback"),
+                    ),
+                )
+
+                repository.observeCard("c1").test {
+                    assertEquals("REWE Payback", awaitItem()?.title)
+
+                    cards.emit(
+                        listOf(
+                            WalletRows.row(id = "c1", title = "REWE Payback"),
+                            WalletRows.row(id = "c2", title = "DM Payback (umbenannt)"),
+                        ),
+                    )
+
+                    expectNoEvents()
+                    cancelAndIgnoreRemainingEvents()
+                }
+            }
+    }
+
+    @Nested
     @DisplayName("置顶")
     inner class Pinning {
         @Test

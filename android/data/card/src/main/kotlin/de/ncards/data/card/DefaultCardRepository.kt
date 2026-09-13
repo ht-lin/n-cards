@@ -8,6 +8,7 @@ import de.ncards.core.database.dao.SyncOutboxDao
 import de.ncards.core.model.card.Card
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -56,6 +57,22 @@ internal class DefaultCardRepository
                             .map { rows -> rows.map { it.toCard() } }
                     }
                 }.flowOn(dispatchers.io)
+
+        /**
+         * ⚠️ `distinctUntilChanged()` 在这里**不是**空操作 ——
+         * 与 [observeWallet] 上那句注释（`StateFlow` 自带去重）说的不是一回事。
+         *
+         * 上游是钱包全表：钱包里**任何一张别的卡**变一个字段，它都会发一次，
+         * 而本流的值一个字节都没变。不去重的话，用户拖动列表里另一张卡时，
+         * 正开着的详情页会跟着重组一次。
+         *
+         * 没有 `flowOn`：[observeWallet] 自己已经带了 `flowOn(dispatchers.io)`，
+         * 这里的 `firstOrNull` 是纯内存比较。
+         */
+        override fun observeCard(cardId: String): Flow<Card?> =
+            observeWallet()
+                .map { cards -> cards.firstOrNull { it.id == cardId } }
+                .distinctUntilChanged()
 
         override fun observeCurrentUserId(): Flow<String?> = currentUser.userId
 

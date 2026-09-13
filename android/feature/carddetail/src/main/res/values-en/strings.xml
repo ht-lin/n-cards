@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  英语。默认（德语）在 values/ —— 见那里的文件头（§11.1）。
+  每一条都逐字对齐，包括 plurals 的两格。
+-->
+<resources>
+
+    <string name="carddetail_title">Card</string>
+    <string name="carddetail_back">Back</string>
+
+    <string name="carddetail_show_barcode">Show barcode</string>
+    <string name="carddetail_edit">Edit card</string>
+
+    <string name="carddetail_value_label">Card number</string>
+    <string name="carddetail_format_label">Code type</string>
+    <string name="carddetail_note_label">Note</string>
+    <string name="carddetail_expires_label">Valid until</string>
+    <string name="carddetail_shared_label">Shared</string>
+
+    <plurals name="carddetail_shared_with">
+        <item quantity="one">Shared with %1$d person</item>
+        <item quantity="other">Shared with %1$d people</item>
+    </plurals>
+
+    <string name="carddetail_value_talkback">Card number: %1$s</string>
+
+    <string name="carddetail_missing_title">This card is gone</string>
+    <string name="carddetail_missing_body">It was deleted or is no longer shared with you. Your other cards are unaffected.</string>
+
+    <string name="carddetail_error_user_unknown_title">Card could not be loaded</string>
+    <string name="carddetail_error_user_unknown_body">The data on this device cannot be opened right now. The card will load once you are back online.</string>
+
+    <string name="carddetail_badge_pending">Syncing</string>
+    <string name="carddetail_badge_failed">Sync failed</string>
+
+    <string name="fullscreen_close">Close</string>
+    <string name="fullscreen_unsupported">This app version cannot display this code type yet. The number below still works.</string>
+    <string name="fullscreen_invalid">This code cannot be rendered. Check the card\'s number and code type.</string>
+    <string name="fullscreen_rotate_hint">Turn the device sideways so the code becomes large enough.</string>
+    <string name="fullscreen_too_small">The display is too small for this code. Read the number below out to the cashier.</string>
+
+</resources>
