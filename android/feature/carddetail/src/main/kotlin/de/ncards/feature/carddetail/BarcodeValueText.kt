@@ -36,6 +36,17 @@ import androidx.compose.ui.unit.sp
  * TTS 会把 `4012345678901` 念成「四万零一百二十三亿……」——收银员听不懂，
  * 用户也没法照着念。而「念给收银员听」正是这个功能存在的全部理由。
  * 所以朗读串由 [spokenBarcodeValue] 逐字符拆开，见那个函数的注释。
+ *
+ * ============================================================================
+ * ⚠️ 朗读串必须与调用方的 [modifier] 落在**同一个**语义节点上
+ * ============================================================================
+ * 它曾经挂在里面那个 [Text] 上，而调用方的 testTag 挂在 [SelectionContainer] 上 ——
+ * 两者都不合并子节点，于是那是**两个**互不相干的语义节点：按 tag 取到的是一个
+ * 只有 testTag、没有描述的容器。TalkBack 当时念得仍然对（描述在它落焦的那个
+ * 节点上），所以这个错在设备上看不出来，是 T-154 合入后 GMD 两档一起红了才现形。
+ *
+ * `mergeDescendants = true` 顺带把「容器 + 文本」两个可聚焦节点收成一个 ——
+ * 对一块「标签 + 一行码值」本来就该是一次停留，而不是两次。
  */
 @Composable
 internal fun BarcodeValueText(
@@ -46,7 +57,12 @@ internal fun BarcodeValueText(
 ) {
     val spoken = stringResource(R.string.carddetail_value_talkback, spokenBarcodeValue(barcodeValue))
 
-    SelectionContainer(modifier = modifier) {
+    SelectionContainer(
+        // ⚠️ 朗读串挂在**容器**上，而且必须 `mergeDescendants` —— 见下面那段注释。
+        // 覆盖整个节点的语义：TalkBack 念朗读串，而不是那一长串数字。
+        // 可见文本与选中复制不受影响。
+        modifier = modifier.semantics(mergeDescendants = true) { contentDescription = spoken },
+    ) {
         Text(
             text = barcodeValue,
             style =
@@ -58,9 +74,6 @@ internal fun BarcodeValueText(
                     textAlign = TextAlign.Center,
                 ),
             color = color,
-            // ⚠️ 覆盖整个节点的语义：TalkBack 念朗读串，而不是那一长串数字。
-            // 可见文本与选中复制不受影响。
-            modifier = Modifier.semantics { contentDescription = spoken },
         )
     }
 }

@@ -158,11 +158,35 @@ class FullscreenBarcodeScreenTest {
         val pixels = IntArray(image.width * image.height)
         image.readPixels(pixels)
 
-        assertEquals(
-            "全屏条码页在深色主题下也必须是纯白底",
-            Color.White.toArgb(),
-            pixels[pixels.size / 2],
-        )
+        fun pixelAt(
+            x: Int,
+            y: Int,
+        ) = pixels[y * image.width + x]
+
+        /*
+         * ⚠️ 取**四角**，不取 `pixels[pixels.size / 2]`。
+         *
+         * 那个下标不是图像中心：宽度为偶数时，是**高度的奇偶**决定它落在哪 ——
+         * 高度为偶得到 (0, h/2)（左边缘，必白），高度为奇得到 (w/2, h/2)（正中央，
+         * 而这个测试把渲染器打成 UnsupportedFormat，正中央画的就是那段居中的兜底文案）。
+         * 于是同一份代码在 api34（edge-to-edge，safeDrawing 吃掉 inset 后高度为偶）绿、
+         * 在 api26 红：Pixel 2 非 edge-to-edge，节点实测 **1080×1731**，奇数。
+         * 而红出来的值是 `#B4B4B4` —— 黑字抗锯齿的灰，与「底色是不是纯白」毫无关系。
+         *
+         * 四角在任何状态下都是静区本身：标题行有 16dp 横向内边距，兜底文案有
+         * 24dp，条码按位图自身尺寸居中画。
+         */
+        val corners =
+            mapOf(
+                "左上" to pixelAt(CORNER_INSET, CORNER_INSET),
+                "右上" to pixelAt(image.width - 1 - CORNER_INSET, CORNER_INSET),
+                "左下" to pixelAt(CORNER_INSET, image.height - 1 - CORNER_INSET),
+                "右下" to pixelAt(image.width - 1 - CORNER_INSET, image.height - 1 - CORNER_INSET),
+            )
+
+        corners.forEach { (corner, pixel) ->
+            assertEquals("全屏条码页在深色主题下也必须是纯白底（$corner）", Color.White.toArgb(), pixel)
+        }
     }
 
     /**
@@ -216,6 +240,12 @@ class FullscreenBarcodeScreenTest {
     private companion object {
         val PREVIEW_BOX = 400.dp
         const val WAIT_MILLIS = 5_000L
+
+        /**
+         * 四角各内缩两像素：躲开节点边界上那一列可能被相邻内容抗锯齿沾到的像素，
+         * 又远不到任何文字或条码能画进来的地方。
+         */
+        const val CORNER_INSET = 2
 
         /** 与 `BarcodeSurface` 里的 `ONE_D_MAX_HEIGHT_PX` 是同一个数。 */
         const val ONE_D_HEIGHT_CEILING = 600

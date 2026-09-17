@@ -621,6 +621,27 @@ feature:carddetail CardDetailScreen               详情页（NavHost 目的地�
 >
 > 全部修完后:62 个测试(31 × 两档)在 CI 上首次真正执行并全过,耗时约 23 分钟。
 > **在此之前 CI 上从未跑过任何一个仪器测试**,门禁一直是空的。
+- **本机（开发机）跑得了 GMD —— 别再把「本地没有模拟器」当前提写进落地记录。**
+  T-152 与 T-154 两卡都记着「本地环境无模拟器/无真机」，于是那两卡的仪器测试
+  **一次都没在本机跑过**，合入后 `main` 红了四天（T-154 的两条，见
+  [`docs/tasks/M1.md`](../docs/tasks/M1.md) 里「合入后的两条红」）。
+  而它们在本机一分钟内就能复现。查之前先按判据看一眼，别靠记忆：
+
+  ```bash
+  test -r /dev/kvm && test -w /dev/kvm && echo ok   # 判据一：KVM 能不能打开
+  ls ~/.android/avd/gradle-managed/                 # 判据二：AVD 在不在（不在会自己下，约 1–2 GB）
+  ./gradlew :feature:carddetail:api26DebugAndroidTest   # 单模块单档，约 1 分钟
+  ./gradlew ncardsGroupDebugAndroidTest                 # 全量两档
+  ```
+
+  ⚠️ **`id -nG | grep kvm` 查不到不等于没权限。** 这台机器上 `/dev/kvm` 是
+  `crw-rw----+ root:kvm`，用户**不在 kvm 组**，权限由 ACL 直授
+  （`getfacl` 里的 `user:<name>:rw-`）—— 那个 `+` 就是线索。CI 上是另一回事
+  （runner 真的没权限，靠 udev 规则放开，见上面第二个坑）。
+
+  ⚠️ **这条不推翻下面那句「『本地全绿』不能证明 CI 上可用」。** 本地跑证明的是
+  **测试本身**的对错（断言写错了、语义树挂错了节点），不是 CI 环境起不起得来
+  模拟器。两条同时成立，别用任何一条去免掉另一条。
 - **本地跑仪器测试挂掉之后，下一次会卡在设备锁上。** 报错说「4 are active」，
   而此刻一台模拟器都没在跑 —— 计数存在 `~/.android/avd/gradle-managed/`，
   构建被杀时不回滚。出路：
