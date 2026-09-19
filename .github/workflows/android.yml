@@ -54,8 +54,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # ⚠️ `packages` 必须显式写，别删回裸的 `uses:`。
+      #
+      # 不给的话吃 action 的默认值 `tools platform-tools`，而 `tools`（废弃已久的
+      # Android SDK Tools）已被 Google 从 SDK 仓库撤下：cmdline-tools 16.0 的
+      # sdkmanager 解析不到，打一句 `Warning: Failed to find package 'tools'` 然后
+      # exit 1，整个 job 在 17 秒内死在这一步（2026-09-19，#55 / #56 上的 main）。
+      #
+      # 这是外部变化而不是本仓库改坏的：2026-09-14 那趟同样的配置还是绿的，
+      # 所以「上次还好好的」不构成把它改回去的理由。
+      #
+      # 只留 platform-tools（GMD 要 adb）；platform / build-tools 由 AGP 按
+      # compileSdk 自己下，不需要在这里点名。
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # 这一步同时提供 Gradle 的构建缓存与配置缓存的落盘。
       # wrapper 的 distributionSha256Sum 已经钉在 gradle-wrapper.properties 里，

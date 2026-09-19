@@ -149,8 +149,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # ⚠️ `packages` 必须显式写 —— 不给就吃默认值 `tools`，而 `tools` 已下架。
+      # 完整理由见 android.yml 同名步骤上的注释。
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
