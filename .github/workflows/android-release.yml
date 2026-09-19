@@ -40,8 +40,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # ⚠️ `packages` 必须显式写 —— 不给就吃默认值 `tools`，而 `tools` 已下架。
+      # 完整理由见 android.yml 同名步骤上的注释。
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # ⚠️ gradle/actions/setup-gradle 默认**只在默认分支写缓存**。PR 上这一步只读，
       # 缓存由 main.yml 调用同样的 workflow 时喂进去。看到「PR 上缓存没更新」不是

@@ -46,7 +46,20 @@ internal fun BarcodeValueText(
 ) {
     val spoken = stringResource(R.string.carddetail_value_talkback, spokenBarcodeValue(barcodeValue))
 
-    SelectionContainer(modifier = modifier) {
+    SelectionContainer(
+        // ⚠️ 语义挂在**外层**，也就是调用方打 `testTag` 的那个节点，不是内层 `Text`。
+        //
+        // 挂在内层运行时是能用的（TalkBack 聚焦到那个 Text，念的就是朗读串），
+        // 但「码值节点」在测试里和在 a11y 树里就指的不是同一个节点了：
+        // `SelectionContainer` 与 `Text` 是两个 semantics 节点，前者又不合并子节点，
+        // 于是 `onNodeWithTag(...).fetchSemanticsNode()` 拿不到 `ContentDescription`。
+        // T-154 的 `valueCarriesASpokenContentDescription` 就是这么红的。
+        //
+        // `mergeDescendants` 把内层那串原样码值并进这一个节点，TalkBack 于是只念
+        // 朗读串一遍 —— 而不是「朗读串」加「一个天文数字」两遍。
+        // 可见文本与选中复制走的是指针事件，不受影响。
+        modifier = modifier.semantics(mergeDescendants = true) { contentDescription = spoken },
+    ) {
         Text(
             text = barcodeValue,
             style =
@@ -58,9 +71,6 @@ internal fun BarcodeValueText(
                     textAlign = TextAlign.Center,
                 ),
             color = color,
-            // ⚠️ 覆盖整个节点的语义：TalkBack 念朗读串，而不是那一长串数字。
-            // 可见文本与选中复制不受影响。
-            modifier = Modifier.semantics { contentDescription = spoken },
         )
     }
 }
