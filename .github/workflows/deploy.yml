@@ -7,23 +7,28 @@
 #   main.yml           每次 main 合入 → staging，全自动
 #   deploy-manual.yml  人工触发 → staging（排练）或 production（需 approval）
 #
-# **approval 不在这个文件里，而且现在它一半在 GitHub、一半在 deploy-manual.yml。**
+# **approval 不在这个文件里，而且它一半在 GitHub、一半在 deploy-manual.yml。**
 #
-# 原计划是全部交给 `production` Environment 的保护规则 —— 写在 YAML 里的「审批」
-# 可以被任何有权改 workflow 的人删掉，Environment 的规则不能。
-# 但 **Free 计划的私有仓库建不出 required reviewers**（API 直接回
-# "Please ensure the billing plan supports the required reviewers protection rule"），
-# 于是实际落成了这样：
+# 原则是：写在 YAML 里的「审批」可以被任何有权改 workflow 的人删掉，
+# Environment 的规则不能。所以两层并存，**不是**互相替代：
 #
-#   Deployment branches = 仅 main   ✅ 在 Environment 上（Free 可用，已配）
-#   Environment secrets（生产密钥）  ✅ 在 Environment 上（Free 可用）
-#   required reviewers              ❌ 计划不支持 → 降级为 deploy-manual.yml 里的
-#                                      输入确认串 + 「sha 必须是 main 的祖先」
+#   Deployment branches = 仅 main    ✅ Environment 上
+#   required reviewers = 本人         ✅ Environment 上（prevent_self_review 必须为
+#                                       false，单人仓否则永远无人可批；
+#                                       can_admins_bypass 必须为 false，否则等于没配）
+#   输入确认串 deploy-production      ✅ deploy-manual.yml 的 guard
+#   image_tag 必须是 main 的祖先      ✅ 同上（Environment 分支策略管不到 image_tag）
 #
-# 降级的代价记在 docs/adr/0010-rollback-image-tag-only.md 的未缓解风险里。
-# 账号升到 Pro（或仓库转 public）之后，把 required reviewers 配上、
-# 删掉 deploy-manual.yml 的确认串那一步即可 —— 祖先校验那步要留着，
-# Environment 的分支策略管不到 image_tag。
+# ⚠️ **这四条都不要删。**（ADR-0024 推翻了 ADR-0010 里「配上 required reviewers 之后
+# 删掉确认串」那半句。）required reviewers 与 Deployment branches **只在 public 仓
+# 或 Pro 计划下成立** —— 本仓是「项目期间转 public、完成后转回 private」，
+# 转回去那天这两条会**静默失效**：没有报错，保护只是消失。确认串与祖先校验是
+# 届时仅剩的两道，删了就真的零阻塞了。
+#
+# ⚠️ 生产密钥**目前不在 Environment secret 上** —— DEPLOY_SSH_KEY / SOPS_AGE_KEY /
+# DEPLOY_KNOWN_HOSTS 三个都是**仓库级** secret，staging 与 production 共用同一份。
+# 本行是事实记录，不是设计意图：收窄成 Environment secret 是待办
+# （本 job 已声明 environment，具备条件）。
 #
 # staging 的 Environment 没有任何保护规则，于是同一个 workflow 在两边
 # 一个零阻塞、一个要人明确表态。
