@@ -158,11 +158,32 @@ class FullscreenBarcodeScreenTest {
         val pixels = IntArray(image.width * image.height)
         image.readPixels(pixels)
 
-        assertEquals(
-            "全屏条码页在深色主题下也必须是纯白底",
-            Color.White.toArgb(),
-            pixels[pixels.size / 2],
-        )
+        /*
+         * ⚠️ 取**四个角**，不要取「正中间」。
+         *
+         * `pixels[pixels.size / 2]` 看着像中心点，其实 `width * height / 2` 落在哪儿
+         * 要看高度的奇偶：偶数时是 `(row = h/2, col = 0)`，最左边一列；奇数时才是
+         * `(row = (h-1)/2, col = w/2)`，正中央 —— 而正中央恰好是 `BarcodeFallback`
+         * 那行居中兜底文案的所在（本测试里 renderer 返回 `UnsupportedFormat`），
+         * 命中的是抗锯齿字形边缘的灰。T-154 就是这么在 api26（Pixel 2，内容高度为
+         * 奇数）红、在 api34（Pixel 6）绿的 —— 同一段产品代码，两个结果。
+         *
+         * 四个角在任何渲染结果下都落在那个 `Box` 的背景上（`background(BarcodeWhite)`
+         * 排在 `safeDrawingPadding()` 之前，背景铺满整个节点），而这条断言要守的
+         * 本来就是背景。有人把 `BarcodeWhite` 换成 `surface`（`#FDFCFF`）照样抓得住。
+         */
+        mapOf(
+            "左上" to 0,
+            "右上" to image.width - 1,
+            "左下" to (image.height - 1) * image.width,
+            "右下" to image.width * image.height - 1,
+        ).forEach { (corner, index) ->
+            assertEquals(
+                "全屏条码页在深色主题下也必须是纯白底（$corner）",
+                Color.White.toArgb(),
+                pixels[index],
+            )
+        }
     }
 
     /**
