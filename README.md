@@ -176,3 +176,5 @@ unseal key 离线保管、绝不进 CI）。此时部署会判定为 `vault_seal
 Vault unseal 方案（Q6）已决：人工 Shamir 3-of-5，auto-unseal 关闭，见 [ADR-0004](docs/adr/0004-manual-vault-unseal.md)（Status: Accepted）。
 
 其余开放问题见 §17.5 与 [`docs/tasks/README.md`](docs/tasks/README.md)。
+
+<!-- 公开可见性冒烟验证，不合并 -->
