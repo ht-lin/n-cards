@@ -25,6 +25,14 @@
 | `vault_sealed` | 部署成功，但 Vault 封印 | **不回滚**，去 unseal |
 | `broken` | 应用真的坏了 | 已自动回滚，往下看「回滚之后」 |
 
+判定是 `ok` 但 job 仍然红，还有第三种可能 —— 日志里找这一行：
+
+```
+::error title=VAULT_POLICY_DRIFT::Vault 里的 policy 与 infra/vault/policies/*.hcl 不一致
+```
+
+部署本身是成功的，**不会**回滚（与 `VAULT_SEALED` 同一条道理）。往下看「情形 D」。
+
 ---
 
 ## 情形 A：`VAULT_SEALED`（最常见，且不该回滚）
@@ -105,6 +113,49 @@ free -m                      # 内存被 OOM killer 收割过？dmesg -T | grep 
 | 少某个安全头 | `infra/caddy/Caddyfile` 被改动过，或 Caddy 没加载新配置 |
 | 有 `server:` / `x-powered-by:` | 同上；PHP 侧还有 `expose_php=Off` 一道 |
 | HTTP 没有 308 | `CADDY_SITE_ADDRESS` 带了 `https://` scheme —— 裸域名才有自动重定向 |
+
+`scripts/ci/smoke-otp.py`（T-114，走完一次真实 OTP 登录）红的话看这张：
+
+| 红在哪 | 多半是 |
+|---|---|
+| `otp/verify` **503** | **Vault 里的 `ncards-app` policy 漂移了**，见下面的情形 D。这是 2026-09-19 那次故障的原样 |
+| `otp/request` 503 | 比上面更靠前：AppRole 登录失败、transit key 不存在、或 Vault 仍封印。先看 [`vault-unseal.md`](vault-unseal.md) 的第 3 步 |
+| `otp/request` 429 | 同一地址 1 分钟只能打一次（§7.5）。两次部署挨太近，重跑即可，**不是故障** |
+| 等不到那封信 | 挑战建出来了，问题在发信侧：worker 起着吗 / 队列积压 / 死信。三条命令见 [`email-dns.md`](email-dns.md) §3 |
+| IMAP 登录失败 | 三个 `SMOKE_IMAP_*` secret 之一错了或过期了。这个套餐只有一个邮箱账号，别名没有独立凭据 |
+
+---
+
+## 情形 D：`vault-policy` 任务红了
+
+日志里是 ansible 的「Vault policy 对账结果」那一条，内容是一段 `diff`。
+
+**这一步在做什么**：每次部署把 `infra/vault/policies/*.hcl` 下发进 Vault，
+再逐字对账（T-114）。它修的是「仓库里的 policy 改了，但长期运行的环境上
+没有任何执行者把它送进去」—— 那个洞让 staging 在 2026-09-19 登录整个不通，
+而 `/health/ready` 与当时的冒烟测试全绿。
+
+先读 diff 的方向，两种情况处置完全不同：
+
+| diff 显示 | 含义 | 该做什么 |
+|---|---|---|
+| Vault 那边**少**了东西（`+` 行是仓库里的） | 正常的演进滞后 | 通常不会看到 —— `push` 已经自动下发并复原了。仍然红说明下发也失败了，看有没有 403 |
+| Vault 那边**多**了东西（`-` 行） | **有人手工 `vault policy write` 放宽过** | ⚠️ 先搞清楚是谁、为什么，再让流水线覆盖掉。这正是 `bootstrap.sh` 注释里担心的「一次临时放宽永久留在生产里」 |
+| 「跳过，这不是漂移」 | Vault 封印或未初始化 | 去 unseal（情形 A）。解封后下一次部署自己会对上 |
+| 「跳过」+ 说 `VAULT_POLICY_ROLE_ID` 是占位符 | 这台机器还没有 `ncards-policy` 凭据 | ⚠️ **跳过不是通过** —— 在补上之前仓库与 Vault 之间没有任何门禁。走 [`staging-first-boot.md`](staging-first-boot.md) 的「已经首启过的环境怎么补上」 |
+| 「当前身份没有写权限」 | 有人改了 `ncards-policy.hcl` **自己** | 按设计如此（能改自己的 policy 就等于没有 policy）。要一次 `generate-root` 仪式，同上那一节 |
+
+手工只对账一次（不写）：
+
+```bash
+cd infra/ansible
+ansible-playbook -i inventory/staging.yml deploy.yml \
+  --tags vault-policy -e ncards_vault_policy_mode=check
+```
+
+> ⚠️ **别把这一步关掉了事**（`-e ncards_vault_policy_enabled=false`）。
+> 关掉之后一切都会变绿，而 Vault 里的 policy 会重新开始静静地落后于仓库 ——
+> 下一次症状仍然是「某个端点 503，所有绿灯都是绿的」。
 
 ---
 

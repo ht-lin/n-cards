@@ -354,17 +354,34 @@ docker run --rm --network ncards_backing \
 # 期望：末尾打印 VAULT_ROLE_ID=… 与手工签发 secret_id 的命令
 ```
 
-签发一个 `secret_id`（脚本刻意不自动生成、不打印）：
+签发 `secret_id`（脚本刻意不自动生成、不打印）。
+**⚠️ 是两个 AppRole，两对值，一个都不能少**：
+
+| AppRole | 写进 secrets.sops.yaml 的 | 谁用 |
+|---|---|---|
+| `ncards-app` | `VAULT_ROLE_ID` / `VAULT_SECRET_ID` | 应用运行时（加解密、读 JWT 签名密钥） |
+| `ncards-policy` | `VAULT_POLICY_ROLE_ID` / `VAULT_POLICY_SECRET_ID` | 部署流水线下发并对账 policy（T-114）。**没有任何 transit** |
 
 ```bash
-docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
-  vault write -f -field=secret_id auth/approle/role/ncards-app/secret-id
-# 期望：一行裸的 secret_id。这就是 VAULT_SECRET_ID，只出现这一次
-
-# role_id 不是秘密，bootstrap 的输出滚没了就再读一次
-docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
-  vault read -field=role_id auth/approle/role/ncards-app/role-id
+for ROLE in ncards-app ncards-policy; do
+  echo "--- $ROLE"
+  docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+    vault read -field=role_id "auth/approle/role/$ROLE/role-id"
+  echo
+  docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+    vault write -f -field=secret_id "auth/approle/role/$ROLE/secret-id"
+  echo
+done
+# 期望：四行裸值。两个 secret_id 只出现这一次
+# role_id 不是秘密，滚没了随时能再读；secret_id 滚没了只能重新签发一枚
 ```
+
+> ⚠️ **别省掉 `ncards-policy` 那一对。** 少了它，policy 就只有今天被下发过一次，
+> 之后每一次 `infra/vault/policies/*.hcl` 的改动都到不了这台机器 —— 那正是
+> T-114 的故障：T-104 在 9-07 给 `ncards-app.hcl` 加的 JWT 路径始终没到
+> staging，`POST /auth/otp/verify` 503，而 `/health/ready` 与冒烟测试全绿。
+> 而且补起来很贵：root token 在本步末尾就吊销了，之后要补这一对得重新找
+> **3 位 unseal key 持有人**跑一次 `generate-root`（见本文末尾那一节）。
 
 > ⚠️ **`bootstrap.sh` 打印的那条 `curl` 不能直接贴到宿主机上。** 它里面的
 > `http://vault:8200` 是**容器视角**的地址 —— `vault` 这个名字只在 compose 的
@@ -372,7 +389,7 @@ docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
 > 没有 `ports:`。在宿主机 shell 里跑必然是 `Could not resolve host: vault`。
 > 上面的 `docker compose exec` 版本等价，且不需要另起容器。
 
-**两个值都拿到之后**才收尾 —— `revoke -self` 必须是本步最后一条：
+**四个值都拿到之后**才收尾 —— `revoke -self` 必须是本步最后一条：
 
 ```bash
 docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token revoke -self
@@ -410,7 +427,9 @@ printf '%s\n' "$SOPS_AGE_KEY" | age-keygen -y
 
 ```bash
 sops infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
-# 把 VAULT_ROLE_ID / VAULT_SECRET_ID 的占位符换成第 9 步拿到的真值，存盘即自动重新加密
+# 把**四个** VAULT_* 占位符换成第 9 步拿到的真值，存盘即自动重新加密：
+#   VAULT_ROLE_ID / VAULT_SECRET_ID          （ncards-app，应用运行时）
+#   VAULT_POLICY_ROLE_ID / VAULT_POLICY_SECRET_ID  （ncards-policy，policy 下发，T-114）
 
 unset SOPS_AGE_KEY
 head -3 infra/ansible/inventory/group_vars/ncards_staging/secrets.sops.yaml
@@ -430,19 +449,130 @@ cd infra/ansible
 ansible-playbook -i inventory/staging.yml deploy.yml \
   -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:main
 # 期望：判定 ok
+# 期望：中间那条 “Vault policy 对账结果” 打出 “✓ policy 与仓库一致”
 ```
 
-### 12. 之后全自动
+⚠️ 如果对账那一条说的是「跳过」，回第 10 步看 `VAULT_POLICY_*` 是不是还留着占位符 ——
+**跳过不是通过**，那意味着这台机器上仓库与 Vault 之间没有任何门禁。
+
+最后真机走一遍登录，这是唯一能证明「AppRole + policy + JWT 签名密钥」三者
+都通的判据（`/health/ready` 200 证明不了，它打的是免认证的 `sys/health`）：
+
+```bash
+# 在本机。收件地址用第 12 步那个运维专用别名
+SMOKE_OTP_EMAIL=smoke-staging@n-cards.de \
+SMOKE_IMAP_HOST=... SMOKE_IMAP_USER=... SMOKE_IMAP_PASSWORD=... \
+  scripts/ci/smoke-otp.py https://api.staging.n-cards.de
+# 期望：verify 200
+```
+
+### 12. 冒烟收件箱与 GitHub secret（人工，一次性）
+
+T-114 的 OTP 冒烟要**读信**。这个邮箱套餐只有一个账号 + 任意多个只收别名
+（[`email-dns.md`](email-dns.md) 的「一个账号 + 只收别名」），所以：
+
+1. 在 dogado 面板建一个**只收别名** `smoke-staging@n-cards.de`，转进
+   `no-reply@n-cards.de` 那个唯一的邮箱账号；
+2. 加三个 **repository secret**：`SMOKE_IMAP_HOST`（面板上抄，别凭印象写）、
+   `SMOKE_IMAP_USER`（就是主账号地址）、`SMOKE_IMAP_PASSWORD`；
+3. `main.yml` 里 `smoke_otp_email` 已经填了这个地址 —— 三个 secret 配齐之前
+   那一步会红。
+
+> ⚠️ 这条冒烟**有写副作用**：每次 `main` 合入发一封信，且首次 `verify` 成功会
+> 在 staging 库里**建一行 users**（§6.2：首次验证即注册）。合成数据，可接受。
+> 但 staging 与生产**共用同一个发信账号与配额**，所以别把它挪去压测。
+>
+> ⚠️ 生产（`deploy-manual.yml`）刻意留空不跑 —— 往生产塞一个合成账号
+> 要单独决定，不该跟着一次手工部署顺手发生。
+
+### 13. 之后全自动
 
 每次 `main` 合入，`.github/workflows/main.yml` 的 `deploy-staging` 自动跑同一条
-`deploy.yml`。无需人工介入。
+`deploy.yml`。无需人工介入 —— 其中包括**每次都把 `infra/vault/policies/*.hcl`
+下发进 Vault 并逐字对账**（T-114 的 `vault-policy` 任务）。
 
-### 13. 主机重启之后（人工，按需）
+### 14. 主机重启之后（人工，按需）
 
 Vault 会**重新封印**，`/health/ready` 变 503，这是期望行为
 （[ADR-0004](../adr/0004-manual-vault-unseal.md)）。
 按 [`vault-unseal.md`](vault-unseal.md) 找 3 个人 unseal 即可，
 **不需要**重新部署，也不需要重跑本 runbook。
+
+（封印期间的部署里，policy 对账那一步会打「跳过，这不是漂移」并放行 ——
+解封之后下一次部署自己会对上，同样不需要为它单独做什么。）
+
+---
+
+## 已经首启过的环境怎么补上（`generate-root` 仪式）
+
+**触发条件**：这台机器在 T-114 之前就首启过，于是
+`secrets.sops.yaml` 里没有 `VAULT_POLICY_*`，Vault 里也没有 `ncards-policy`
+这份 policy 和这个同名 AppRole。症状是每次部署打「跳过 policy 对账」。
+
+**为什么非要 root**：第 9 步末尾已经 `revoke -self` 了，而这里要做的两件事 ——
+写 `ncards-policy` 这份新 policy、建 `ncards-policy` 这个 AppRole —— 都在
+`ncards-app` 现有的权限之外（这台机器上还没有任何身份能写 policy，
+本来就是本卡要修的那个洞）。**这是最后一次需要 root 的 policy 变更**：
+之后每一次 `*.hcl` 的改动都由部署流水线自己下发（`ncards-policy.hcl`
+自己除外，见下面那条注）。
+
+**需要**：3 位 unseal key 持有人到场（[ADR-0004](../adr/0004-manual-vault-unseal.md) 的 3-of-5）。
+
+```bash
+ssh -p 2242 deploy@api.staging.n-cards.de
+cd /opt/ncards
+export COMPOSE_FILE=infra/compose/docker-compose.base.yml:infra/compose/docker-compose.prod.yml:infra/compose/docker-compose.staging.yml
+
+# 1) 生成一个一次性 root token（三条命令，见 vault-unseal.md）
+docker compose exec vault vault operator generate-root -init   # 记下 OTP 与 nonce
+docker compose exec vault vault operator generate-root         # 3 人各输一把 key + 同一个 nonce
+docker compose exec vault vault operator generate-root -decode=<encoded-token> -otp=<OTP>
+
+read -rs VAULT_TOKEN && export VAULT_TOKEN   # 粘上一条解出来的 token
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token lookup
+# 期望：policies 里有 root
+
+# 2) 重跑一次 bootstrap.sh。⚠️ 它是幂等的，**不会**碰任何已存在的密钥材料
+#    （transit key 与 JWT 签名密钥都是「已存在就跳过」）。
+#    这一趟做的就两件新事：写 ncards-policy 这份 policy、建同名 AppRole。
+#    （顺带把 ncards-app / ncards-ops 也对齐到仓库当前版本 —— 那正是积压的漂移。）
+docker run --rm --network ncards_backing \
+  -e VAULT_ADDR=http://vault:8200 \
+  -e VAULT_TOKEN="$VAULT_TOKEN" \
+  -v /opt/ncards/infra/vault:/vault/bootstrap:ro \
+  $(docker build -q /opt/ncards/infra/vault)
+# 期望：末尾打印 VAULT_ROLE_ID=… 与 VAULT_POLICY_ROLE_ID=… 两行
+
+# 3) 签发 ncards-policy 的 secret_id（ncards-app 那一对没变，不用动）
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault \
+  vault write -f -field=secret_id auth/approle/role/ncards-policy/secret-id
+
+# 4) ⚠️ 立刻吊销。顺序反了就得再来一次 generate-root
+docker compose exec -e VAULT_TOKEN="$VAULT_TOKEN" vault vault token revoke -self
+unset VAULT_TOKEN
+```
+
+回本机，按第 10 步把 `VAULT_POLICY_ROLE_ID` / `VAULT_POLICY_SECRET_ID` 写进
+`secrets.sops.yaml`，提交合入，然后：
+
+```bash
+cd infra/ansible
+ansible-playbook -i inventory/staging.yml deploy.yml \
+  -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:main --tags vault-policy
+# 期望：“✓ 已下发 ncards-app” + “✓ policy 与仓库一致”
+#       —— 第一次跑必然有东西要下发，那就是积压到今天的全部漂移
+```
+
+最后真机走一遍登录确认（`scripts/ci/smoke-otp.py`，见第 11 步）。
+
+> **生产同样适用。** 生产此刻还没开机，所以按本 runbook 从第 1 步走下来就会
+> 顺带把 `ncards-policy` 建好，用不上这一节。
+
+> ⚠️ **以后改 `ncards-policy.hcl` 本身，还要再走一次这个仪式。**
+> 那份 policy 对自己那条路径**只有 `read`** —— 有 `update` 就能把自己改写成
+> `path "*" { capabilities = [..., "sudo"] }`，那等于它不存在。
+> 代价是真实的、也是刻意的。改 `ncards-app.hcl` 与 `ncards-ops.hcl` 不受此限，
+> 部署会自己下发。
 
 ---
 

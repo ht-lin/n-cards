@@ -248,9 +248,10 @@ docker compose exec -T -e VAULT_TOKEN="$VT" vault vault write -field=hmac \
 
 unset VT
 #    期望：三行全 ✓
-#    某一行 ✗ 或报 403 → 是 **policy** 问题，不是 unseal 问题：
-#                        比对 infra/vault/policies/ncards-app.hcl 与
-#                        `vault policy read ncards-app`，见下方故障表那一行
+#    某一行 ✗ 或报 403 → 是 **policy** 问题，不是 unseal 问题。
+#                        别手工比对了，跑一次 T-114 的对账，它会打出逐字 diff：
+#                          ansible-playbook -i inventory/staging.yml deploy.yml \
+#                            --tags vault-policy -e ncards_vault_policy_mode=check
 ```
 
 > ⚠️ `role_id` / `secret_id` 写在命令行上会进 shell history。先
@@ -307,7 +308,7 @@ Vault 好了但应用侧的 token 是坏的。见下面「升级路径」。
 |---|---|
 | 凑不齐 3 把 key | **技术负责人**。这是一次可能的数据永久丢失事件，按事故处理 |
 | `vault_data` 卷丢失且有既有数据 | **技术负责人** + `restore-from-backup.md`（T-406）。**不要**自行 `operator init` |
-| `/health/ready` 是 200，但应用报 `Vault denied access to "..."` | 不是 unseal 问题。是 `secret_id` 失效或 policy 不对：重新生成 secret_id 并下发；仍不行则比对 `infra/vault/policies/ncards-app.hcl` 与 Vault 里的实际 policy（`vault policy read ncards-app`）。这类故障**探针看不见**，是 ADR-0004 记录的已知缺口 |
+| `/health/ready` 是 200，但应用报 `Vault denied access to "..."` | 不是 unseal 问题。**先跑一次 policy 对账**（T-114）：`ansible-playbook -i inventory/staging.yml deploy.yml --tags vault-policy`，它会打出 Vault 与 `infra/vault/policies/*.hcl` 的逐字 diff 并自动下发。2026-09-19 那次就是这条（policy 停在首启那版，缺 JWT 那条路径）。对账绿了还报这个，才去查 `secret_id` 是不是失效了，重新签发并下发。这类故障**探针看不见** —— `/health/ready` 打的是免认证的 `sys/health`，是 ADR-0004 记录的已知缺口 |
 | 应用报 `Vault is unreachable` 但 vault 容器健康 | 网络问题，不是 unseal。查 compose 的 `backing` 网络与 `VAULT_ADDR` |
 | 怀疑 unseal key 泄露 | **技术负责人**，按 `incident-response.md`（T-407）处理。需要 `operator rekey` + 全量 rewrap |
 
@@ -324,3 +325,13 @@ Vault 好了但应用侧的 token 是坏的。见下面「升级路径」。
   T-109 把 3a / 3b 补成了不依赖它的形式，但真正端到端的那一条仍然要靠人准备凭据。
   正解是一个专用的冒烟账号 + 它的长期刷新令牌存进 Vault 的 `secret/` 下，
   归 T-406 与 §9.2 的负载测试一起做（那边本来也需要同一个东西）。
+
+  > T-114 把这件事推进了一半：`scripts/ci/smoke-otp.py` 能**自己挣到**一枚
+  > access token（请求码 → 读信 → 验码），不再需要人预先准备凭据。
+  > ```bash
+  > SMOKE_OTP_EMAIL=smoke-staging@n-cards.de \
+  > SMOKE_IMAP_HOST=... SMOKE_IMAP_USER=... SMOKE_IMAP_PASSWORD=... \
+  >   scripts/ci/smoke-otp.py https://api.staging.n-cards.de
+  > ```
+  > 仍然欠的是 3c 的**另一半**：那个账号名下得有至少一张卡，
+  > 而空钱包的 200 是假绿（`decryptAll([])` 不打 Vault）。那一步归 T-406。

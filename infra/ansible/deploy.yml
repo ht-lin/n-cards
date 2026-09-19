@@ -175,3 +175,28 @@
               ⚠️ **回滚之后仍然不健康** —— 问题不在这次的镜像。
               立刻按 docs/runbooks/deploy-and-rollback.md 的「回滚也没救回来」一节处置。
               {% endif %}
+
+    # ------------------------------------------------------------------
+    # Vault policy 判定的处置（T-114）。
+    # ------------------------------------------------------------------
+    # ⚠️ 与紧邻的 VAULT_SEALED 同一条道理：**漂移不回滚**。
+    # policy 跟这次的镜像没有任何关系，回滚只会把一个好镜像换成旧的、
+    # 然后 policy 照样是漂的。所以判定留在角色里，处置放在这里 ——
+    # 这也是它没写在 vault_policy.yml 里的原因（那里 fail 会掉进上面的 rescue，
+    # 而 rescue 的下一步就是回滚）。
+    #
+    # ⚠️ `tags: always` 是必须的：runbook 里那条
+    # `--tags vault-policy` 会把没有 tag 的 play 级任务全滤掉，于是漂移了也绿。
+    # 带 always 之后，无论怎么过滤这条判定都在。
+    # `default('ok')` 是给 `--tags health` 那种没跑过对账的场景兜底。
+    - name: 判定 policy 漂移 —— 不回滚，红着等人处置
+      ansible.builtin.fail:
+        msg: |
+          ::error title=VAULT_POLICY_DRIFT::Vault 里的 policy 与 infra/vault/policies/*.hcl 不一致，
+          且自动下发没能修好它。**这不是部署故障，回滚无用。**
+          具体差在哪一条路径，看上面那条「Vault policy 对账结果」打出的 diff。
+          处置见 docs/runbooks/deploy-and-rollback.md 的「情形 D」。
+          最常见的两种：① 有人手工 `vault policy write` 放宽过（diff 里 Vault 那边多东西）；
+          ② 改的是 ncards-policy.hcl 自己（那份按设计部署身份改不了，要一次 generate-root）。
+      when: ncards_vault_policy_verdict | default('ok') == 'drift'
+      tags: [always]

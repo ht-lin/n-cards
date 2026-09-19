@@ -30,7 +30,8 @@ use Symfony\Component\HttpClient\HttpClient;
  * （见 infra/vault/policies/ncards-app.hcl 顶部），所以必须有用例断言
  * 那几条「显式不授予」确实被拒。
  *
- * 这是本仓库里唯一一处验证 policy 文件真实效果的地方 ——
+ * 这是本仓库里**仅有的两处**验证 policy 文件真实效果的地方之一（另一处是
+ * {@see PolicyAppRoleTest}，守 T-114 那个能改写 policy 的部署身份）——
  * 别的所有测试都用 dev 模式的 root token 跑，policy 对它们完全不起作用。
  *
  * ⚠️ 本用例走的也是**真实的 AppRole 登录路径**（AppRoleTokenProvider），

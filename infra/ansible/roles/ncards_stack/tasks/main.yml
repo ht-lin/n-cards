@@ -20,6 +20,15 @@
   ansible.builtin.import_tasks: env.yml
   tags: [env]
 
+# T-114。排在 sync 之后（policies/*.hcl 这时才在主机上）、deploy 之前
+# （新镜像起来时 policy 就该是对的）。单独跑：
+#
+#     ansible-playbook deploy.yml --tags vault-policy
+#
+- name: vault-policy
+  ansible.builtin.import_tasks: vault_policy.yml
+  tags: [vault-policy]
+
 - name: snapshot
   ansible.builtin.import_tasks: snapshot.yml
   tags: [snapshot]

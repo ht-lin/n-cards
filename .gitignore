@@ -59,6 +59,12 @@ android/.kotlin/
 *.keystore
 *.jks
 
+# --- Python ---
+# 仓库里只有一个 Python 脚本（scripts/ci/smoke-otp.py，T-114），但
+# `python3 -m py_compile` 或任何一次 import 都会在它旁边留下 __pycache__/。
+__pycache__/
+*.py[cod]
+
 # --- IDE ---
 .idea/
 *.iml

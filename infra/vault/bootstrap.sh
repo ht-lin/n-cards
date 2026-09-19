@@ -1,15 +1,10 @@
 #!/usr/bin/env sh
 #
-# Vault 初始化：Transit 引擎、三把 key、JWT 的 KV、两份 policy、AppRole（T-005 / §5.3 / §17.4）。
+# Vault 初始化：Transit 引擎、三把 key、JWT 的 KV、三份 policy、两个 AppRole（T-005 / T-114 / §5.3 / §17.4）。
 #
-# ============================================================================
-# 为什么用 curl + HTTP API 而不是 vault CLI
-# ============================================================================
-# 同一个脚本有两个调用点，而它们能用的工具不一样：
-#   - GitHub Actions runner：Vault 是 service 容器，runner 上**没有** vault 二进制
-#   - compose 的 vault-init 一次性容器：有 curl，没必要为了 CLI 换个大镜像
-# HTTP API 是两边都有的最大公约数。顺带地，CLI 的输出格式会随版本变，
-# 而 API 的响应结构是有版本承诺的。
+# HTTP 助手（api / status_of / body_of / require / wait_for_vault）与
+# 「为什么用 curl + HTTP API 而不是 vault CLI」的论证都在 _vault_api.sh 里 ——
+# T-114 的 policy-sync.sh 要用同一套，抄第二份必然漂。
 #
 # 依赖：curl、jq、openssl。缺任何一个都在开头就报错退出（见下方 require）。
 #
@@ -37,17 +32,14 @@
 set -eu
 
 VAULT_ADDR="${VAULT_ADDR:-http://127.0.0.1:8200}"
-POLICY_DIR="$(cd "$(dirname "$0")" && pwd)/policies"
+VAULT_DIR="$(cd "$(dirname "$0")" && pwd)"
+POLICY_DIR="${VAULT_DIR}/policies"
 
 # JWT 密钥在 KV 里的位置。T-104 的 TokenIssuer 从这里读。
 JWT_KV_PATH="ncards/jwt/current"
 
-require() {
-    command -v "$1" >/dev/null 2>&1 || {
-        echo "✗ 缺少依赖：$1" >&2
-        exit 1
-    }
-}
+# shellcheck source=infra/vault/_vault_api.sh
+. "${VAULT_DIR}/_vault_api.sh"
 
 require curl
 require jq
@@ -57,32 +49,6 @@ if [ -z "${VAULT_TOKEN:-}" ]; then
     echo "✗ 需要 VAULT_TOKEN（root 或具备 sys/mounts、sys/policy、sys/auth 权限的 token）。" >&2
     exit 1
 fi
-
-# ----------------------------------------------------------------------------
-# HTTP 助手
-# ----------------------------------------------------------------------------
-# 把状态码与响应体一起拿回来：Vault 用状态码表达「成功/不存在/被拒」，
-# 而响应体里才有错误详情，两个都要。状态码放最后一行，前面全是 body。
-api() {
-    _method="$1"
-    _path="$2"
-    _data="${3:-}"
-
-    if [ -n "$_data" ]; then
-        curl -sS -w '\n%{http_code}' -X "$_method" \
-            -H "X-Vault-Token: ${VAULT_TOKEN}" \
-            -H 'Content-Type: application/json' \
-            -d "$_data" \
-            "${VAULT_ADDR}/v1/${_path}"
-    else
-        curl -sS -w '\n%{http_code}' -X "$_method" \
-            -H "X-Vault-Token: ${VAULT_TOKEN}" \
-            "${VAULT_ADDR}/v1/${_path}"
-    fi
-}
-
-status_of() { printf '%s' "$1" | tail -n 1; }
-body_of() { printf '%s' "$1" | sed '$d'; }
 
 # 发一个必须成功的写请求；非 2xx 就带着 Vault 的错误详情退出。
 must_write() {
@@ -164,35 +130,19 @@ mounted() {
 # ----------------------------------------------------------------------------
 # 0. 等 Vault 就绪
 # ----------------------------------------------------------------------------
-# compose 的 depends_on: service_healthy 已经等过一轮，但 CI 的 service 容器
-# healthcheck 语义略有不同，而「刚起来还没解封」会让下面每一步都莫名其妙地失败。
-# 在这里等，报错信息才说得清是什么状况。
-echo "→ 等待 Vault 就绪（${VAULT_ADDR}）…"
-_attempt=0
-while [ "$_attempt" -lt 30 ]; do
-    # sys/health 免认证。200 = 已初始化且已解封。
-    _health="$(curl -sS -o /dev/null -w '%{http_code}' "${VAULT_ADDR}/v1/sys/health?standbyok=true" 2>/dev/null || echo 000)"
-
-    case "$_health" in
-        200) break ;;
-        501)
-            echo "✗ Vault 未初始化。生产请先按 docs/runbooks/vault-unseal.md 初始化并 unseal。" >&2
-            exit 1
-            ;;
-        503)
-            echo "✗ Vault 处于封印状态。请先人工 unseal（docs/runbooks/vault-unseal.md）。" >&2
-            exit 1
-            ;;
-    esac
-
-    _attempt=$((_attempt + 1))
-    sleep 1
-done
-
-if [ "$_attempt" -ge 30 ]; then
-    echo "✗ 等待 Vault 就绪超时（30s），最后一次 sys/health 返回 ${_health}。" >&2
-    exit 1
-fi
+# 封印与未初始化对**本脚本**都是致命的：没解封就一步都做不了。
+# （policy-sync.sh 对同样两档的处置相反 —— 它跳过，见那里的注释。）
+wait_for_vault || case "$?" in
+    2)
+        echo "✗ Vault 处于封印状态。请先人工 unseal（docs/runbooks/vault-unseal.md）。" >&2
+        exit 1
+        ;;
+    3)
+        echo "✗ Vault 未初始化。生产请先按 docs/runbooks/vault-unseal.md 初始化并 unseal。" >&2
+        exit 1
+        ;;
+    *) exit 1 ;;
+esac
 
 # ----------------------------------------------------------------------------
 # 1. Transit 引擎
@@ -310,6 +260,13 @@ write_policy() {
 
 write_policy ncards-app
 write_policy ncards-ops
+write_policy ncards-policy
+
+# ⚠️ T-114：这一段**只在首启与 generate-root 仪式上跑得到**，而 `*.hcl` 会随
+# 每张卡演进。长期运行的环境上把 Vault 对齐到这三个文件的执行者是
+# policy-sync.sh（由 ansible 的 vault-policy 任务每次部署调用），不是本脚本。
+# 少了那个执行者的后果就是 T-114 的缘起：staging 的 ncards-app 停在 9-04 那版，
+# 而 T-104 在 9-07 给它加了 JWT 那条路径，于是登录整个不通而所有绿灯都是绿的。
 
 # ----------------------------------------------------------------------------
 # 5. AppRole（§3.3 / §7.4）
@@ -336,6 +293,25 @@ must_write '配置 AppRole ncards-app' 'auth/approle/role/ncards-app' \
     '{"token_policies":["ncards-app"],"token_ttl":"1h","token_max_ttl":"24h","secret_id_ttl":0,"secret_id_num_uses":0,"token_no_default_policy":true}'
 echo "✓ 已配置 AppRole ncards-app（token_ttl=1h / max=24h）。"
 
+# T-114：policy 下发与对账的身份。**不是**应用用的，也不进 app/worker 的环境 ——
+# 它由 ansible 的 vault-policy 任务在一个跑完就退出的容器里用一次（见
+# infra/compose/docker-compose.base.yml 的 vault-policy 服务）。
+#
+# ⚠️ 绑的是 `ncards-policy` 而**不是** `ncards-ops`，别图省事合并。
+# ncards-ops 持有 transit/keys/+/rotate，而那个通配符覆盖到 ncards-hmac ——
+# 轮换它会让全部 email_hash 查找失效且不可补救。这份凭据**每次部署都要用**、
+# 长期躺在 sops 与部署主机的进程环境里，不该连带握着那条命令。
+# 完整论证在 policies/ncards-policy.hcl 抬头。
+#
+# token_ttl=10m / max=30m：这个身份只服务一条几秒钟的命令。而且
+# ncards-policy.hcl **刻意没有** auth/token/renew-self —— 续不了期的短 token
+# 是这条路径上最省事的一道时间限制，泄露一枚也只值 10 分钟。
+#
+# ⚠️ 与 ncards-app 一样 secret_id_ttl=0（不过期），理由同上面那段（ADR-0004）。
+must_write '配置 AppRole ncards-policy' 'auth/approle/role/ncards-policy' \
+    '{"token_policies":["ncards-policy"],"token_ttl":"10m","token_max_ttl":"30m","secret_id_ttl":0,"secret_id_num_uses":0,"token_no_default_policy":true}'
+echo "✓ 已配置 AppRole ncards-policy（token_ttl=10m / max=30m，T-114 的 policy 下发身份）。"
+
 # ----------------------------------------------------------------------------
 # 6. 输出 role_id
 # ----------------------------------------------------------------------------
@@ -347,23 +323,39 @@ echo "✓ 已配置 AppRole ncards-app（token_ttl=1h / max=24h）。"
 # ncards_backing 网络里解析得出来（那个网络 internal: true，vault 也没有 ports:）。
 # 打印一条带 http://vault:8200 的 curl，读的人几乎一定是在宿主机 shell 里粘贴它，
 # 于是撞上 `Could not resolve host: vault` —— 一条跟权限、跟 Vault 都无关的错。
-_role_response="$(api GET 'auth/approle/role/ncards-app/role-id')"
-_role_id="$(body_of "$_role_response" | jq -r '.data.role_id // empty')"
+print_role_id() {
+    _role="$1"
+    _var="$2"
 
-if [ -n "$_role_id" ]; then
+    _role_response="$(api GET "auth/approle/role/${_role}/role-id")"
+    _role_id="$(body_of "$_role_response" | jq -r '.data.role_id // empty')"
+
+    [ -n "$_role_id" ] || return 0
+
     echo
-    echo "  VAULT_ROLE_ID=${_role_id}"
+    echo "  ${_var}=${_role_id}"
     echo
-    echo "  需要 secret_id 时（⚠️ 是凭据，绝不入库、绝不进 CI 日志）。"
-    echo "  在宿主机 /opt/ncards 下，COMPOSE_FILE 已导出、VAULT_TOKEN 还在环境里："
+    echo "  对应的 secret_id（⚠️ 是凭据，绝不入库、绝不进 CI 日志）："
     echo
     echo "    docker compose exec -e VAULT_TOKEN=\"\$VAULT_TOKEN\" vault \\"
-    echo "      vault write -f -field=secret_id auth/approle/role/ncards-app/secret-id"
-    echo
-    echo "  拿到之后再吊销 root token（顺序反了就得走 operator generate-root）："
-    echo
-    echo "    docker compose exec -e VAULT_TOKEN=\"\$VAULT_TOKEN\" vault vault token revoke -self"
-fi
+    echo "      vault write -f -field=secret_id auth/approle/role/${_role}/secret-id"
+}
+
+echo
+echo "  在宿主机 /opt/ncards 下，COMPOSE_FILE 已导出、VAULT_TOKEN 还在环境里，"
+echo "  下面两对值都要拿，都写进 group_vars/<环境>/secrets.sops.yaml："
+
+print_role_id ncards-app VAULT_ROLE_ID
+# ⚠️ T-114：policy 这一对**不进 .env**（env.j2 里没有它们）。.env 是 app 与
+# worker 容器的环境来源，把「改写 ncards-app policy」的能力放进那两个容器的
+# `docker inspect` 正好抵消掉 ncards-app.hcl 整份清单的意义。
+# 它只被 ansible 的 vault-policy 任务从进程环境传进一个一次性容器。
+print_role_id ncards-policy VAULT_POLICY_ROLE_ID
+
+echo
+echo "  两对都拿到之后再吊销 root token（顺序反了就得走 operator generate-root）："
+echo
+echo "    docker compose exec -e VAULT_TOKEN=\"\$VAULT_TOKEN\" vault vault token revoke -self"
 
 echo
 echo "✓ Vault 初始化完成。"
