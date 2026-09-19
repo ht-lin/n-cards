@@ -9,7 +9,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -47,9 +49,34 @@ internal fun WalletScreen(
     onAddCard: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val addCardDescription = stringResource(R.string.wallet_add_card)
+
     Scaffold(
         modifier = modifier,
         topBar = { TopAppBar(title = { Text(text = stringResource(R.string.wallet_title)) }) },
+        floatingActionButton = {
+            // ⚠️ 没有它，录入功能只能用一次：空状态那个按钮在**有卡之后就消失了**，
+            // 于是用户加完第一张卡就再也找不到入口。T-155 的任务卡没写这一条，
+            // 但 J1（引导加第一张）与 J4（地铁上临时加一张）都需要它。
+            //
+            // 与空状态那个按钮共用同一个 onAddCard —— 两个入口、一个去处。
+            // 加第二个回调只会让 :app 那边要接两次同样的 navigate。
+            if (state is WalletUiState.Content) {
+                FloatingActionButton(
+                    onClick = onAddCard,
+                    modifier = Modifier.testTag(WALLET_ADD_FAB_TAG),
+                ) {
+                    // 仓库没有图标库（SyncStateBadge 与 ColorPicker 的先例都是字形）。
+                    // contentDescription 挂在 FAB 自己身上 —— 一个只有「+」的
+                    // 无障碍标签会被读成「加号」，那不告诉用户会发生什么。
+                    Text(
+                        text = ADD_GLYPH,
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.semantics { contentDescription = addCardDescription },
+                    )
+                }
+            }
+        },
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
             // 搜索框只在「有卡」时出现 —— 一张卡都没有的时候给一个搜索框
@@ -74,10 +101,8 @@ internal fun WalletScreen(
                         action =
                             EmptyStateAction(
                                 label = stringResource(R.string.wallet_add_first_card),
-                                // ⚠️ 录入的三条路（T-155 手输 / T-156 扫码 /
-                                // T-157 图片）都还不存在。按钮画出来但按不动，
-                                // 比一个空白屏诚实 —— 它告诉用户这个 App 是干什么的。
-                                enabled = false,
+                                // T-155 起它真的能按了（手输录入）。T-156 / T-157
+                                // 会在表单里补上扫码与图片两条来源，入口不变。
                                 onClick = onAddCard,
                             ),
                         modifier = Modifier.testTag(WALLET_EMPTY_TAG),
@@ -221,6 +246,10 @@ private const val DRAGGING_ALPHA = 0.85f
 
 internal const val WALLET_LIST_TAG = "wallet_list"
 internal const val WALLET_SEARCH_TAG = "wallet_search_field"
+internal const val WALLET_ADD_FAB_TAG = "wallet_add_fab"
 internal const val WALLET_EMPTY_TAG = "wallet_empty"
 internal const val WALLET_NO_RESULTS_TAG = "wallet_no_results"
 internal const val WALLET_ERROR_TAG = "wallet_error"
+
+/** U+FF0B FULLWIDTH PLUS SIGN —— 比 ASCII 的 `+` 在 FAB 里视觉重心更正。 */
+private const val ADD_GLYPH = "\uFF0B"

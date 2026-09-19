@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  English. ⚠️ German lives in values/ (it is the DEFAULT locale, §11.1) —
+  do not create values-de/, checkGermanIsDefaultLocale will reject it.
+
+  Every key in values/strings.xml must appear here too: MissingTranslation
+  is an error in this project.
+-->
+<resources>
+
+    <string name="cardedit_title_create">Add card</string>
+    <string name="cardedit_title_edit">Edit card</string>
+    <string name="cardedit_back">Back</string>
+    <string name="cardedit_save">Save</string>
+
+    <string name="cardedit_label_title">Name</string>
+    <string name="cardedit_label_merchant">Merchant (optional)</string>
+    <string name="cardedit_label_color">Colour</string>
+    <string name="cardedit_label_format">Barcode type</string>
+    <string name="cardedit_label_value">Barcode number</string>
+    <string name="cardedit_label_note">Note (optional)</string>
+    <string name="cardedit_label_expires">Valid until (optional)</string>
+
+    <string name="cardedit_expires_none">No expiry date</string>
+    <string name="cardedit_expires_clear">Remove expiry date</string>
+    <string name="cardedit_expires_pick">Pick a date</string>
+    <string name="cardedit_expires_confirm">Apply</string>
+    <string name="cardedit_expires_dismiss">Cancel</string>
+
+    <string name="cardedit_problem_blank">This field cannot be empty</string>
+    <string name="cardedit_problem_too_long_characters">At most %1$d characters</string>
+    <string name="cardedit_problem_too_long_bytes">At most %1$d bytes</string>
+
+    <string name="cardedit_payload_empty">Please enter the barcode number</string>
+    <string name="cardedit_payload_unsupported_format">This barcode type is not supported</string>
+    <string name="cardedit_payload_illegal_characters">“%1$s” is not allowed for this barcode type</string>
+    <string name="cardedit_payload_wrong_length">This barcode type needs %1$s digits</string>
+    <string name="cardedit_payload_too_long">At most %1$d characters for this barcode type</string>
+    <string name="cardedit_payload_odd_length">This barcode type needs an even number of digits</string>
+    <string name="cardedit_payload_checksum">The check digit does not match</string>
+    <string name="cardedit_payload_not_encodable">This content does not fit into this barcode type</string>
+    <string name="cardedit_length_or">%1$d or %2$d</string>
+
+    <string name="cardedit_missing_title">Card no longer available</string>
+    <string name="cardedit_missing_body">This card is no longer in your wallet. It may have been deleted or is no longer shared with you.</string>
+    <string name="cardedit_error_user_unknown_title">Data not readable</string>
+    <string name="cardedit_error_user_unknown_body">Your card data cannot be read on this device right now. Everything will be back once there is a connection again.</string>
+
+    <string name="cardedit_color_blue">Blue</string>
+    <string name="cardedit_color_indigo">Indigo</string>
+    <string name="cardedit_color_teal">Teal</string>
+    <string name="cardedit_color_green">Green</string>
+    <string name="cardedit_color_olive">Olive</string>
+    <string name="cardedit_color_orange">Orange</string>
+    <string name="cardedit_color_red">Red</string>
+    <string name="cardedit_color_pink">Pink</string>
+    <string name="cardedit_color_purple">Purple</string>
+    <string name="cardedit_color_brown">Brown</string>
+    <string name="cardedit_color_slate">Slate</string>
+    <string name="cardedit_color_selected">%1$s, selected</string>
+
+</resources>

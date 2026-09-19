@@ -90,24 +90,53 @@ internal class FakeCardDao : CardDao {
         return wallet.value
     }
 
+    /**
+     * 裸 `cards` 行。T-155 起真的有内容了 —— 建卡写进这里，改卡从这里读回来。
+     *
+     * ⚠️ 它与 [wallet] 是**两份独立的数据**，替身不替你把它们串起来。
+     * 那是刻意的：串起来就等于在替身里重写一遍那段带两个 JOIN 的 SQL，
+     * 而本文件头上那条注释明令不这么做。测试要验「建完卡钱包里就有它」时，
+     * 请对着真库（`core:database` 的仪器测试），不是这里。
+     */
+    private val rows = mutableMapOf<String, CardEntity>()
+
+    /** 每一次 `insert` 的实参，按调用顺序。建卡的断言全靠它。 */
+    val inserted = mutableListOf<CardEntity>()
+
+    /** 每一次 `upsert` 的实参，按调用顺序。改卡的断言全靠它。 */
+    val upserted = mutableListOf<CardEntity>()
+
+    fun seed(card: CardEntity) {
+        rows[card.id] = card
+    }
+
     /*
-     * ⚠️ 归属从 T-154 改到了 T-155，这是修正不是搁置。
+     * ⚠️ 归属从 T-154 改到了 T-155，而本卡就是那个 T-155。
      *
      * T-154 的详情页需要 `role` / `is_pinned` / `sort_order` 与派生的 `sync_state` ——
      * 那是 `WalletCard` 投影，这两个方法给的是**裸** `CardEntity`，够不着。
      * 它落地时走的是 `CardRepository.observeCard`（建在 `observeWallet` 之上），
      * 所以这两个 DAO 方法一次都没被调用。
      *
-     * 真正需要它们的是 T-155：编辑表单要按 id 取一张卡，而 `PATCH` 的
-     * `If-Match` 要 `revision` —— 那两件事都不需要成员投影。
+     * 真正需要它们的是编辑表单：按 id 取一张卡算出「变了哪些字段」，
+     * 而 `revision` 要原样留给 T-251 的 `If-Match`。两件事都不需要成员投影。
      */
-    override fun observeCard(cardId: String): Flow<CardEntity?> = throw NotImplementedError("T-155")
+    override fun observeCard(cardId: String): Flow<CardEntity?> = MutableStateFlow(rows[cardId])
 
-    override suspend fun findCard(cardId: String): CardEntity? = throw NotImplementedError("T-155")
+    override suspend fun findCard(cardId: String): CardEntity? = rows[cardId]
 
-    override suspend fun upsert(cards: List<CardEntity>) = throw NotImplementedError("T-250")
+    override suspend fun upsert(cards: List<CardEntity>) {
+        upserted += cards
+        cards.forEach { rows[it.id] = it }
+    }
 
-    override suspend fun insert(card: CardEntity) = throw NotImplementedError("T-155")
+    override suspend fun insert(card: CardEntity) {
+        // 真 DAO 是 @Insert(onConflict = ABORT)。替身照做 —— 客户端生成的 UUIDv7
+        // 撞车时该是响亮的失败，不是静默覆盖掉另一张卡。
+        require(card.id !in rows) { "id 撞了：${card.id}" }
+        inserted += card
+        rows[card.id] = card
+    }
 
     override suspend fun deleteByIds(cardIds: List<String>) = throw NotImplementedError("T-250")
 
@@ -119,6 +148,14 @@ internal class FakeCardMemberDao : CardMemberDao {
 
     /** 每一次 `updatePlacement` 的参数，按调用顺序。重排的断言全靠它。 */
     val placementWrites = mutableListOf<PlacementWrite>()
+
+    /**
+     * 每一次 `upsert` 的实参，按调用顺序。
+     *
+     * T-155 起真的会被调用：建卡要**同时**写一行 `role = 'owner'` 的成员，
+     * 否则那张卡在 `observeWallet` 的 `INNER JOIN card_members` 里根本不出现。
+     */
+    val upserted = mutableListOf<CardMemberEntity>()
 
     fun seed(vararg members: CardMemberEntity) {
         members.forEach { rows[it.cardId to it.userId] = it }
@@ -143,7 +180,10 @@ internal class FakeCardMemberDao : CardMemberDao {
 
     override fun observeMembers(cardId: String): Flow<List<CardMemberEntity>> = throw NotImplementedError("M3")
 
-    override suspend fun upsert(members: List<CardMemberEntity>) = throw NotImplementedError("T-250")
+    override suspend fun upsert(members: List<CardMemberEntity>) {
+        upserted += members
+        members.forEach { rows[it.cardId to it.userId] = it }
+    }
 
     override suspend fun deleteMember(
         cardId: String,

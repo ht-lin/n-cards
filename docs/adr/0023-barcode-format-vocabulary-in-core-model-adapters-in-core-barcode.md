@@ -127,3 +127,24 @@ Codabar 的 `Cannot encode : '…'`）。而 `scripts/ci/check-sensitive-logs.sh
 - **把静区交给 ZXing 的 `MARGIN`**：五套语义，其中两种码制完全没有静区。
 - **展示名做成枚举上的 `String` 常量**（能满足 §10.1 的字面要求）：
   违反 §11.1「所有用户可见字符串必须在 `strings.xml`」，且 14 条里有 3 条德英确实不同。
+
+## 后续：第五列（T-155，2026-09-19）
+
+本 ADR 交付时 `BarcodeFormatTable.Row` 是四列（`format` / `zxing` / `mlKit` /
+`displayNameRes`）。T-155 加了**第五列** `payload: PayloadRule` —— 逐字段的载荷校验规则，
+也就是上面「逐字段的原因与德语文案归 T-155」欠下的那一笔。
+
+**这是注记，不是 supersede。** 决策本身一个字没改：全仓仍然只有 `rowOf` 这一处
+`when (format)`。加一列反而让本 ADR 的核心性质**更强** —— 加第 14 个码制时，
+那一处编译失败逼人补齐的从三列变成四列，其中新的一列是「这个码制接受什么样的载荷」。
+一个没人回答过这个问题的新码制，此前可以静默上线；现在不行了。
+
+⚠️ 校验器在**声明式规则之外**还会真的调一次编码器
+（`BarcodeRasterizer.canEncode`，走的是与渲染完全相同的 `encodeModules`）。
+这让「本模块说合法 ⇒ 全屏条码页画得出来」成为结构性的，而不是靠两处代码各自写对。
+`BarcodePayloadValidatorTest` 把它写成了一条性质断言。
+
+那条断言立刻兑现了价值：第一版规则照着「四个一维 writer 的源码里都写着
+between 1 and 80」给 Code 128 也设了 80 的上限，而它当场红了 ——
+`Code128Writer` 与 `CodaBarWriter` 实测**没有**长度上限。
+这类「从源码里读出来、ZXing 并不作为 API 承诺」的数字，正需要一条测试盯着。

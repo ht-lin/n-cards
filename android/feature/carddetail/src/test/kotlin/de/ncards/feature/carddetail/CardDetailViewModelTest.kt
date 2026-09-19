@@ -5,6 +5,7 @@ import app.cash.turbine.test
 import de.ncards.core.model.card.CardRole
 import de.ncards.core.testing.CardFixtures
 import de.ncards.core.testing.MainDispatcherExtension
+import de.ncards.data.card.FakeCardRepository
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals

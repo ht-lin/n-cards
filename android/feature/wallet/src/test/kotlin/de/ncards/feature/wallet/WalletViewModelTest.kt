@@ -3,6 +3,7 @@ package de.ncards.feature.wallet
 import app.cash.turbine.test
 import de.ncards.core.testing.CardFixtures
 import de.ncards.core.testing.MainDispatcherExtension
+import de.ncards.data.card.FakeCardRepository
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest

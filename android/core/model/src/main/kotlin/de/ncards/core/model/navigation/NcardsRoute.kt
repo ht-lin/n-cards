@@ -79,6 +79,38 @@ data class CardDetailRoute(
     val cardId: String,
 )
 
+/**
+ * 新建一张卡（T-155）。手输录入；扫码与图片录入是 T-156 / T-157。
+ *
+ * 进入它的有两处，都在 `feature:wallet`：空状态的「添加第一张卡」与列表页的 FAB。
+ * 两处共用同一个回调，由 `:app` 的 NavHost 接到这里。
+ *
+ * ⚠️ **与 [CardEditRoute] 分成两个路由，不是一个 `cardId: String?`。**
+ * 可空的类型安全路由参数要自己给 `NavType` 并处理「参数缺席」与「参数是字面量 null」
+ * 两种情形，而它们在 `SavedStateHandle` 里长得一样。两个路由则让「新建」与「编辑」
+ * 在 NavHost 上一眼可分，ViewModel 侧的判据也变成一句「取不到 id 就是新建」。
+ */
+@Serializable
+data object CardCreateRoute
+
+/**
+ * 编辑一张已有的卡（T-155）。
+ *
+ * 入口只有一处：卡详情页的「Bearbeiten」，而它被 `card.canEdit` gate 住 ——
+ * §7.3 要的是 viewer **根本看不到那个节点**，不是看得到但点不动。
+ *
+ * @property cardId 卡的 UUIDv7。
+ *   ⚠️ **属性名就是参数 key**，与 [CardDetailRoute.cardId] 同一条约定：
+ *   navigation-compose 把它存进 `NavBackStackEntry.arguments`，
+ *   `SavedStateHandle` 再按这个名字种进 ViewModel。改名会静默拆掉编辑模式
+ *   （ViewModel 取不到 id → 以为是新建 → 用户点「编辑」却建了一张新卡）。
+ *   `CardEditIdKeyTest` 钉住了这个常量。
+ */
+@Serializable
+data class CardEditRoute(
+    val cardId: String,
+)
+
 /** AGB / Nutzungsbedingungen（§8.6：注册页链接）。 */
 @Serializable
 data object TermsRoute

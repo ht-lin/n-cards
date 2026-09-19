@@ -27,7 +27,9 @@ import de.ncards.AppViewModel
 import de.ncards.Destination
 import de.ncards.R
 import de.ncards.barcode.FullscreenBarcodeActivity
+import de.ncards.core.model.navigation.CardCreateRoute
 import de.ncards.core.model.navigation.CardDetailRoute
+import de.ncards.core.model.navigation.CardEditRoute
 import de.ncards.core.model.navigation.OnboardingGraph
 import de.ncards.core.model.navigation.PrivacyRoute
 import de.ncards.core.model.navigation.TermsRoute
@@ -35,6 +37,7 @@ import de.ncards.core.model.navigation.UsernameRoute
 import de.ncards.core.model.navigation.WalletRoute
 import de.ncards.data.auth.SignedOutReason
 import de.ncards.feature.carddetail.cardDetailDestination
+import de.ncards.feature.cardedit.cardEditDestination
 import de.ncards.feature.legal.PrivacyScreen
 import de.ncards.feature.legal.TermsScreen
 import de.ncards.feature.onboarding.onboardingGraph
@@ -152,9 +155,8 @@ private fun ReadyNavHost(
         walletDestination(
             // T-153 押的那个注兑现了：接上详情页只改了这一行。
             onOpenCard = { cardId -> navController.navigate(CardDetailRoute(cardId)) },
-            // T-155 / T-156 / T-157 都还不存在，所以空状态那个按钮本身是禁用的
-            // （见 feature:wallet 的 WalletScreen）。
-            onAddCard = { },
+            // 空状态的「添加第一张卡」与列表页的 FAB 共用这一个去处（T-155）。
+            onAddCard = { navController.navigate(CardCreateRoute) },
         )
 
         cardDetailDestination(
@@ -165,8 +167,16 @@ private fun ReadyNavHost(
             onShowBarcode = { cardId ->
                 context.startActivity(FullscreenBarcodeActivity.intent(context, cardId))
             },
-            // T-155（手动新增/编辑）还不存在，而详情页那个按钮本身是禁用的。
-            onEdit = { },
+            // T-155 接上了。详情页的按钮由 `card.canEdit` gate 住 ——
+            // viewer 根本看不到它，所以这里不需要再判一次角色。
+            onEdit = { cardId -> navController.navigate(CardEditRoute(cardId)) },
+        )
+
+        cardEditDestination(
+            onBack = { navController.popBackStack() },
+            // 保存成功之后退回来的那一页：新建来自钱包、编辑来自详情。
+            // 两条都是 popBackStack —— 不需要区分，回退栈自己知道。
+            onSaved = { navController.popBackStack() },
         )
 
         composable<TermsRoute> { TermsScreen(onBack = { navController.popBackStack() }) }

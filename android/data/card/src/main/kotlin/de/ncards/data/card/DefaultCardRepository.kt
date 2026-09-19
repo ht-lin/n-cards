@@ -5,7 +5,10 @@ import de.ncards.core.common.user.CurrentUserIdStore
 import de.ncards.core.database.dao.CardDao
 import de.ncards.core.database.dao.CardMemberDao
 import de.ncards.core.database.dao.SyncOutboxDao
+import de.ncards.core.database.entity.CardMemberEntity
 import de.ncards.core.model.card.Card
+import de.ncards.core.model.card.CardDraft
+import de.ncards.core.model.id.IdGenerator
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -33,6 +36,10 @@ internal class DefaultCardRepository
         private val outbox: SyncOutboxDao,
         private val currentUser: CurrentUserIdStore,
         private val dispatchers: DispatcherProvider,
+        // 客户端生成主键（§4.3 铁律四）。注入而不是直接调用一个顶层函数，
+        // 是为了让测试能断言「写进 Room 的 id 与写进 outbox 载荷的 id 是同一个」——
+        // 见 IdGenerator 的类注释。
+        private val idGenerator: IdGenerator,
     ) : CardRepository {
         /**
          * ⚠️ `flatMapLatest` 而不是 `combine`：用户换了（登出再登入）之后，
@@ -152,6 +159,93 @@ internal class DefaultCardRepository
         }
 
         /**
+         * 建卡。⚠️ 三步都在**一个事务**里，理由见每一步的注释。
+         *
+         * `withContext(dispatchers.io)` + `transactions.transaction { … }` 的骨架
+         * 与 [setPinned] / [reorder] 逐字一致 —— §4.3 铁律二在本模块只有这一个形状。
+         */
+        override suspend fun createCard(draft: CardDraft): String? {
+            val userId = currentUser.userId.value ?: return null
+            val cardId = idGenerator.newId()
+            // 一个 now 贯穿三行：卡的 created_at/updated_at、owner 成员的 joined_at、
+            // outbox 的 created_at/next_attempt_at。分别取三次 currentTimeMillis()
+            // 会让同一次建卡的三行带上三个略微不同的时刻 —— 对排序与调试都是噪音。
+            val now = System.currentTimeMillis()
+
+            withContext(dispatchers.io) {
+                transactions.transaction {
+                    cards.insert(draft.toEntity(id = cardId, ownerId = userId, now = now))
+
+                    // ⚠️ **这一步不能省。** `CardDao.observeWallet` 是
+                    // `INNER JOIN card_members`，没有 owner 行的卡在钱包里**根本不出现** ——
+                    // 症状是「保存成功了，列表里没有」，而且 Room 与 outbox 都写对了，
+                    // 查起来会一路查到 SQL 才发现。
+                    //
+                    // 语义上这也是对的：§5.2 要求每张卡有且仅有一行 role = 'owner'，
+                    // 后端 T-110 同样是「建卡时**同时**写入一行 card_members(role='owner')」。
+                    // 本机只是把那个事务在客户端重演一遍。
+                    //
+                    // sortOrder = 0：排序是 `is_pinned DESC, sort_order ASC, created_at DESC`，
+                    // 新卡靠第三个键排在最前，不需要去抢一个更小的 sort_order。
+                    members.upsert(
+                        listOf(
+                            CardMemberEntity(
+                                cardId = cardId,
+                                userId = userId,
+                                role = ROLE_OWNER,
+                                sortOrder = 0,
+                                isPinned = false,
+                                // 自己建的卡没有「谁加的我」。
+                                addedBy = null,
+                                joinedAt = now,
+                            ),
+                        ),
+                    )
+
+                    outbox.insert(SyncOutboxEntry.cardCreate(cardId = cardId, draft = draft, now = now))
+                }
+            }
+
+            return cardId
+        }
+
+        /**
+         * 改卡。**只写真的变了的字段**，一个都没变就一行都不写。
+         *
+         * ⚠️ 读那一行在**事务里**，不是在外面 —— 与 [reorder] 里那句注释同一条理由：
+         * 事务外的快照与写入之间完全可能插进一次下行同步，那样算出的「变了哪些」
+         * 是对着一份已经过期的值算的。
+         */
+        override suspend fun updateCard(
+            cardId: String,
+            draft: CardDraft,
+        ) {
+            val now = System.currentTimeMillis()
+
+            withContext(dispatchers.io) {
+                transactions.transaction {
+                    // 卡不在了（下行同步刚把它删掉，或 id 根本不存在）—— 静默返回。
+                    // 与 setPinned 里 `current == null` 那一条同一个处置。
+                    val existing = cards.findCard(cardId) ?: return@transaction
+
+                    val changed = existing.changedFieldsOf(draft)
+
+                    // 什么都没变：不碰 Room，也不入 outbox。
+                    // 不拦的话，用户点开表单又原样保存也会让卡冒出一个「待同步」徽章 ——
+                    // 而那是假的。与 setPinned 里 `current.isPinned == pinned` 同一条理由。
+                    if (changed.isEmpty()) return@transaction
+
+                    // ⚠️ `revision` **原样带走，不递增**。它是服务端的乐观锁，
+                    // T-251 推送时拿它做 If-Match；本机改了就等于发出一个服务端
+                    // 从未见过的版本号，那一定 409，而且是在离线攒了一堆改动之后才炸。
+                    cards.upsert(listOf(existing.applying(draft, now = now)))
+
+                    outbox.insert(SyncOutboxEntry.cardUpdate(cardId = cardId, changed = changed, now = now))
+                }
+            }
+        }
+
+        /**
          * §4.3 铁律二：先写 Room（乐观更新），**再**入 outbox，由 SyncEngine 异步推送。
          *
          * ⚠️ 这里只**入队**。合并、指数退避、4xx 不重试、推送顺序 ——
@@ -200,6 +294,12 @@ internal class DefaultCardRepository
              * 上面这几行就是那段注释。
              */
             const val PROVISIONAL_MAX_SYNC_ATTEMPTS = 10
+
+            /**
+             * §5.2：每张卡有且仅有一行 `role = 'owner'` 且 `left_at IS NULL`
+             * （服务端用 partial unique index 强制）。本机建卡时那一行就是自己。
+             */
+            const val ROLE_OWNER = "owner"
         }
     }
 

@@ -7,6 +7,8 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import de.ncards.core.common.dispatcher.DefaultDispatcherProvider
 import de.ncards.core.common.dispatcher.DispatcherProvider
+import de.ncards.core.model.id.IdGenerator
+import de.ncards.core.model.id.UuidV7Generator
 import de.ncards.data.card.CardRepository
 import de.ncards.data.card.DefaultCardRepository
 import de.ncards.data.card.RoomTransactionRunner
@@ -52,5 +54,24 @@ internal abstract class CardModule {
         @Provides
         @Singleton
         fun provideDispatcherProvider(): DispatcherProvider = DefaultDispatcherProvider()
+
+        /**
+         * 客户端主键生成器（§4.3 铁律四）。
+         *
+         * 与上面那条同构，理由也同构：`UuidV7Generator` 住在 `core:model`，
+         * 而那是全仓唯一的**非 Android** 模块（`ncards.jvm.library`）——
+         * 它连 `javax.inject` 都不该有。所以 `new` 一下。
+         *
+         * 同样落在本模块而不是 `:app/di`：目前唯一的消费者是
+         * [de.ncards.data.card.DefaultCardRepository]。第二个消费者出现时
+         * （T-156 / T-157 的扫码录入仍然经本 Repository，所以多半是别的实体）
+         * 该把它**挪**到 `:app/di`，而不是再绑一次。
+         *
+         * `@Singleton` 不是为了省对象：[UuidV7Generator] 持有一个 `Random`，
+         * 每次注入都新建一个的话，在某些 JVM 上它们会用相近的种子初始化。
+         */
+        @Provides
+        @Singleton
+        fun provideIdGenerator(): IdGenerator = UuidV7Generator()
     }
 }

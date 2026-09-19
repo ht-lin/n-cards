@@ -1,10 +1,14 @@
 package de.ncards.data.card
 
 import de.ncards.core.database.entity.SyncOutboxEntity
+import de.ncards.core.model.card.CardDraft
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * 把一次 placement 修改包成一条 outbox 记录。
@@ -62,9 +66,110 @@ internal object SyncOutboxEntry {
         @SerialName("is_pinned") val isPinned: Boolean,
     )
 
+    /**
+     * 建卡（T-155）。
+     *
+     * ⚠️ `entity_type` 是 `card` 而不是 `card_member` —— **这一条就是 J4 的验收标准**。
+     * `CardDao.observeWallet` 派生 `sync_state` 的子查询里写死了
+     * `WHERE entity_type = 'card'`，所以只有这里写对了，飞行模式下新增的卡才会
+     * 带上「待同步」徽章。写成 `card_member` 的话卡会出现、但徽章不亮，
+     * 而两者在代码审查里长得一模一样。
+     *
+     * 载荷的形状照契约的 `CardCreate`：`id` 必填（**客户端生成**的 UUIDv7），
+     * 与 `title` / `color` / `barcode_format` / `barcode_value` 一起是必填项，
+     * 其余三个可空。
+     *
+     * ⚠️ `expires_on` 是 **ISO 日期串**（`2026-12-31`）而不是 epoch day ——
+     * Room 那一列存的是 epoch day，两处单位不同。搞混的症状是服务端 422，
+     * 而那要等 T-251 真的开始推送才会暴露。
+     *
+     * 关于 T-251 会撞上的两条 `POST /v1/cards` 语义（`docs/api/openapi.yaml`）：
+     * id 已经是自己的 → `200`，而且**请求体被整个忽略、什么都不改**
+     * （所以离线攒下的 create 重放不会覆盖服务端上更新的标题）；
+     * id 属于别人 → `409 id_conflict`，要重新生成 id 再试。
+     */
+    fun cardCreate(
+        cardId: String,
+        draft: CardDraft,
+        now: Long,
+    ): SyncOutboxEntity =
+        SyncOutboxEntity(
+            entityType = ENTITY_TYPE_CARD,
+            entityId = cardId,
+            op = OP_CREATE,
+            payloadJson = json.encodeToString(JsonObject(draft.jsonFields() + ("id" to JsonPrimitive(cardId)))),
+            nextAttemptAt = now,
+            createdAt = now,
+        )
+
+    /**
+     * 改卡（T-155）。`entity_type` 同样是 `card`，理由见 [cardCreate]。
+     *
+     * ============================================================================
+     * ⚠️ 载荷里**只放变了的键**，而「键不在」与「键是 null」是两件事
+     * ============================================================================
+     * 契约的 `CardUpdate` 是 `minProperties: 1`、全部字段可选，语义是：
+     *
+     * - 键**不出现** = 别动这个字段
+     * - 键出现且是 `null` = **清空**它（`merchant_label` / `note` / `expires_on` 可空）
+     *
+     * 所以这段 JSON 用 [JsonObject] 显式构造。用一个全可空的 `@Serializable`
+     * data class 是做不到的：序列化器分不清「没设」与「设成了 null」，
+     * 于是要么把没改的字段一起发出去（覆盖掉别的设备刚改的值），
+     * 要么把清空操作丢掉（用户删掉备注，保存后它又回来了）。
+     *
+     * @param changed 变了的字段，由 `DefaultCardRepository` 在事务里对着库里那一行算出来。
+     */
+    fun cardUpdate(
+        cardId: String,
+        changed: Map<String, JsonElement>,
+        now: Long,
+    ): SyncOutboxEntity =
+        SyncOutboxEntity(
+            entityType = ENTITY_TYPE_CARD,
+            entityId = cardId,
+            op = OP_UPDATE,
+            payloadJson = json.encodeToString(JsonObject(changed)),
+            nextAttemptAt = now,
+            createdAt = now,
+        )
+
+    /**
+     * 一个 draft 的全部契约字段。建卡用全套；改卡从里面挑变了的那些。
+     *
+     * ⚠️ 键名是 snake_case，逐字照契约 —— camelCase 服务端**不接受**。
+     * 与 [PlacementPayload] 用 `@SerialName` 钉死是同一条理由，
+     * 只是这里手写 `JsonObject`，所以没有编译器替我们看着。
+     * `SyncOutboxEntryTest` 把这几个键名写成了断言。
+     */
+    internal fun CardDraft.jsonFields(): Map<String, JsonElement> =
+        mapOf(
+            KEY_TITLE to JsonPrimitive(title),
+            KEY_MERCHANT_LABEL to JsonPrimitive(merchantLabel),
+            KEY_COLOR to JsonPrimitive(colorWire),
+            KEY_BARCODE_FORMAT to JsonPrimitive(barcodeFormat.wireName),
+            KEY_BARCODE_VALUE to JsonPrimitive(barcodeValue),
+            KEY_NOTE to JsonPrimitive(note),
+            // ISO-8601 的 `yyyy-MM-dd`，就是 LocalDate.toString() 的形态。
+            KEY_EXPIRES_ON to JsonPrimitive(expiresOn?.toString()),
+        )
+
     private val json = Json
 
     /** 与 `SyncOutboxEntity.entityType` 的注释里那两个值一致。 */
     const val ENTITY_TYPE_CARD_MEMBER = "card_member"
+
+    /** ⚠️ 只有这个值会让「待同步」徽章亮起来。见 [cardCreate]。 */
+    const val ENTITY_TYPE_CARD = "card"
+
     const val OP_UPDATE = "update"
+    const val OP_CREATE = "create"
+
+    const val KEY_TITLE = "title"
+    const val KEY_MERCHANT_LABEL = "merchant_label"
+    const val KEY_COLOR = "color"
+    const val KEY_BARCODE_FORMAT = "barcode_format"
+    const val KEY_BARCODE_VALUE = "barcode_value"
+    const val KEY_NOTE = "note"
+    const val KEY_EXPIRES_ON = "expires_on"
 }
