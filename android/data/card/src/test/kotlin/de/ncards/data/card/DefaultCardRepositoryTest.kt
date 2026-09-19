@@ -1,14 +1,23 @@
 package de.ncards.data.card
 
 import app.cash.turbine.test
+import de.ncards.core.model.barcode.BarcodeFormat
+import de.ncards.core.model.card.CardDraft
+import de.ncards.core.model.id.IdGenerator
 import de.ncards.core.testing.TestDispatcherProvider
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.time.LocalDate
 
 @DisplayName("CardRepository")
 class DefaultCardRepositoryTest {
@@ -18,6 +27,15 @@ class DefaultCardRepositoryTest {
     private val outbox = FakeSyncOutboxDao()
     private val currentUser = FakeCurrentUserIdStore()
 
+    /**
+     * 固定 id 的生成器。
+     *
+     * 真生成一个 UUIDv7 的话，「写进 Room 的 id 与写进 outbox 载荷的 id 是同一个」
+     * 就只能断言成「两个都非空」—— 而那恰好漏掉了真正会发生的那个 bug
+     * （两处各调一次 `newId()`）。UUIDv7 本身的正确性归 `UuidV7GeneratorTest`。
+     */
+    private val idGenerator = IdGenerator { NEW_ID }
+
     private val repository =
         DefaultCardRepository(
             transactions = transactions,
@@ -26,6 +44,7 @@ class DefaultCardRepositoryTest {
             outbox = outbox,
             currentUser = currentUser,
             dispatchers = TestDispatcherProvider(),
+            idGenerator = idGenerator,
         )
 
     @Nested
@@ -463,5 +482,258 @@ class DefaultCardRepositoryTest {
         fun singleElementIsSafe() {
             assertNull(listOf("a").moved("a", 5))
         }
+    }
+
+    @Nested
+    @DisplayName("建卡（§4.3 铁律二 + J4）")
+    inner class Creating {
+        /**
+         * ⚠️ **本文件最重要的一条。** 它是 J4 验收标准的可执行形态：
+         * 「飞行模式下新增卡立即可见且带待同步徽章」。
+         *
+         * 三行缺一不可，而每一行漏掉的症状都不一样：
+         * - 少了 `cards` 那行 —— 什么都没有。
+         * - 少了 `card_members` 那行 —— **卡存了但钱包里看不见**（那段 SQL 是
+         *   `INNER JOIN card_members`）。这条最隐蔽：Room 与 outbox 都对。
+         * - 少了 outbox 那行 —— 卡出现了但**徽章不亮**，而 J4 要的就是那个徽章。
+         */
+        @Test
+        @DisplayName("一个事务里写三行：cards、owner 成员、outbox")
+        fun writesAllThreeRowsInOneTransaction() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                val id = repository.createCard(draft())
+
+                assertEquals(NEW_ID, id, "返回的该是客户端生成的那个 id")
+                assertEquals(1, cards.inserted.size)
+                assertEquals(1, members.upserted.size)
+                assertEquals(1, outbox.inserted.size)
+                assertEquals(1, transactions.transactionCount, "三行必须在同一个事务里")
+            }
+
+        /**
+         * `CardDao.observeWallet` 派生 `sync_state` 的子查询里写死了
+         * `WHERE entity_type = 'card'` —— 写成 `card_member` 的话卡会出现、
+         * 徽章不亮，而两者在 code review 里长得一模一样。
+         */
+        @Test
+        @DisplayName("outbox 的 entity_type 是 card —— 徽章全靠这一个字符串")
+        fun outboxRowIsTypedAsCardSoTheBadgeLightsUp() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                repository.createCard(draft())
+
+                val entry = outbox.inserted.single()
+                assertEquals("card", entry.entityType)
+                assertEquals("create", entry.op)
+                assertEquals(NEW_ID, entry.entityId)
+            }
+
+        @Test
+        @DisplayName("成员行是 owner，且 sort_order = 0（排序靠 created_at DESC）")
+        fun ownerMemberRowIsWritten() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                repository.createCard(draft())
+
+                val member = members.upserted.single()
+                assertEquals(NEW_ID, member.cardId)
+                assertEquals(WalletRows.USER_ID, member.userId)
+                assertEquals("owner", member.role)
+                assertEquals(0, member.sortOrder)
+                assertFalse(member.isPinned)
+            }
+
+        /**
+         * 两处各调一次 `newId()` 是个真会发生的 bug，而它的后果是
+         * 「本地这张卡永远推不上去」——outbox 那条指着一个不存在的实体。
+         */
+        @Test
+        @DisplayName("Room 里那行的 id 与 outbox 载荷里的 id 是同一个")
+        fun theIdIsGeneratedExactlyOnce() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                repository.createCard(draft())
+
+                val payload = Json.parseToJsonElement(outbox.inserted.single().payloadJson).jsonObject
+                assertEquals(cards.inserted.single().id, payload["id"]?.jsonPrimitive?.content)
+            }
+
+        @Test
+        @DisplayName("载荷的键名是契约的 snake_case，expires_on 是 ISO 日期串不是 epoch day")
+        fun payloadMatchesTheContract() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                repository.createCard(draft(expiresOn = LocalDate.of(2026, 12, 31)))
+
+                val payload = Json.parseToJsonElement(outbox.inserted.single().payloadJson).jsonObject
+                assertEquals(
+                    setOf(
+                        "id",
+                        "title",
+                        "merchant_label",
+                        "color",
+                        "barcode_format",
+                        "barcode_value",
+                        "note",
+                        "expires_on",
+                    ),
+                    payload.keys,
+                )
+                assertEquals("2026-12-31", payload["expires_on"]?.jsonPrimitive?.content)
+                // 库里那一列是 epoch day，两种表示都要对。
+                assertEquals(LocalDate.of(2026, 12, 31).toEpochDay(), cards.inserted.single().expiresOn)
+            }
+
+        /** 冷启动时令牌要过一趟 Keystore，那一帧是真实存在的。 */
+        @Test
+        @DisplayName("还不知道我是谁时什么都不写，返回 null")
+        fun writesNothingWhenUserUnknown() =
+            runTest {
+                assertNull(repository.createCard(draft()))
+
+                assertTrue(cards.inserted.isEmpty())
+                assertTrue(outbox.inserted.isEmpty())
+            }
+    }
+
+    @Nested
+    @DisplayName("改卡")
+    inner class Updating {
+        /**
+         * `CardUpdate` 是 `minProperties: 1`、全部字段可选，语义是
+         * 「键不出现 = 别动」。把没改的字段一起发出去，会覆盖掉别的设备刚改的值。
+         */
+        @Test
+        @DisplayName("载荷里只有变了的那个键")
+        fun payloadCarriesOnlyTheChangedFields() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.seed(WalletRows.entity(id = "c1", title = "REWE Payback"))
+
+                repository.updateCard("c1", draft(title = "REWE Payback (neu)"))
+
+                val payload = Json.parseToJsonElement(outbox.inserted.single().payloadJson).jsonObject
+                assertEquals(setOf("title"), payload.keys)
+                assertEquals("REWE Payback (neu)", payload["title"]?.jsonPrimitive?.content)
+            }
+
+        /**
+         * 不拦的话，用户点开表单又原样保存也会让卡冒出一个待同步徽章 —— 而那是假的。
+         * 与 `setPinned` 里「本来就是这个状态」那条守卫同一条理由。
+         */
+        @Test
+        @DisplayName("什么都没变时一行都不写")
+        fun noOpChangeWritesNothing() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.seed(WalletRows.entity(id = "c1"))
+
+                repository.updateCard("c1", draft())
+
+                assertTrue(cards.upserted.isEmpty(), "Room 不该被碰")
+                assertTrue(outbox.inserted.isEmpty(), "不该冒出一个假徽章")
+            }
+
+        /**
+         * `revision` 是服务端的乐观锁，T-251 推送时拿它做 `If-Match`。
+         * 本机递增就等于发出一个服务端从未见过的版本号 —— 一定 409，
+         * 而且要等离线攒了一堆改动之后才炸。
+         */
+        @Test
+        @DisplayName("不在本机递增 revision，也不动 created_at")
+        fun revisionAndCreatedAtSurviveAnEdit() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                val before = WalletRows.entity(id = "c1").copy(revision = 7, createdAt = 111)
+                cards.seed(before)
+
+                repository.updateCard("c1", draft(title = "neu"))
+
+                val after = cards.upserted.single()
+                assertEquals(7, after.revision, "revision 归服务端")
+                assertEquals(111, after.createdAt, "created_at 是钱包排序的第三个键")
+            }
+
+        /**
+         * `Card.color` 的注释点名的那个陷阱：一个装了新版本 App 的设备发来
+         * `mint_600`，本版本解析成 BLUE。编辑时若把**枚举**写回去，
+         * 那张卡的颜色就被老客户端静默改成了蓝色，而服务端不会发现。
+         */
+        @Test
+        @DisplayName("本版本不认识的色键原样透传，不被改写成默认色")
+        fun unknownColorKeySurvivesAnEdit() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.seed(WalletRows.entity(id = "c1", color = "mint_600"))
+
+                repository.updateCard("c1", draft(colorWire = "mint_600", title = "neu"))
+
+                assertEquals("mint_600", cards.upserted.single().color)
+                val payload = Json.parseToJsonElement(outbox.inserted.single().payloadJson).jsonObject
+                assertEquals(setOf("title"), payload.keys, "颜色没变就不该出现在载荷里")
+            }
+
+        /**
+         * 契约里「键不出现」是「别动」，「键是 null」是「清空」。
+         * 表单清空一个可选字段产出的是空串，所以写库前归一成 null ——
+         * 两边用的必须是同一个归一函数，否则每次保存都会产生一条 outbox 记录。
+         */
+        @Test
+        @DisplayName("清空商家名发 null（不是空串），而空串与 null 之间不算变化")
+        fun clearingAnOptionalFieldSendsExplicitNull() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+                cards.seed(WalletRows.entity(id = "c1", merchantLabel = "REWE"))
+
+                repository.updateCard("c1", draft(merchantLabel = ""))
+
+                val payload = Json.parseToJsonElement(outbox.inserted.single().payloadJson).jsonObject
+                assertEquals(setOf("merchant_label"), payload.keys)
+                assertTrue(payload["merchant_label"] is JsonNull, "清空要发显式 null")
+                assertNull(cards.upserted.single().merchantLabel)
+
+                // 再保存一次：库里已经是 null，表单仍是空串 —— 不该再算一次变化。
+                outbox.inserted.clear()
+                repository.updateCard("c1", draft(merchantLabel = ""))
+                assertTrue(outbox.inserted.isEmpty(), "空串与 null 归一后相等")
+            }
+
+        @Test
+        @DisplayName("卡不在了就静默返回")
+        fun missingCardIsSilent() =
+            runTest {
+                currentUser.signIn(WalletRows.USER_ID)
+
+                repository.updateCard("weg", draft())
+
+                assertTrue(outbox.inserted.isEmpty())
+            }
+    }
+
+    private fun draft(
+        title: String = "REWE Payback",
+        merchantLabel: String? = "REWE",
+        colorWire: String = "blue_600",
+        barcodeValue: String = "4012345678901",
+        note: String? = null,
+        expiresOn: LocalDate? = null,
+    ) = CardDraft(
+        title = title,
+        merchantLabel = merchantLabel,
+        colorWire = colorWire,
+        barcodeFormat = BarcodeFormat.EAN_13,
+        barcodeValue = barcodeValue,
+        note = note,
+        expiresOn = expiresOn,
+    )
+
+    private companion object {
+        const val NEW_ID = "0192f3a1-b2c3-7d4e-8f01-0000000000ff"
     }
 }

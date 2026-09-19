@@ -196,10 +196,9 @@ private fun CardDetailContent(
         if (card.canEdit) {
             OutlinedButton(
                 onClick = onEdit,
-                // T-155（手动新增/编辑）还不存在。画出来但按不动，比藏起来诚实 ——
-                // 与钱包空状态那个「添加第一张卡」是同一个处置。
-                // 接上录入之后把 `enabled` 这一行删掉即可。
-                enabled = false,
+                // T-155 起它真的能按了（feature:cardedit 的表单）。
+                // ⚠️ 上面那个 `if (card.canEdit)` **不要**改成 enabled —— 那是两回事：
+                // viewer 要的是这个节点根本不存在，有一条 assertDoesNotExist 守着。
                 modifier =
                     Modifier
                         .fillMaxWidth()

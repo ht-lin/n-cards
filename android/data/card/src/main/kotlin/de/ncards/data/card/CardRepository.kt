@@ -1,6 +1,7 @@
 package de.ncards.data.card
 
 import de.ncards.core.model.card.Card
+import de.ncards.core.model.card.CardDraft
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -117,5 +118,46 @@ interface CardRepository {
     suspend fun reorder(
         cardId: String,
         toIndex: Int,
+    )
+
+    /**
+     * 新建一张卡（T-155）。返回**客户端生成**的 UUIDv7。
+     *
+     * ============================================================================
+     * §4.3 铁律二：先 Room（乐观更新）→ 再 outbox → 由 SyncEngine 异步推送
+     * ============================================================================
+     * 这三步在**一个事务**里走完前两步。返回时这张卡已经在 Room 里，
+     * 因此 [observeWallet] 会立刻发一版带着它的列表 —— **飞行模式下也一样**，
+     * 那正是 J4 的验收标准。
+     *
+     * 第三步今天不发生：SyncEngine 归 T-250、outbox 的 flush 归 T-251。
+     * 写进去的行会一直堆着，而卡上的「待同步」徽章会一直亮着。
+     * **那是对的，不是缺陷** —— 离线优先的语义就是本地先成立、推送另说。
+     *
+     * ⚠️ 客户端生成 id 的意义在于**不需要**「临时 ID → 服务端 ID」的重映射
+     * （§4.3 铁律四）。离线建的卡从这一刻起就有最终 id，可以被共享、被引用。
+     *
+     * @return 新卡的 id；**当前用户未知时返回 `null`**，此时什么都没写。
+     *   调用方不该走到这里 —— 未登录时 NavHost 根本不组合钱包，
+     *   但「令牌还在过 Keystore」那一帧是真实存在的，所以这里不抛异常。
+     */
+    suspend fun createCard(draft: CardDraft): String?
+
+    /**
+     * 编辑一张已有的卡（T-155）。
+     *
+     * 写入顺序与 [createCard] 同一条铁律。两处不同：
+     *
+     * - **只写真的变了的字段。** 一个字段都没变就**一行都不写**（不碰 Room，
+     *   也不入 outbox）—— 与 [setPinned] 里那个「本来就是这个状态」的守卫同一条理由：
+     *   不拦的话，用户点开表单又原样保存也会让卡冒出一个待同步徽章，而那是假的。
+     * - **不在本机递增 `revision`。** 它是服务端的乐观锁，T-251 推送时拿它做
+     *   `If-Match`。本机改了就等于发出一个服务端从未见过的版本号，那一定 409。
+     *
+     * 卡不在了（一次下行同步刚把它删掉、或 id 根本不存在）时静默返回。
+     */
+    suspend fun updateCard(
+        cardId: String,
+        draft: CardDraft,
     )
 }

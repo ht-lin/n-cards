@@ -38,6 +38,12 @@ dependencies {
     // §12.3：feature 一律经 Repository 拿数据，看不见 Room 的任何类型。
     implementation(project(":data:card"))
 
+    // FakeCardRepository（T-155 起是全仓唯一的一份，住在 :data:card 的 testFixtures）。
+    // ⚠️ 两条都要：ViewModel 单测在 test、Compose UI 测试在 androidTest，
+    // 而两个源集互相看不见 —— 这正是它此前以 src/sharedTest 拷贝存在的原因。
+    testImplementation(testFixtures(project(":data:card")))
+    androidTestImplementation(testFixtures(project(":data:card")))
+
     // 条码渲染的唯一入口（T-152）。本卡是它的第一个真实消费者 ——
     // 在此之前 R8 把整条 ZXing 链当死代码剥掉了，dex 里一个字节都搜不到。
     implementation(project(":core:barcode"))

@@ -107,7 +107,7 @@ internal class BarcodeRasterizer {
      * 的容量超限，是**受检**异常）、`IllegalStateException`（QR/Aztec 的 null matrix）。
      */
     @Suppress("SwallowedException", "TooGenericExceptionCaught")
-    private fun encodeModules(
+    internal fun encodeModules(
         zxingFormat: com.google.zxing.BarcodeFormat,
         value: String,
     ): BitMatrix? =
@@ -194,6 +194,28 @@ internal class BarcodeRasterizer {
     }
 
     companion object {
+        /**
+         * 「ZXing 编不编得出来」这一个问题的答案，**不产出任何像素**（T-155）。
+         *
+         * `validateBarcodePayload` 的第二步用它兜底：声明式规则全过了之后再真的编一次，
+         * 于是「本模块说合法 ⇒ 全屏条码页画得出来」成为结构性的，而不是靠两处代码
+         * 各自写对。理由写在那个函数的注释里。
+         *
+         * ⚠️ 走的是与 [rasterize] **同一个** [encodeModules]，不是另写一次 try/catch ——
+         * 两份的话，哪天 ZXing 多抛一类异常，校验器与渲染器会对同一个码值给出不同答案，
+         * 而那正是这个函数存在的意义要防的事。
+         *
+         * 尺寸完全不参与：容量超限在 `encode` 那一步就抛了，与画多大无关。
+         */
+        fun canEncode(
+            format: BarcodeFormat,
+            value: String,
+        ): Boolean {
+            val zxingFormat = BarcodeFormatTable.rowFor(format).zxing ?: return false
+
+            return BarcodeRasterizer().encodeModules(zxingFormat, value) != null
+        }
+
         /** 不透明白。 */
         const val WHITE: Int = 0xFFFFFFFF.toInt()
 

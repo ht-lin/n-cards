@@ -2,13 +2,15 @@ package de.ncards.feature.carddetail
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import de.ncards.core.designsystem.theme.NcardsTheme
 import de.ncards.core.model.card.CardRole
 import de.ncards.core.testing.CardFixtures
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,14 +32,17 @@ class CardDetailScreenTest {
     @get:Rule
     val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun setContent(state: CardDetailUiState) {
+    private fun setContent(
+        state: CardDetailUiState,
+        onEdit: () -> Unit = {},
+    ) {
         composeTestRule.setContent {
             NcardsTheme(dynamicColor = false) {
                 CardDetailScreen(
                     state = state,
                     onBack = {},
                     onShowBarcode = {},
-                    onEdit = {},
+                    onEdit = onEdit,
                 )
             }
         }
@@ -52,14 +57,19 @@ class CardDetailScreenTest {
     }
 
     /**
-     * T-155 还不存在，所以按钮画出来但按不动 —— 与钱包空状态那个
-     * 「添加第一张卡」是同一个处置（「画出来但按不动，比一个空白屏诚实」）。
+     * T-155 接上了编辑表单，所以这个按钮从「画出来但按不动」变成了真的能按。
+     *
+     * ⚠️ 断言到 `onEdit` 真的被调用，而不只是 `assertIsEnabled()` ——
+     * 后者在 `onClick = {}` 被误删的情况下仍然是绿的。
      */
     @Test
-    fun ownerEditActionIsDrawnButDisabled() {
-        setContent(CardDetailUiState.Content(CardFixtures.card(role = CardRole.OWNER)))
+    fun ownerEditActionIsEnabledAndInvokesTheCallback() {
+        var edited = false
+        setContent(CardDetailUiState.Content(CardFixtures.card(role = CardRole.OWNER)), onEdit = { edited = true })
 
-        composeTestRule.onNodeWithTag(DETAIL_EDIT_TAG).assertIsNotEnabled()
+        composeTestRule.onNodeWithTag(DETAIL_EDIT_TAG).assertIsEnabled().performClick()
+
+        assertTrue("owner 的「编辑」必须接到 onEdit 上（T-155）", edited)
     }
 
     /**

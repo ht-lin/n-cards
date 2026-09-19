@@ -14,6 +14,23 @@ plugins {
 
 android {
     namespace = "de.ncards.data.card"
+
+    // FakeCardRepository 住在 src/testFixtures/ 里，供三个 feature 共用（T-155）。
+    //
+    // 为什么不是各 feature 一份 sharedTest 拷贝：T-154 的落地记录记着它当时已经有
+    // 两份（feature:wallet / feature:carddetail），并点名本卡会让它变成第三份。
+    // 放在这里换来的性质是三份拷贝做不到的 —— **替身与 CardRepository 接口同模块，
+    // 接口加方法时替身当场编译失败**。本卡恰好就在给那个接口加两个方法。
+    //
+    // 为什么不是 core:testing：那要让 :core: 依赖 :data:，而 ModuleGraph 的
+    // `":core:" to listOf(":core:")` 会在**配置期**把构建打红（T-154 已经勘过这条路）。
+    //
+    // ⚠️ 用 AGP 的 testFixtures DSL，**不是** Gradle 的 `java-test-fixtures` 插件 ——
+    // 后者只对 JVM 工程有效，本模块是 com.android.library。两者的消费方写法相同
+    // （`testFixtures(project(...))`），但插件那条在这里根本不生效。
+    testFixtures {
+        enable = true
+    }
 }
 
 dependencies {
@@ -38,4 +55,10 @@ dependencies {
     // ⚠️ ncards.android.feature 会自动加这一条，但 ncards.android.library 不会 ——
     // 本模块是 data:* 不是 feature:*，所以要自己写。
     testImplementation(project(":core:testing"))
+
+    // FakeCardRepository 的签名上就有 Flow（它实现 CardRepository）。
+    // ⚠️ testFixtures 源集**不继承** main 的 implementation 依赖，所以这条要单写 ——
+    // 不写的症状是 kotlinx 整个解析不到，而 :core:model 那些类型是好的
+    // （那是 api，testFixtures 自动看得见）。
+    testFixturesImplementation(libs.kotlinx.coroutines.core)
 }

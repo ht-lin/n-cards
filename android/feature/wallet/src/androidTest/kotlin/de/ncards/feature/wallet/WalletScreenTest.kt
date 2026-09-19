@@ -2,10 +2,11 @@ package de.ncards.feature.wallet
 
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -14,6 +15,7 @@ import de.ncards.core.model.barcode.BarcodeFormat
 import de.ncards.core.model.card.Card
 import de.ncards.core.model.card.CardRole
 import de.ncards.core.model.sync.SyncState
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -60,7 +62,10 @@ class WalletScreenTest {
         syncState = syncState,
     )
 
-    private fun setContent(state: WalletUiState) {
+    private fun setContent(
+        state: WalletUiState,
+        onAddCard: () -> Unit = {},
+    ) {
         composeTestRule.setContent {
             NcardsTheme(dynamicColor = false) {
                 WalletScreen(
@@ -70,7 +75,7 @@ class WalletScreenTest {
                     onCardClick = {},
                     onTogglePin = {},
                     onReorder = { _, _ -> },
-                    onAddCard = {},
+                    onAddCard = onAddCard,
                 )
             }
         }
@@ -131,10 +136,39 @@ class WalletScreenTest {
         setContent(WalletUiState.Empty)
 
         composeTestRule.onNodeWithTag(WALLET_EMPTY_TAG).assertIsDisplayed()
-        // 录入三条路（T-155/156/157）都还不存在，所以按钮是禁用的。
+        // T-155 起录入真的存在了，所以这个按钮能按。
         composeTestRule
             .onNodeWithText(composeTestRule.activity.getString(R.string.wallet_add_first_card))
-            .assertIsNotEnabled()
+            .assertIsEnabled()
+    }
+
+    /**
+     * ⚠️ 没有这个 FAB，录入功能只能用一次：空状态那个按钮在有卡之后就消失了，
+     * 于是用户加完第一张卡就再也找不到入口。任务卡没写这一条，J1/J4 都需要它。
+     */
+    @Test
+    fun walletWithCardsOffersTheAddFab() {
+        var added = false
+        setContent(
+            WalletUiState.Content(
+                cards = listOf(card(id = "1", title = "REWE Payback")),
+                query = "",
+                totalCount = 1,
+            ),
+            onAddCard = { added = true },
+        )
+
+        composeTestRule.onNodeWithTag(WALLET_ADD_FAB_TAG).assertIsDisplayed().performClick()
+
+        assertTrue("有卡时必须有一个添加入口（T-155）", added)
+    }
+
+    /** 空状态下 FAB 不出现 —— 那一屏的行动召唤是中间那个按钮，两个会打架。 */
+    @Test
+    fun emptyWalletHasNoFab() {
+        setContent(WalletUiState.Empty)
+
+        composeTestRule.onNodeWithTag(WALLET_ADD_FAB_TAG).assertDoesNotExist()
     }
 
     /**
