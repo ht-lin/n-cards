@@ -196,6 +196,13 @@ services:
   #
   # 生产的正确做法是 unseal 之后**人工**跑一次，用一个用完即吊销的 root token：
   # 步骤见 docs/runbooks/vault-unseal.md。
+  #
+  # ⚠️ T-114：**base 里紧邻的 `vault-policy` 刻意没有这一段，别顺手也给它加上。**
+  # 上面两条「为什么不能跑」对它都不成立：它不需要 root（走最小权限的 AppRole
+  # ncards-policy），封印时也不失败而是干净跳过（退出码 3）。更要紧的是，
+  # 「policy 在长期运行的环境上没有执行者」正是 T-114 要修的那个洞 ——
+  # 给它加 disabled 等于把这张卡整个撤销掉。它本来就 profiles: ["ops"]，
+  # 不会随 `up -d` 起来，只被 ansible 的 vault-policy 任务显式调用。
   vault-init:
     profiles: ["disabled"]
 

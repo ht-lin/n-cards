@@ -382,12 +382,20 @@ jobs:
       # 所以在 app.staging 的 A 记录就位之前留空也不会红。
       app_site_url: https://app.staging.n-cards.de
       run_migrations: true
+      # T-114：走完整 OTP 登录的冒烟。⚠️ 这个地址必须是一个**只收**别名
+      # （转进 no-reply@ 那个唯一的邮箱账号），不是任何真实用户地址 ——
+      # 每次合入都会往它发一封信，且首次 verify 会在 staging 建一行 users。
+      # 三个 SMOKE_IMAP_* secret 没配齐的话这一步会红，别只填一半。
+      smoke_otp_email: smoke-staging@n-cards.de
     # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret 递下去，
     # 包括将来才加的那些。
     secrets:
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
       SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+      SMOKE_IMAP_HOST: ${{ secrets.SMOKE_IMAP_HOST }}
+      SMOKE_IMAP_USER: ${{ secrets.SMOKE_IMAP_USER }}
+      SMOKE_IMAP_PASSWORD: ${{ secrets.SMOKE_IMAP_PASSWORD }}
 
   # ------------------------------------------------------------------
   # 留给 T-456（Play 上架）

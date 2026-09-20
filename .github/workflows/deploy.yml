@@ -63,6 +63,14 @@ on:
         description: '是否执行 Doctrine 迁移'
         type: boolean
         default: true
+      smoke_otp_email:
+        description: |
+          走完整 OTP 登录的冒烟收件地址（T-114）。留空则跳过那一步。
+          ⚠️ 这条冒烟**会写**：真发一封信，且首次 verify 成功会建一行 users。
+          所以只填运维专用的那个别名，别填任何真实用户地址。
+        type: string
+        required: false
+        default: ''
     secrets:
       DEPLOY_SSH_KEY:
         required: true
@@ -70,6 +78,14 @@ on:
         required: true
       SOPS_AGE_KEY:
         required: true
+      # T-114 的 OTP 冒烟要读信。三个都 required: false —— 与 smoke_otp_email
+      # 留空即跳过是同一件事的两半，缺了它们只是少跑一条，不该让部署红。
+      SMOKE_IMAP_HOST:
+        required: false
+      SMOKE_IMAP_USER:
+        required: false
+      SMOKE_IMAP_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -175,3 +191,22 @@ jobs:
         if: inputs.app_site_url != ''
         working-directory: .
         run: scripts/ci/smoke-app-site.sh "${{ inputs.app_site_url }}"
+
+      # T-114：**唯一**一条真的打 /v1 的冒烟。
+      #
+      # 上面两条都只验「外面看得见的东西」—— 2026-09-19 那次 staging 登录整个
+      # 不通的时候，它们全绿，/health/ready 也 200（它打的是免认证的 sys/health）。
+      # 能发现那类故障的判据只有一个：走完「请求码 → 读信 → 验码」并拿到 200。
+      #
+      # ⚠️ `if` 的形状与上面 app_site_url 那条一致，但理由不同：那边挡的是
+      # 「域名的 A 记录还没就位」，这边挡的是「这个环境要不要在部署时建一行
+      # users」—— 生产上那是个要单独决定的事，所以 deploy-manual.yml 默认留空。
+      - name: 冒烟测试（走完一次 OTP 登录）
+        if: inputs.smoke_otp_email != ''
+        working-directory: .
+        env:
+          SMOKE_OTP_EMAIL: ${{ inputs.smoke_otp_email }}
+          SMOKE_IMAP_HOST: ${{ secrets.SMOKE_IMAP_HOST }}
+          SMOKE_IMAP_USER: ${{ secrets.SMOKE_IMAP_USER }}
+          SMOKE_IMAP_PASSWORD: ${{ secrets.SMOKE_IMAP_PASSWORD }}
+        run: scripts/ci/smoke-otp.py "${{ inputs.site_url }}"

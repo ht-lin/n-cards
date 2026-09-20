@@ -278,6 +278,46 @@ services:
     networks:
       - backing
 
+  # ---------------------------------------------------------------- vault-policy
+  # T-114：policy 的下发执行者与漂移检测。跑 infra/vault/policy-sync.sh。
+  #
+  # ⚠️ **与紧邻的 vault-init 是两回事，别把它们合起来。**
+  #   vault-init    要 root token，建 mount / 生成密钥材料 / 开 auth method。
+  #                 生产用 profiles: ["disabled"] 关掉（见 .prod.yml）。
+  #   vault-policy  只覆盖 policy，一行都不碰 KV 与 transit，用的是最小权限的
+  #                 AppRole ncards-policy。它**必须**在生产与 staging 上跑 ——
+  #                 那正是它存在的全部理由，所以 .prod.yml 里没有 disabled。
+  #
+  # 为什么要一个容器而不是在主机上 curl：`backing` 是 internal: true，vault 也
+  # 没有 ports:，从主机 shell 根本连不上（`Could not resolve host: vault`）。
+  #
+  # profiles: ["ops"] —— **永不**随 `docker compose up -d` 起来。
+  # 它只被显式调用：docker compose --profile ops run --rm vault-policy check
+  vault-policy:
+    # 与 vault-init 同一个镜像（curl / jq / diff），只换入口。
+    build:
+      context: ../vault
+    profiles: ["ops"]
+    restart: "no"
+    entrypoint: ["sh", "/vault/bootstrap/policy-sync.sh"]
+    # 默认只读对账。下发要显式 `run --rm vault-policy push`。
+    command: ["check"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      # ⚠️ 这三个**刻意不进 .env**（env.j2 里没有它们，别"补上"）。
+      # .env 是 app 与 worker 容器的环境来源；把「改写 ncards-app policy」的能力
+      # 放进那两个容器的 `docker inspect` 里，正好抵消掉 ncards-app.hcl
+      # 整份最小权限清单的意义。ansible 在调用时从进程环境传进来，
+      # 见 roles/ncards_stack/tasks/vault_policy.yml。
+      VAULT_ROLE_ID: ${VAULT_POLICY_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_POLICY_SECRET_ID:-}
+      # 本地开发与排查用：给了就直接用它，跳过 AppRole 登录。
+      VAULT_TOKEN: ${VAULT_POLICY_TOKEN:-}
+    volumes:
+      - ../vault:/vault/bootstrap:ro
+    networks:
+      - backing
+
   # ---------------------------------------------------------------- worker
   # T-102：`email` 队列的消费端（§3.1 / §3.2）。
   #

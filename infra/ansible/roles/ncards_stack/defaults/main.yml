@@ -25,6 +25,9 @@ ncards_health_delay: 5
 ncards_wait_for_ready: true
 ncards_run_migrations: true
 
+ncards_vault_policy_enabled: true
+ncards_vault_policy_mode: push
+
 # 部署目标镜像。CI 传完整的 commit sha；本地演练可以传 :main。
 ncards_app_image: "{{ ncards_image_repo }}:main"
 

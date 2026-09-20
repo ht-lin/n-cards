@@ -47,6 +47,24 @@ ncards_wait_for_ready: true
 # 部署时是否执行 Doctrine 迁移。CI 默认 true；首启和纯回滚时由命令行关掉。
 ncards_run_migrations: true
 
+# ------------------------------------------- Vault policy 的下发与对账（T-114）
+# 每次部署把 infra/vault/policies/*.hcl 覆盖进 Vault，然后逐字对账。
+# 真正的执行体是 infra/vault/policy-sync.sh，身份是最小权限的 AppRole ncards-policy
+# （**不是** root，也**不是** ncards-ops —— 前者没打破 ADR-0004 的分界线，
+#  后者是因为 ncards-ops 持有 transit/keys/+/rotate，不该进每次部署的凭据范围。
+#  论证见 infra/vault/policies/ncards-policy.hcl 抬头）。
+#
+# ⚠️ 关掉它就等于回到 T-114 之前的状态：policy 只在首启那一次被下发，
+# 之后每一次 *.hcl 的改动都会重新拉开同一条缝，而没有任何门禁看得见
+# （/health/ready 打的是免认证的 sys/health，冒烟测试不碰 /v1）。
+# 真要临时关，请在 PR 里说明什么时候开回来。
+ncards_vault_policy_enabled: true
+
+# push = 覆盖下发后再对账（默认，也是唯一能自愈的取值）。
+# check = 只对账不写，漂移即红。排查时用：
+#     ansible-playbook deploy.yml --tags vault-policy -e ncards_vault_policy_mode=check
+ncards_vault_policy_mode: push
+
 # ------------------------------------------- 客户端版本与维护窗口（T-112）
 # 两个环境同值，所以在这里而不是各自的 group_vars 里。
 #

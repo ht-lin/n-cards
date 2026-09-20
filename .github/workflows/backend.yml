@@ -170,6 +170,56 @@ jobs:
         working-directory: .
         run: infra/vault/bootstrap.sh
 
+      # T-114：验的是**对账器本身有没有效**，而不是 policy 的内容对不对。
+      #
+      # 那两件事差一层，缺哪一层都会让漂移在长期环境上无人可见：
+      #   AppRolePolicyTest      policy 的内容 —— 但它在 CI 里永远绿，
+      #                          因为上一步刚把最新的 policy 写进去
+      #   本步骤（③ 那一断言）    漂移检测红不红 —— 这才是 staging 上缺的那个东西
+      #
+      # ③ 是整步的重点：把 policy 改成**缺 JWT 那条路径**的样子，也就是
+      # 2026-09-19 那次故障里 staging Vault 的真实状态，然后要求对账必须红
+      # 且点名那条路径。policy-sync.sh 的比较逻辑哪天被"简化"坏了，这里会红。
+      - name: policy 漂移检测自检（正反两面）
+        working-directory: .
+        env:
+          VAULT_ADDR: http://127.0.0.1:8200
+          VAULT_TOKEN: dev-only-root-token
+        run: |
+          set -euo pipefail
+
+          echo '① 刚 bootstrap 过，必须一致'
+          infra/vault/policy-sync.sh check
+
+          echo '② 人为把 ncards-app 改成缺 JWT 那条路径的旧版本'
+          # 从真文件里删掉那一个 path 块（上面的注释留着无妨 —— 逐字比较对任何
+          # 差异都成立，删 path 块只是让 diff 更像 2026-09-19 的真实故障）。
+          sed '/^path "secret\/data\/ncards\/jwt\/current" {$/,/^}$/d' \
+            infra/vault/policies/ncards-app.hcl > /tmp/drifted.hcl
+          if cmp -s /tmp/drifted.hcl infra/vault/policies/ncards-app.hcl; then
+            echo '::error title=自检的前提没了::sed 一行都没删掉 —— ncards-app.hcl 里那条 JWT 路径改名或换格式了，跟着改这一步'
+            exit 1
+          fi
+          jq -Rs '{policy: .}' < /tmp/drifted.hcl > /tmp/drifted.json
+          curl -sSf -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+            -d @/tmp/drifted.json \
+            "$VAULT_ADDR/v1/sys/policies/acl/ncards-app" > /dev/null
+
+          echo '③ 对账必须红，且报出是哪一条路径'
+          if infra/vault/policy-sync.sh check > /tmp/drift-output.txt 2>&1; then
+            cat /tmp/drift-output.txt
+            echo '::error title=漂移检测失效::policy 已被改坏，policy-sync.sh check 却返回 0'
+            exit 1
+          fi
+          cat /tmp/drift-output.txt
+          grep -q 'secret/data/ncards/jwt/current' /tmp/drift-output.txt || {
+            echo '::error title=漂移检测没点名路径::退出码对了，但输出里没有出问题的那条路径'
+            exit 1
+          }
+
+          echo '④ push 复原，并确认复原后一致'
+          infra/vault/policy-sync.sh push
+
       # T-011：§13.3 后端表最后一行。--require-db 把「连不上库」从跳过变成失败 ——
       # 脚本默认跳过是为了让裸机上的 `composer qa` 保持全绿（与 tests/Integration
       # 里那些 markTestSkipped 的用例同一个口径），但在 CI 上 postgres service

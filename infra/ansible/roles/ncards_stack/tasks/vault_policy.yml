@@ -1,0 +1,127 @@
+---
+# Vault policy 的下发与漂移对账（T-114）。
+#
+# ============================================================================
+# 为什么这一步在这里
+# ============================================================================
+# `bootstrap.sh` 写 policy 是幂等覆盖的，但它在长期运行的环境上**只跑过首启
+# 那一次**（prod overlay 关掉了 vault-init，ADR-0004 不让 ansible 碰 Vault），
+# 而 `infra/vault/policies/*.hcl` 会随每张卡演进。2026-09-19 的后果：
+# staging 的 ncards-app 停在 9-04 那版，缺 T-104 在 9-07 加的
+# `secret/data/ncards/jwt/current` —— `POST /auth/otp/verify` 503，
+# 而 /health/ready 与冒烟测试全绿。
+#
+# ⚠️ 这一步**不碰 root token，也不碰 KV**，所以它没有打破 ADR-0004 的分界线
+# 「凡是需要 unseal key 或 root token 的，永远是人工」。它用的是最小权限的
+# AppRole `ncards-policy`，能做的只有 ncards-policy.hcl 那三条
+# `sys/policies/acl/…`，**一条 transit 都没有**。
+# 真正的执行体是 infra/vault/policy-sync.sh。
+#
+# ============================================================================
+# 顺序：在 env 之后、snapshot 之前
+# ============================================================================
+# 不能更晚：新镜像起来之前 policy 就该是对的，否则 app 会先以旧 policy 跑一段，
+#           症状正是本卡的缘起。
+# 不能更早：① sync 才把 policies/*.hcl 送上主机；
+#           ② **env 才渲染出 .env**，而 `docker compose run` 会把整条叠加链
+#              解析一遍 —— prod overlay 里 app/worker 的 `${VAULT_ROLE_ID:?}`
+#              是必填的，.env 不在就直接报错退出，跟本任务毫无关系。
+#
+# ============================================================================
+# ⚠️ 本文件里**没有**任何会让 play 失败的任务，这是刻意的
+# ============================================================================
+# 判定与处置分开，与 healthcheck.yml 是同一个形状（那里也是先出
+# ncards_health_verdict，再由 deploy.yml 决定每种判定该做什么）。两个理由：
+#
+#   1. 在这里 fail 会掉进 deploy.yml 的 rescue，而那段的下一步是**回滚**。
+#      policy 漂移跟这次的镜像没有任何关系，回滚只会把一个好镜像换成旧的、
+#      然后 policy 照样是漂的 —— 与「Vault 封印时不回滚」是同一条道理。
+#   2. 下面那条 command 带 no_log（environment 里有 secret_id）。task 一 fail，
+#      ansible 会把整个结果连同 stdout 一起打码，于是**那份 diff 就没了** ——
+#      而它正是「漂移在哪一条路径上」的唯一载体（验收标准第 2 条）。
+#      所以这里永远 failed_when: false，把 diff 打出来之后再交给 deploy.yml 判。
+
+- name: 下发并对账 Vault policy
+  ansible.builtin.command:
+    cmd: >-
+      docker compose {{ ncards_compose_flags }} --profile ops
+      run --rm --no-TTY vault-policy {{ ncards_vault_policy_mode }}
+    chdir: "{{ ncards_compose_dir }}"
+  environment:
+    # compose 用这两个做 ${VAULT_POLICY_*} 插值（见 docker-compose.base.yml 的
+    # vault-policy 服务）。**不经过 .env** —— 那是 app/worker 的环境来源。
+    VAULT_POLICY_ROLE_ID: "{{ VAULT_POLICY_ROLE_ID | default('') }}"
+    VAULT_POLICY_SECRET_ID: "{{ VAULT_POLICY_SECRET_ID | default('') }}"
+  register: ncards_vault_policy
+  failed_when: false
+  changed_when: "'已更新' in ncards_vault_policy.stdout"
+  # ⚠️ environment 里有 secret_id，所以整条任务必须 no_log。
+  no_log: true
+  when:
+    - ncards_vault_policy_enabled | bool
+    - VAULT_POLICY_ROLE_ID | default('') | length > 0
+    # 首启第 7 步那一趟 Vault 还没 init，secrets.sops.yaml 里还是占位符 ——
+    # 干净跳过，别让第一次部署红在一个注定做不到的步骤上。
+    - VAULT_POLICY_ROLE_ID | default('') != 'pending-bootstrap-see-runbook'
+
+# 把 no_log 挡住的那部分**单独**打出来。
+#
+# 这里打是安全的：内容是 policy 文本与它的 diff，而 policy 文本本来就逐字躺在
+# 公开仓库的 infra/vault/policies/ 下，不是凭据。被 no_log 挡住的是 environment
+# 里的 secret_id，它不在 stdout 里。
+#
+# splitlines() 是为了让多行 diff 在 CI 日志里一行一行地排开 —— debug 打一个
+# 带换行的长字符串会挤成一坨，而这段输出的全部价值就在于它好读。
+#
+# ⚠️ **不要写成 `.split('\n')`。** YAML 的折叠标量把 `\n` 原样交给 Jinja，
+# 而 Jinja 的字符串字面量在这里**不**解转义 —— 于是那个 `'\n'` 是两个字符，
+# 按它切等于没切（实测：三行的输出只切出一个元素）。splitlines() 没有这个坑。
+#
+# stdout 与 stderr 都要：diff 走 stdout，「✗ 漂移」那些结论走 stderr。
+- name: Vault policy 对账结果
+  ansible.builtin.debug:
+    msg: >-
+      {{ (ncards_vault_policy.stdout | default('')).splitlines()
+         + (ncards_vault_policy.stderr | default('')).splitlines() }}
+  when: ncards_vault_policy is not skipped
+
+# 判定，处置在 deploy.yml。取值：
+#   ok       一致（push 模式下可能是刚下发完才一致的）
+#   sealed   Vault 封印或未初始化 —— 跳过，**不是漂移**（policy-sync.sh 退出码 3）
+#   drift    漂移，且自动下发没能修好它
+#   skipped  这个环境还没有 ncards-policy 凭据，或显式关掉了
+- name: 判定
+  ansible.builtin.set_fact:
+    ncards_vault_policy_verdict: >-
+      {%- if ncards_vault_policy is skipped -%}
+      skipped
+      {%- elif ncards_vault_policy.rc == 0 -%}
+      ok
+      {%- elif ncards_vault_policy.rc == 3 -%}
+      sealed
+      {%- else -%}
+      drift
+      {%- endif -%}
+
+- name: Vault 封印，本次跳过 policy 对账
+  ansible.builtin.debug:
+    msg: >-
+      Vault 处于封印或未初始化状态，policy 对账已跳过（这不是漂移）。
+      解封见 docs/runbooks/vault-unseal.md；解封之后无需为此单独重新部署，
+      下一次部署会自动对账。
+  when: ncards_vault_policy_verdict == 'sealed'
+
+- name: 说明为什么跳过了 policy 对账
+  ansible.builtin.debug:
+    msg: >-
+      ⚠️ policy 对账**没有跑**。
+      {% if not (ncards_vault_policy_enabled | bool) %}
+      原因：ncards_vault_policy_enabled=false，显式关掉了。
+      {% else %}
+      原因：VAULT_POLICY_ROLE_ID 还是占位符或没配 —— 这个环境还没签发 ncards-policy 的凭据。
+      首启走 docs/runbooks/staging-first-boot.md 第 9–10 步；已经首启过的环境
+      见那份 runbook 的「已经首启过的环境怎么补上」（要一次 generate-root 仪式）。
+      {% endif %}
+      在补上之前，Vault 里的 policy 与仓库之间**没有任何门禁** ——
+      跳过不是通过。
+  when: ncards_vault_policy_verdict == 'skipped'

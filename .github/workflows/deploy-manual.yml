@@ -160,6 +160,17 @@ jobs:
       site_url: ${{ needs.guard.outputs.site_url }}
       app_site_url: ${{ needs.guard.outputs.app_site_url }}
       run_migrations: ${{ inputs.run_migrations }}
+      # T-114：**这个入口刻意不跑 OTP 冒烟**（留空即跳过），与 main.yml 相反。
+      #
+      # 两个理由，第二个是硬的：
+      #   1. 这里能选 production，而那条冒烟**会写** —— 首次 verify 成功就在
+      #      生产库里建一行 users（§6.2：首次验证即注册）。往生产塞一个合成账号
+      #      要单独决定，不该跟着一次手工部署顺手发生。
+      #   2. staging 侧的排练本来就走 main.yml 那一趟，重复跑只多发一封信，
+      #      而 staging 与生产**共用同一份发信配额**（见 group_vars 的注释）。
+      #
+      # 真要在这里跑一次，把地址填进来并确认三个 SMOKE_IMAP_* secret 已配齐。
+      smoke_otp_email: ''
     # 显式传，不用 secrets: inherit —— inherit 会把仓库里**所有**的 secret
     # 都递给被调用的 workflow，包括将来才加的那些。
     secrets:
