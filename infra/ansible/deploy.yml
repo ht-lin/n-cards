@@ -192,11 +192,16 @@
     - name: 判定 policy 漂移 —— 不回滚，红着等人处置
       ansible.builtin.fail:
         msg: |
-          ::error title=VAULT_POLICY_DRIFT::Vault 里的 policy 与 infra/vault/policies/*.hcl 不一致，
-          且自动下发没能修好它。**这不是部署故障，回滚无用。**
-          具体差在哪一条路径，看上面那条「Vault policy 对账结果」打出的 diff。
-          处置见 docs/runbooks/deploy-and-rollback.md 的「情形 D」。
-          最常见的两种：① 有人手工 `vault policy write` 放宽过（diff 里 Vault 那边多东西）；
-          ② 改的是 ncards-policy.hcl 自己（那份按设计部署身份改不了，要一次 generate-root）。
+          ::error title=VAULT_POLICY_DRIFT::policy 对账没通过。**这不是部署故障，回滚无用。**
+          ⚠️ **先看上面那条「Vault policy 对账结果」到底有没有 diff** —— 这个判定是
+          兜底桶：policy-sync.sh 只有 rc=0 算过、rc=3 算封印，**其余一律报到这里**，
+          所以它红不等于真有漂移。
+          处置见 docs/runbooks/deploy-and-rollback.md 的「情形 D」。常见的三种：
+          ① 有人手工 `vault policy write` 放宽过（diff 里 Vault 那边多东西）；
+          ② 改的是 ncards-policy.hcl 自己（那份按设计部署身份改不了，要一次 generate-root）；
+          ③ **上面那条根本不是 diff** —— AppRole 登录失败（secret_id 粘错）、
+          `no such service: vault-policy`（主机上的 compose 还是 T-114 之前的，
+          补一次 `--tags sync,vault-policy`）、或 policies/ 挂空。这三种都与 Vault 里
+          的 policy 无关，别照着 ①② 去处置。
       when: ncards_vault_policy_verdict | default('ok') == 'drift'
       tags: [always]

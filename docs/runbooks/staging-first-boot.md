@@ -518,6 +518,32 @@ Vault 会**重新封印**，`/health/ready` 变 503，这是期望行为
 
 **需要**：3 位 unseal key 持有人到场（[ADR-0004](../adr/0004-manual-vault-unseal.md) 的 3-of-5）。
 
+> ⚠️ **先把带 T-114 的 `infra/` 送上主机 —— 这一节的每一条命令都依赖它。**
+> 主机上的 `/opt/ncards/infra/` 不是仓库的 checkout，是 `ncards_stack` 的 rsync
+> （[`sync.yml`](../../infra/ansible/roles/ncards_stack/tasks/sync.yml)）从
+> **上一次部署时的 main** 拿的。而这一节存在的前提正是「policy 下发还没建起来」——
+> 于是 T-114 往往还没能靠一次正常部署上机。
+>
+> 两处都会踩，且**失败方式一处比一处安静**：
+>
+> - 下面第 2 步的 `docker build` 与 `:ro` 挂载读的都是主机那份 →
+>   跑的是旧 `bootstrap.sh`。它照样一路 ✓ 到底，只是**没有**
+>   `✓ 已写入 policy ncards-policy`、也**没有** `VAULT_POLICY_ROLE_ID=…` 那一行。
+>   等发现时 root token 已经用掉了。
+> - 本节末尾的 `--tags vault-policy` 报 `no such service: vault-policy` ——
+>   `vault-policy` 这个 compose 服务是 T-114 才加进
+>   [`docker-compose.base.yml`](../../infra/compose/docker-compose.base.yml) 的。
+>   而 ansible 把「rc 非 0 且非 3」一律判成 `drift`，于是红的是
+>   `VAULT_POLICY_DRIFT`，指着你去找一段根本不存在的 diff。
+>
+> 在**本机**，切到带 T-114 的分支（或已合入的 main）：
+>
+> ```bash
+> cd infra/ansible
+> ansible-playbook -i inventory/staging.yml deploy.yml --tags sync
+> # 期望：changed。只同步 infra/，不碰容器、不碰 Vault、不需要 -e ncards_app_image
+> ```
+
 ```bash
 ssh -p 2242 deploy@api.staging.n-cards.de
 cd /opt/ncards
@@ -558,10 +584,17 @@ unset VAULT_TOKEN
 ```bash
 cd infra/ansible
 ansible-playbook -i inventory/staging.yml deploy.yml \
-  -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:main --tags vault-policy
-# 期望：“✓ 已下发 ncards-app” + “✓ policy 与仓库一致”
-#       —— 第一次跑必然有东西要下发，那就是积压到今天的全部漂移
+  -e ncards_app_image=ghcr.io/ht-lin/n-cards-backend:main --tags sync,vault-policy
+# 期望：末尾“✓ policy 与仓库一致”
 ```
+
+> ⚠️ **`sync` 不能省**，哪怕上面那条 `--tags sync` 刚跑过（它是幂等的，白跑一遍
+> 不要紧，漏掉一次就是 `no such service: vault-policy`）。`--tags vault-policy`
+> 单独跑会把 `sync` 滤掉，于是 compose 文件停在旧版 —— 见本节开头那条 ⚠️。
+>
+> 三份 policy 报的是「已是最新，跳过下发」还是「✓ 已下发」，取决于你什么时候
+> 走到这一步：紧接着上面的 `bootstrap.sh` 跑就全是前者（root 刚把三份都写过一遍）；
+> 隔了一段时间才补，中间积压的 `*.hcl` 改动就会在这里被下发 —— 两种都算过。
 
 最后真机走一遍登录确认（`scripts/ci/smoke-otp.py`，见第 11 步）。
 

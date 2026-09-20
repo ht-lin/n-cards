@@ -128,22 +128,31 @@ free -m                      # 内存被 OOM killer 收割过？dmesg -T | grep 
 
 ## 情形 D：`vault-policy` 任务红了
 
-日志里是 ansible 的「Vault policy 对账结果」那一条，内容是一段 `diff`。
+日志里是 ansible 的「Vault policy 对账结果」那一条。
 
 **这一步在做什么**：每次部署把 `infra/vault/policies/*.hcl` 下发进 Vault，
 再逐字对账（T-114）。它修的是「仓库里的 policy 改了，但长期运行的环境上
 没有任何执行者把它送进去」—— 那个洞让 staging 在 2026-09-19 登录整个不通，
 而 `/health/ready` 与当时的冒烟测试全绿。
 
-先读 diff 的方向，两种情况处置完全不同：
+> ⚠️ **`VAULT_POLICY_DRIFT` 红了不等于真有漂移。** ansible 的判定
+> （[`vault_policy.yml`](../../infra/ansible/roles/ncards_stack/tasks/vault_policy.yml)）
+> 只认 `rc=0 → ok`、`rc=3 → 封印`，**其余一律归进 `drift`**；而 `policy-sync.sh`
+> 在登录失败、容器起不掉、挂载为空的时候也退 1。所以第一件事是看「对账结果」
+> 那一条**到底有没有 diff**，下表最后三行就是没有 diff 的那些。
 
-| diff 显示 | 含义 | 该做什么 |
+先读 diff 的方向，几种情况处置完全不同：
+
+| 「对账结果」里显示 | 含义 | 该做什么 |
 |---|---|---|
 | Vault 那边**少**了东西（`+` 行是仓库里的） | 正常的演进滞后 | 通常不会看到 —— `push` 已经自动下发并复原了。仍然红说明下发也失败了，看有没有 403 |
 | Vault 那边**多**了东西（`-` 行） | **有人手工 `vault policy write` 放宽过** | ⚠️ 先搞清楚是谁、为什么，再让流水线覆盖掉。这正是 `bootstrap.sh` 注释里担心的「一次临时放宽永久留在生产里」 |
 | 「跳过，这不是漂移」 | Vault 封印或未初始化 | 去 unseal（情形 A）。解封后下一次部署自己会对上 |
 | 「跳过」+ 说 `VAULT_POLICY_ROLE_ID` 是占位符 | 这台机器还没有 `ncards-policy` 凭据 | ⚠️ **跳过不是通过** —— 在补上之前仓库与 Vault 之间没有任何门禁。走 [`staging-first-boot.md`](staging-first-boot.md) 的「已经首启过的环境怎么补上」 |
 | 「当前身份没有写权限」 | 有人改了 `ncards-policy.hcl` **自己** | 按设计如此（能改自己的 policy 就等于没有 policy）。要一次 `generate-root` 仪式，同上那一节 |
+| `no such service: vault-policy` | **不是漂移。** 主机上的 compose 文件还是 T-114 之前的 —— `--tags vault-policy` 会把 `sync` 一起滤掉 | 补上 sync：`--tags sync,vault-policy`。这台机器上的 policy 多半好着，这一趟压根没连上 Vault |
+| `✗ AppRole 登录失败（HTTP 400）` | **不是漂移。** `invalid role or secret ID` = `VAULT_POLICY_SECRET_ID` 粘错；`role "ncards-policy" does not exist` = 这台机器没跑过带 T-114 的 `bootstrap.sh` | 前者重签一枚（不需要 root）：`vault write -f -field=secret_id auth/approle/role/ncards-policy/secret-id`，写回 `secrets.sops.yaml`。后者走 [`staging-first-boot.md`](staging-first-boot.md) 的「已经首启过的环境怎么补上」 |
+| `policies 下一个 .hcl 都没有` | **不是漂移。** `../vault` 那个 `:ro` 挂载或 sync 出了问题 | 先 `--tags sync`，再看主机 `/opt/ncards/infra/vault/policies/` 里有没有东西 |
 
 手工只对账一次（不写）：
 
